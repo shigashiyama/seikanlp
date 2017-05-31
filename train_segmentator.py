@@ -24,14 +24,13 @@ from chainer import link
 from chainer import serializers
 from chainer import training
 from chainer import reporter as reporter_module
+from chainer import cuda
 from chainer.training import extensions
 from chainer.functions.evaluation import accuracy
 from chainer.functions.loss import softmax_cross_entropy
 
+import util
 from conlleval import conlleval
-
-
-UNK_SYMBOL = '<UNK>'
 
 
 class RNNWithNStepLSTM(chainer.Chain):
@@ -50,7 +49,6 @@ class RNNWithNStepLSTM(chainer.Chain):
 
 
 class SequenceLabelingClassifier(link.Chain):
-
     compute_accuracy = True
     compute_fscore = True
 
@@ -104,131 +102,45 @@ class SequenceLabelingClassifier(link.Chain):
             if i == len(x):
                 raise StopIteration
             x_str = str(x[i])
-            y_str = self.id2label[y[i]]
-            t_str = self.id2label[t[i]]
+            t_str = self.id2label[int(t[i])]
+            y_str = self.id2label[int(y[i])]
 
             yield [x_str, t_str, y_str]
 
             i += 1
 
 
-def read_data(limit=-1):
-    train_path = '/home/shigashi/data_shigashi/work/work_chainer/wordseg/bccwj_data/test/wseg-train_10k-words.tsv'
-    val_path = '/home/shigashi/data_shigashi/work/work_chainer/wordseg/bccwj_data/test/wseg-val_1k-words.tsv'
+# does not work
+# class SequentialIterator(chainer.dataset.Iterator):
 
-    train_xs, train_ts, token2id, label2id = create_data_per_char(train_path, limit=limit)
-    val_xs, val_ts, token2id, label2id = create_data_per_char(
-        val_path, token2id=token2id, label2id=label2id, label_update=False, limit=limit)
+#     def __init__(self, instances, labels, batch_size, train=True, xp=np):
+#         self.instances = instances
+#         self.labels = labels
+#         self.batch_size = batch_size
+#         self.size = len(instances)
+#         self.perm = np.random.permutation(self.size) if train else range(0, self.size)
+#         self.xp = xp
+#         self.ni = 0             # next index
 
-    return token2id, label2id, train_xs, train_ts, val_xs, val_ts
+#     def __next__(self):
+#         if self.ni >= self.size:
+#             raise StopIteration
 
+#         i_max = min(self.ni + self.batch_size, self.size)
+#         print(self.ni, i_max)
+#         xs = [self.xp.asarray(self.instances[self.perm[i]], dtype=np.int32) 
+#               for i in range(self.ni, i_max)]
+#         hx = None
+#         cx = None
+#         ts = [self.xp.asarray(self.instances[self.perm[i]], dtype=np.int32)
+#               for i in range(self.ni, i_max)]
 
-def create_data_per_char(path, token2id={}, label2id={}, token_update=True, label_update=True, limit=-1):
-    instances = []
-    labels = []
-    if len(token2id) == 0:
-        token2id = {UNK_SYMBOL: np.int32(0)}
-    if len(label2id) == 0:
-        label2id = {}
+#         self.ni = i_max
 
-    print("Read file:", path)
-    ins_cnt = 0
-    word_cnt = 0
-    token_cnt = 0
-
-    with open(path) as f:
-        bof = True
-        ins = []
-        lab = []
-        for line in f:
-            if len(line) < 2:
-                continue
-
-            pair = line.rstrip('\n').split('\t')
-            bos = pair[0]
-            word = pair[1]
-            cate = None if len(pair) == 2 else pair[2]
-
-            if not bof and bos == 'B':
-                instances.append(ins)
-                labels.append(lab)
-                ins = []
-                lab = []
-                ins_cnt += 1
-
-            if limit > 0 and ins_cnt >= limit:
-                break
-
-            ins.extend(
-                [get_id(word[i], token2id, token_update) for i in range(len(word))]
-                )
-            lab.extend(
-                [get_id(get_label(i, cate), label2id, label_update) for i in range(len(word))]
-                )
-
-            bof = False
-            word_cnt += 1
-            token_cnt += len(word)
-
-        if limit <= 0:
-            instances.append(ins)
-            labels.append(lab)
-            ins_cnt += 1
-
-    #print(ins_cnt, word_cnt, token_cnt)
-    return instances, labels, token2id, label2id
-
-
-def get_label(index, cate):
-    prefix = 'B' if index == 0 else 'I'
-    suffix = '' if cate is None else '-' + cate
-    return prefix + suffix
-
-
-def get_id(string, string2id, update=True):
-    if string in string2id:
-        return string2id[string]
-    elif update:
-        id = np.int32(len(string2id))
-        string2id[string] = id
-        return id
-    else:
-        if not UNK_SYMBOL in string2id:
-            print("WARN: "+string+" is unknown and <UNK> is not registered.")
-        return string2id[UNK_SYMBOL]
-
-
-# It does not work
-class SequentialIterator(chainer.dataset.Iterator):
-
-    def __init__(self, instances, labels, batch_size, train=True, xp=np):
-        self.instances = instances
-        self.labels = labels
-        self.batch_size = batch_size
-        self.size = len(instances)
-        self.perm = np.random.permutation(self.size) if train else range(0, self.size)
-        self.xp = xp
-        self.ni = 0             # next index
-
-    def __next__(self):
-        if self.ni >= self.size:
-            raise StopIteration
-
-        i_max = min(self.ni + self.batch_size, self.size)
-        print(self.ni, i_max)
-        xs = [self.xp.asarray(self.instances[self.perm[i]], dtype=np.int32) 
-              for i in range(self.ni, i_max)]
-        hx = None
-        cx = None
-        ts = [self.xp.asarray(self.instances[self.perm[i]], dtype=np.int32)
-              for i in range(self.ni, i_max)]
-
-        self.ni = i_max
-
-        return hx, cx, xs, ts
+#         return hx, cx, xs, ts
         
 
-def run_epoch(model, instances, labels, batchsize, train=True, optimizer=None, xp=np):
+def run_epoch(model, instances, labels, batchsize, train=True, optimizer=None, xp=np, logging=None):
     count = 0
     total_loss = 0
     total_ecounts = conlleval.EvalCounts()
@@ -263,9 +175,23 @@ def run_epoch(model, instances, labels, batchsize, train=True, optimizer=None, x
     print('#sen, #token, #chunk, #chunk_pred: %d %d %d %d' %
           (count, c.token_counter, c.found_correct, c.found_guessed))
     print('TP, FP, FN: %d %d %d' % (overall.tp, overall.fp, overall.fn))
-    print('A, P, R, F:%6.2f%6.2f%6.2f%6.2f' % 
+    print('A, P, R, F:%6.2f %6.2f %6.2f %6.2f' % 
           (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore))
 
+    if logging is not None:
+        logging.info('n_sen    : %d' % count)
+        logging.info('n_token  : %d' % c.token_counter)
+        logging.info('n_chunk  : %d' % c.found_correct)
+        logging.info('n_chunk_p: %d' % c.found_guessed)
+        logging.info('TP: %d' % overall.tp)
+        logging.info('FP: %d' % overall.fp)
+        logging.info('FN: %d' % overall.fn)
+        logging.info('loss: %f' % total_loss)
+        logging.info('acc :%6.2f' % (100.*acc))
+        logging.info('pre :%6.2f' % (100.*overall.prec))
+        logging.info('rec :%6.2f' % (100.*overall.rec))
+        logging.info('fb1 :%6.2f' % (100.*overall.fscore))
+        
 def main():
 
     # get arguments
@@ -293,6 +219,12 @@ def main():
                         help='Resume the training from snapshot')
     parser.add_argument('--test', action='store_true',
                         help='Use tiny datasets for quick tests')
+    parser.add_argument('--dir_path', '-p',
+                        help='Directory path of input data (training, validation and test)')
+    parser.add_argument('--train_data', '-t',
+                        help='Filename of training data')
+    parser.add_argument('--validation_data', '-v',
+                        help='Filename of validation data')
     parser.set_defaults(test=False)
     parser.set_defaults(use_cudnn=False)
     args = parser.parse_args()
@@ -309,17 +241,34 @@ def main():
     print('# test: {}'.format(args.test))
     print('')
 
+    # Prepare logger
+
+    time = datetime.now().strftime('%Y%m%d_%H%M')
+    logging.basicConfig(filename='log/'+time+'.log', level=logging.INFO)
+    logging.info('start: ' + time)
+    logging.info(args)
+
     # Load dataset
 
-    token2id, label2id, train, train_t, val, val_t = read_data(limit=(21 if args.test else -1))
-    test = []
+    train_path = args.dir_path + args.train_data
+    val_path = args.dir_path + args.validation_data
+    test_path = args.dir_path + 'LBb_test.tsv'
+
+    limit=21 if args.test else -1
+    train, train_t, token2id, label2id = util.create_data_per_char(train_path, limit=limit)
+    val, val_t, token2id, label2id = util.create_data_per_char(
+        val_path, token2id=token2id, label2id=label2id, label_update=False, limit=limit)
+    # test, test_t, token2id, label2id = util.create_data_per_char(
+    #     test_path, token2id=token2id, label2id=label2id, token_update=False, label_update=False, limit=limit)
+
     n_train = len(train)
     n_val = len(val)
+    n_test = 0 #len(test)
     n_vocab = len(token2id)
     n_labels = len(label2id)
 
     print('vocab =', n_vocab)
-    print('data length: train=%d val=%d' % (n_train, n_val))
+    print('data length: train=%d val=%d test=%d' % (n_train, n_val, n_test))
     print()
     print('train:', train[:3], '...', train[n_train-3:])
     print('train_t:', train_t[:3], '...', train[n_train-3:])
@@ -329,16 +278,17 @@ def main():
     print('token2id:', t2i_tmp[:3], '...', t2i_tmp[len(t2i_tmp)-3:])
     print('label2id:', label2id)
     print()
+    logging.info('vocab = %d' % n_vocab)
+    logging.info('data length: train=%d val=%d' % (n_train, n_val))
 
     # Prepare model
 
-    #rnn = RNN(n_vocab, n_labels, args.unit)
     rnn = RNNWithNStepLSTM(1, n_vocab, n_labels, args.unit, args.dropout, args.use_cudnn)
     model = SequenceLabelingClassifier(rnn, id2label)
 
     if args.gpu >= 0:
         # Make the specified GPU current
-        chainer.cuda.get_device_from_id(args.gpu).use()
+        cuda.get_device_from_id(args.gpu).use()
         model.to_gpu()
         xp = cuda.cupy
     else:
@@ -350,12 +300,14 @@ def main():
     optimizer.setup(model)
     optimizer.add_hook(chainer.optimizer.GradientClipping(args.gradclip))
 
-    # run
+    # Run
 
     for e in range(args.epoch):
         print('epoch:', e+1)
         print('<training result>')
-        run_epoch(model, train, train_t, args.batchsize, optimizer=optimizer, xp=xp)
+        logging.info('epoch:'+str(e+1))
+        logging.info('<training result>')
+        run_epoch(model, train, train_t, args.batchsize, optimizer=optimizer, xp=xp, logging=logging)
         print()
 
         # Evaluation on validation data
@@ -363,19 +315,27 @@ def main():
         evaluator.predictor.train = False # dropout does nothing
         #evaluator.predictor.reset_state() # initialize state
         print('<validation result>')
-        run_epoch(evaluator, val, val_t, args.batchsize, train=False, xp=xp)
+        logging.info('<validation result>')
+        run_epoch(evaluator, val, val_t, args.batchsize, train=False, xp=xp, logging=logging)
         print()
+
+        # Save the model and the optimizer
+
+        mdl_path = 'model/rnn_%s_e%d.mdl' % (time, e)
+        opt_path = 'model/rnn_%s_e%d.opt' % (time, e)
+
+        print('save the model:', mdl_path)
+        print('save the optimizer:', opt_path)
+        print()
+        logging.info('save the model: ' + mdl_path)
+        logging.info('save the optimizer: ' + opt_path)
+        serializers.save_npz(mdl_path, model)
+        serializers.save_npz(opt_path, optimizer)
 
     # Evaluate on test dataset
 
-    # Save the model and the optimizer
     time = datetime.now().strftime('%Y%m%d_%H%M')
-    mdl_path = 'model/rnn_'+time+'.mdl'
-    opt_path = 'model/rnn_'+time+'.opt'
-    print('save the model:', mdl_path)
-    serializers.save_npz(mdl_path, model)
-    print('save the optimizer:', opt_path)
-    serializers.save_npz(opt_path, optimizer)
+    logging.info('finish: ' + time)
 
    
 if __name__ == '__main__':
