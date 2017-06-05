@@ -33,11 +33,13 @@ import util
 from conlleval import conlleval
 
 
-class RNNWithNStepLSTM(chainer.Chain):
-    def __init__(self, n_layer, n_vocab, n_labels, n_units, dropout, use_cudnn):
-        super(RNNWithNStepLSTM, self).__init__(
+class RNN(chainer.Chain):
+    def __init__(self, n_layers, n_vocab, n_labels, n_units, dropout, use_bi_direction, use_cudnn):
+        super(RNN, self).__init__(
             embed=L.EmbedID(n_vocab, n_units),
-            l1=L.NStepLSTM(n_layer, n_units, n_units, dropout, use_cudnn=use_cudnn),
+            #l1=L.NStepLSTMBase(n_layers, n_units, n_units, dropout, use_bi_direction, use_cudnn=use_cudnn),
+            l1=L.NStepBiLSTM(n_layers, n_units, n_units, dropout, use_cudnn=use_cudnn) 
+            if use_bi_direction else L.NStepLSTM(n_layers, n_units, n_units, dropout, use_cudnn=use_cudnn),
             l2=L.Linear(n_units, n_labels),
         )
         
@@ -49,8 +51,7 @@ class RNNWithNStepLSTM(chainer.Chain):
 
 
 class SequenceLabelingClassifier(link.Chain):
-    compute_accuracy = True
-    compute_fscore = True
+    compute_fscore = False
 
     def __init__(self, predictor, id2label,
                  lossfun=softmax_cross_entropy.softmax_cross_entropy,
@@ -140,7 +141,7 @@ class SequenceLabelingClassifier(link.Chain):
 #         return hx, cx, xs, ts
         
 
-def run_epoch(model, instances, labels, batchsize, train=True, optimizer=None, xp=np, logging=None):
+def run_epoch(model, instances, labels, batchsize, train=True, optimizer=None, xp=np):
     count = 0
     total_loss = 0
     total_ecounts = conlleval.EvalCounts()
@@ -160,37 +161,32 @@ def run_epoch(model, instances, labels, batchsize, train=True, optimizer=None, x
         count += len(xs)
         total_loss += loss.data
 
+    if train:
+        optimizer.target.cleargrads() # Clear the parameter gradients
+        loss.backward()               # Backprop
+        loss.unchain_backward()       # Truncate the graph
+        optimizer.update()            # Update the parameters
+
+    stat = ''
+    res = ''
+    if model.compute_fscore:
         total_ecounts = conlleval.merge_counts(total_ecounts, ecounts)
         c = total_ecounts
         acc = conlleval.calculate_accuracy(c.correct_tags, c.token_counter)
         overall = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
 
-        if train:
-            optimizer.target.cleargrads() # Clear the parameter gradients
-            loss.backward()               # Backprop
-            loss.unchain_backward()       # Truncate the graph
-            optimizer.update()            # Update the parameters
+        print('loss: ', total_loss)
+        print('#sen, #token, #chunk, #chunk_pred: %d %d %d %d' %
+              (count, c.token_counter, c.found_correct, c.found_guessed))
+        print('TP, FP, FN: %d %d %d' % (overall.tp, overall.fp, overall.fn))
+        print('A, P, R, F:%6.2f %6.2f %6.2f %6.2f' % 
+              (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore))
+        
+        stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (count, c.token_counter, c.found_correct, c.found_guessed)
+        res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f' % ((100.*acc), (100.*overall.prec), (100.*overall.rec), (100.*overall.fscore), overall.tp, overall.fp, overall.fn, total_loss)
+            
+    return stat, res
 
-    print('loss: ', total_loss)
-    print('#sen, #token, #chunk, #chunk_pred: %d %d %d %d' %
-          (count, c.token_counter, c.found_correct, c.found_guessed))
-    print('TP, FP, FN: %d %d %d' % (overall.tp, overall.fp, overall.fn))
-    print('A, P, R, F:%6.2f %6.2f %6.2f %6.2f' % 
-          (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore))
-
-    if logging is not None:
-        logging.info('n_sen    : %d' % count)
-        logging.info('n_token  : %d' % c.token_counter)
-        logging.info('n_chunk  : %d' % c.found_correct)
-        logging.info('n_chunk_p: %d' % c.found_guessed)
-        logging.info('TP: %d' % overall.tp)
-        logging.info('FP: %d' % overall.fp)
-        logging.info('FN: %d' % overall.fn)
-        logging.info('loss: %f' % total_loss)
-        logging.info('acc :%6.2f' % (100.*acc))
-        logging.info('pre :%6.2f' % (100.*overall.prec))
-        logging.info('rec :%6.2f' % (100.*overall.rec))
-        logging.info('fb1 :%6.2f' % (100.*overall.fscore))
         
 def main():
 
@@ -202,21 +198,28 @@ def main():
     parser.add_argument('--cudnn', dest='use_cudnn', action='store_true')
     parser.add_argument('--batchsize', '-b', type=int, default=20,
                         help='Number of examples in each mini-batch')
-    parser.add_argument('--bproplen', '-l', type=int, default=35,
-                        help='Number of words in each mini-batch '
-                             '(= length of truncated BPTT)')
     parser.add_argument('--epoch', '-e', type=int, default=39,
                         help='Number of sweeps over the dataset to train')
+    parser.add_argument('--layer', '-l', type=int, default=1,
+                        help='Number of LSTM layers')
+    parser.add_argument('--bidirection', action='store_true',
+                        help='Use bi-direction LSTM')
     parser.add_argument('--unit', '-u', type=int, default=650,
                         help='Number of LSTM units in each layer')
+    parser.add_argument('--lr', '-r', type=float, default=1,
+                        help='Value of initial learning rate')
+    parser.add_argument('--momentum', '-m', type=float, default=0.9,
+                        help='Momentum ratio')
+    parser.add_argument('--weightdecay', '-w', type=float, default=0.1,
+                        help='Weight decay ratio')
     parser.add_argument('--dropout', '-d', type=float, default=0.5,
                         help='Dropout ratio')
     parser.add_argument('--gradclip', '-c', type=float, default=5,
                         help='Gradient norm threshold to clip')
-    parser.add_argument('--out', '-o', default='out',
-                        help='Directory to output the result')
-    parser.add_argument('--resume', '-r', default='',
-                        help='Resume the training from snapshot')
+    # parser.add_argument('--out', '-o', default='out',
+    #                     help='Directory to output the result')
+    # parser.add_argument('--resume', '-r', default='',
+    #                     help='Resume the training from snapshot')
     parser.add_argument('--test', action='store_true',
                         help='Use tiny datasets for quick tests')
     parser.add_argument('--dir_path', '-p',
@@ -227,26 +230,31 @@ def main():
                         help='Filename of validation data')
     parser.set_defaults(test=False)
     parser.set_defaults(use_cudnn=False)
+    parser.set_defaults(bidirection=False)
     args = parser.parse_args()
 
     print('# GPU: {}'.format(args.gpu))
     print('# cudnn: {}'.format(args.use_cudnn))
-    print('# output directory: {}'.format(args.out))
+    # print('# output directory: {}'.format(args.out))
     print('# minibatch-size: {}'.format(args.batchsize))
     print('# epoch: {}'.format(args.epoch))
+    print('# bidirection: {}'.format(args.bidirection))
+    print('# layer: {}'.format(args.layer))
     print('# unit: {}'.format(args.unit))
+    print('# learning rate: {}'.format(args.lr))
+    print('# momentum: {}'.format(args.momentum))
+    print('# wieght decay: {}'.format(args.weightdecay))
     print('# dropout ratio: {}'.format(args.dropout))
     print('# gradient norm threshold to clip: {}'.format(args.gradclip))
-    print('# length of truncated BPTT: {}'.format(args.bproplen))
     print('# test: {}'.format(args.test))
     print('')
 
     # Prepare logger
 
     time = datetime.now().strftime('%Y%m%d_%H%M')
-    logging.basicConfig(filename='log/'+time+'.log', level=logging.INFO)
-    logging.info('start: ' + time)
-    logging.info(args)
+    logger = open('log/' + time + '.log', 'w')
+    logger.write('INFO: %s\n' % str(args))
+    logger.write('INFO: start: %s' % time)
 
     # Load dataset
 
@@ -278,12 +286,12 @@ def main():
     print('token2id:', t2i_tmp[:3], '...', t2i_tmp[len(t2i_tmp)-3:])
     print('label2id:', label2id)
     print()
-    logging.info('vocab = %d' % n_vocab)
-    logging.info('data length: train=%d val=%d' % (n_train, n_val))
+    logger.write('INFO: vocab = %d\n' % n_vocab)
+    logger.write('INFO: data length: train=%d val=%d\n' % (n_train, n_val))
 
     # Prepare model
 
-    rnn = RNNWithNStepLSTM(1, n_vocab, n_labels, args.unit, args.dropout, args.use_cudnn)
+    rnn = RNN(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection, args.use_cudnn)
     model = SequenceLabelingClassifier(rnn, id2label)
 
     if args.gpu >= 0:
@@ -296,27 +304,36 @@ def main():
 
     # Set up optimizer
 
-    optimizer = chainer.optimizers.SGD(lr=1.0)
+    optimizer = chainer.optimizers.MomentumSGD(lr=args.lr, momentum=args.momentum)
     optimizer.setup(model)
     optimizer.add_hook(chainer.optimizer.GradientClipping(args.gradclip))
+    optimizer.add_hook(chainer.optimizer.WeightDecay(args.weightdecay))
 
     # Run
 
-    for e in range(args.epoch):
-        print('epoch:', e+1)
-        print('<training result>')
-        logging.info('epoch:'+str(e+1))
-        logging.info('<training result>')
-        run_epoch(model, train, train_t, args.batchsize, optimizer=optimizer, xp=xp, logging=logging)
-        print()
+    for e in range(1, args.epoch+1):
+        print('epoch:', e)
+        t_stat, t_res = run_epoch(model, train, train_t, args.batchsize, optimizer=optimizer, xp=xp)
 
-        # Evaluation on validation data
+        # Evaluation
         evaluator = model.copy()          # to use different state
         evaluator.predictor.train = False # dropout does nothing
-        #evaluator.predictor.reset_state() # initialize state
+        evaluator.compute_fscore = True
+
+        print('<training result>')
+        t_stat, t_res = run_epoch(evaluator, train, train_t, args.batchsize, train=False, xp=xp)
+        if e == 1:
+            logger.write('INFO: train - %s\n' % t_stat)
+            logger.write('data\tep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\tloss\n')
+        logger.write('train\t%d\t%s\n' % (e, t_res))
+        print()
+
+
         print('<validation result>')
-        logging.info('<validation result>')
-        run_epoch(evaluator, val, val_t, args.batchsize, train=False, xp=xp, logging=logging)
+        v_stat, v_res = run_epoch(evaluator, val, val_t, args.batchsize, train=False, xp=xp)
+        if e == 1:
+            logger.write('INFO: valid - %s\n' % v_stat)
+        logger.write('valid\t%d\t%s\n' % (e, v_res))
         print()
 
         # Save the model and the optimizer
@@ -324,19 +341,16 @@ def main():
         mdl_path = 'model/rnn_%s_e%d.mdl' % (time, e)
         opt_path = 'model/rnn_%s_e%d.opt' % (time, e)
 
-        print('save the model:', mdl_path)
-        print('save the optimizer:', opt_path)
-        print()
-        logging.info('save the model: ' + mdl_path)
-        logging.info('save the optimizer: ' + opt_path)
+        logger.write('INFO: save the model: %s\n' % mdl_path)
+        logger.write('INFO: save the optimizer: %s\n' % opt_path)
         serializers.save_npz(mdl_path, model)
         serializers.save_npz(opt_path, optimizer)
 
     # Evaluate on test dataset
 
     time = datetime.now().strftime('%Y%m%d_%H%M')
-    logging.info('finish: ' + time)
-
+    logger.write('finish: %s\n' % time)
+    logger.close()
    
 if __name__ == '__main__':
     main()
