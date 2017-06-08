@@ -51,7 +51,7 @@ class RNN(chainer.Chain):
 
 
 class SequenceLabelingClassifier(link.Chain):
-    compute_fscore = False
+    compute_fscore = True
 
     def __init__(self, predictor, id2label,
                  lossfun=softmax_cross_entropy.softmax_cross_entropy,
@@ -142,6 +142,8 @@ class SequenceLabelingClassifier(link.Chain):
         
 
 def run_epoch(model, instances, labels, batchsize, train=True, optimizer=None, xp=np):
+    stat = ''
+    res = ''
     count = 0
     total_loss = 0
     total_ecounts = conlleval.EvalCounts()
@@ -161,20 +163,19 @@ def run_epoch(model, instances, labels, batchsize, train=True, optimizer=None, x
         count += len(xs)
         total_loss += loss.data
 
-    if train:
-        optimizer.target.cleargrads() # Clear the parameter gradients
-        loss.backward()               # Backprop
-        loss.unchain_backward()       # Truncate the graph
-        optimizer.update()            # Update the parameters
+        if model.compute_fscore:
+            total_ecounts = conlleval.merge_counts(total_ecounts, ecounts)
+            c = total_ecounts
+            acc = conlleval.calculate_accuracy(c.correct_tags, c.token_counter)
+            overall = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
 
-    stat = ''
-    res = ''
+        if train:
+            optimizer.target.cleargrads() # Clear the parameter gradients
+            loss.backward()               # Backprop
+            loss.unchain_backward()       # Truncate the graph
+            optimizer.update()            # Update the parameters
+
     if model.compute_fscore:
-        total_ecounts = conlleval.merge_counts(total_ecounts, ecounts)
-        c = total_ecounts
-        acc = conlleval.calculate_accuracy(c.correct_tags, c.token_counter)
-        overall = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
-
         print('loss: ', total_loss)
         print('#sen, #token, #chunk, #chunk_pred: %d %d %d %d' %
               (count, c.token_counter, c.found_correct, c.found_guessed))
@@ -208,6 +209,7 @@ def main():
                         help='Number of LSTM units in each layer')
     parser.add_argument('--lr', '-r', type=float, default=1,
                         help='Value of initial learning rate')
+    parser.add_argument('--optimizer', '-o', default='sgd')
     parser.add_argument('--momentum', '-m', type=float, default=0.9,
                         help='Momentum ratio')
     parser.add_argument('--weightdecay', '-w', type=float, default=0.1,
@@ -216,18 +218,23 @@ def main():
                         help='Dropout ratio')
     parser.add_argument('--gradclip', '-c', type=float, default=5,
                         help='Gradient norm threshold to clip')
-    # parser.add_argument('--out', '-o', default='out',
-    #                     help='Directory to output the result')
-    # parser.add_argument('--resume', '-r', default='',
-    #                     help='Resume the training from snapshot')
-    parser.add_argument('--test', action='store_true',
+    parser.add_argument('--resume', default='',
+                        help='Resume the training from snapshot')
+    parser.add_argument('--resume_epoch', type=int, default=1,
+                        help='Resume the training from the epoch')
+    parser.add_argument('--test', type=int, default=-1,
                         help='Use tiny datasets for quick tests')
+    parser.add_argument('--format', '-f',
+                        help='Format of input data')
     parser.add_argument('--dir_path', '-p',
                         help='Directory path of input data (training, validation and test)')
     parser.add_argument('--train_data', '-t',
                         help='Filename of training data')
     parser.add_argument('--validation_data', '-v',
                         help='Filename of validation data')
+    # parser.add_argument('--out', '-o', default='out',
+    #                     help='Directory to output the result')
+    parser.set_defaults(optimizer='sgd')
     parser.set_defaults(test=False)
     parser.set_defaults(use_cudnn=False)
     parser.set_defaults(bidirection=False)
@@ -241,11 +248,14 @@ def main():
     print('# bidirection: {}'.format(args.bidirection))
     print('# layer: {}'.format(args.layer))
     print('# unit: {}'.format(args.unit))
+    print('# optimization algorithm: {}'.format(args.optimizer))
     print('# learning rate: {}'.format(args.lr))
     print('# momentum: {}'.format(args.momentum))
     print('# wieght decay: {}'.format(args.weightdecay))
     print('# dropout ratio: {}'.format(args.dropout))
     print('# gradient norm threshold to clip: {}'.format(args.gradclip))
+    print('# resume: {}'.format(args.resume))
+    print('# epoch to resume: {}'.format(args.resume_epoch))
     print('# test: {}'.format(args.test))
     print('')
 
@@ -254,7 +264,7 @@ def main():
     time = datetime.now().strftime('%Y%m%d_%H%M')
     logger = open('log/' + time + '.log', 'w')
     logger.write('INFO: %s\n' % str(args))
-    logger.write('INFO: start: %s' % time)
+    logger.write('INFO: start: %s\n' % time)
 
     # Load dataset
 
@@ -262,12 +272,19 @@ def main():
     val_path = args.dir_path + args.validation_data
     test_path = args.dir_path + 'LBb_test.tsv'
 
-    limit=21 if args.test else -1
-    train, train_t, token2id, label2id = util.create_data_per_char(train_path, limit=limit)
-    val, val_t, token2id, label2id = util.create_data_per_char(
-        val_path, token2id=token2id, label2id=label2id, label_update=False, limit=limit)
-    # test, test_t, token2id, label2id = util.create_data_per_char(
-    #     test_path, token2id=token2id, label2id=label2id, token_update=False, label_update=False, limit=limit)
+    limit=args.test if args.test > 0 else -1
+    if args.format == 'bccwj':
+        train, train_t, token2id, label2id = util.create_data_per_char(train_path, limit=limit)
+        val, val_t, token2id, label2id = util.create_data_per_char(
+            val_path, token2id=token2id, label2id=label2id, label_update=False, limit=limit)
+        # test, test_t, token2id, label2id = util.create_data_per_char(
+        #     test_path, token2id=token2id, label2id=label2id, token_update=False, label_update=False, limit=limit)
+    elif args.format == 'conll2003':
+        train, train_t, token2id, label2id = util.create_data(train_path, limit=limit)
+        val, val_t, token2id, label2id = util.create_data(
+            val_path, token2id=token2id, label2id=label2id, label_update=False, limit=limit)
+    else:
+        pass
 
     n_train = len(train)
     n_val = len(val)
@@ -293,6 +310,9 @@ def main():
 
     rnn = RNN(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection, args.use_cudnn)
     model = SequenceLabelingClassifier(rnn, id2label)
+    if args.resume:
+        print('resume training from the model: %s' % args.resume)
+        chainer.serializers.load_npz(args.resume, model)
 
     if args.gpu >= 0:
         # Make the specified GPU current
@@ -304,30 +324,39 @@ def main():
 
     # Set up optimizer
 
-    optimizer = chainer.optimizers.MomentumSGD(lr=args.lr, momentum=args.momentum)
+    if args.optimizer == 'sgd':
+        if args.momentum <= 0:
+            optimizer = chainer.optimizers.SGD(lr=args.lr)
+        else:
+            optimizer = chainer.optimizers.MomentumSGD(lr=args.lr, momentum=args.momentum)
+    elif args.optimizer == 'adam':
+        optimizer = chainer.optimizers.Adam()
+    elif args.optimizer == 'adagrad':
+        optimizer = chainer.optimizers.AdaGrad(lr=args.lr)
+
     optimizer.setup(model)
     optimizer.add_hook(chainer.optimizer.GradientClipping(args.gradclip))
     optimizer.add_hook(chainer.optimizer.WeightDecay(args.weightdecay))
 
+
     # Run
 
-    for e in range(1, args.epoch+1):
+    for e in range(max(1, args.resume_epoch), args.epoch+1):
         print('epoch:', e)
         t_stat, t_res = run_epoch(model, train, train_t, args.batchsize, optimizer=optimizer, xp=xp)
-
-        # Evaluation
-        evaluator = model.copy()          # to use different state
-        evaluator.predictor.train = False # dropout does nothing
-        evaluator.compute_fscore = True
-
+        
         print('<training result>')
-        t_stat, t_res = run_epoch(evaluator, train, train_t, args.batchsize, train=False, xp=xp)
+        # t_stat, t_res = run_epoch(evaluator, train, train_t, args.batchsize, train=False, xp=xp)
         if e == 1:
             logger.write('INFO: train - %s\n' % t_stat)
             logger.write('data\tep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\tloss\n')
         logger.write('train\t%d\t%s\n' % (e, t_res))
         print()
 
+        # Evaluation
+        evaluator = model.copy()          # to use different state
+        evaluator.predictor.train = False # dropout does nothing
+        evaluator.compute_fscore = True
 
         print('<validation result>')
         v_stat, v_res = run_epoch(evaluator, val, val_t, args.batchsize, train=False, xp=xp)
