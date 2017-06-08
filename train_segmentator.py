@@ -36,16 +36,26 @@ from conlleval import conlleval
 class RNN(chainer.Chain):
     def __init__(self, n_layers, n_vocab, n_labels, n_units, dropout, use_bi_direction, use_cudnn):
         super(RNN, self).__init__(
-            embed=L.EmbedID(n_vocab, n_units),
-            #l1=L.NStepLSTMBase(n_layers, n_units, n_units, dropout, use_bi_direction, use_cudnn=use_cudnn),
-            l1=L.NStepBiLSTM(n_layers, n_units, n_units, dropout, use_cudnn=use_cudnn) 
+            embed = L.EmbedID(n_vocab, n_units),
+            l1 = L.NStepBiLSTM(n_layers, n_units, n_units, dropout, use_cudnn=use_cudnn) 
             if use_bi_direction else L.NStepLSTM(n_layers, n_units, n_units, dropout, use_cudnn=use_cudnn),
-            l2=L.Linear(n_units, n_labels),
+            l2 = L.Linear(n_units * (2 if use_bi_direction else 1), n_labels),
         )
         
     def __call__(self, hx, cx, xs, train=True):
+        #print('xs', len(xs), [len(x) for x in xs])
+
         xs = [self.embed(x) for x in xs]
+        # print('xs-embed', len(xs), [x.data.shape for x in xs])
+        # print()
+        # for i in range(4):
+        #     print('l1-'+str(i), [self.l1._children[i].__dict__['w'+str(j)].shape for j in range(8)])
+        # print()
+
         hy, cy, ys = self.l1(hx, cx, xs, train=train)
+        # print('ys', len(ys), [y.data.shape for y in ys])
+        # print()
+
         ys = [self.l2(y) for y in ys]
         return hy, cy, ys
 
@@ -212,6 +222,8 @@ def main():
     parser.add_argument('--optimizer', '-o', default='sgd')
     parser.add_argument('--momentum', '-m', type=float, default=0.9,
                         help='Momentum ratio')
+    parser.add_argument('--lrdecay', type=float, default=0.05,
+                        help='Coefficient for learning rate decay')
     parser.add_argument('--weightdecay', '-w', type=float, default=0.1,
                         help='Weight decay ratio')
     parser.add_argument('--dropout', '-d', type=float, default=0.5,
@@ -235,6 +247,7 @@ def main():
     # parser.add_argument('--out', '-o', default='out',
     #                     help='Directory to output the result')
     parser.set_defaults(optimizer='sgd')
+    parser.set_defaults(lrdecay=False)
     parser.set_defaults(test=False)
     parser.set_defaults(use_cudnn=False)
     parser.set_defaults(bidirection=False)
@@ -250,6 +263,7 @@ def main():
     print('# unit: {}'.format(args.unit))
     print('# optimization algorithm: {}'.format(args.optimizer))
     print('# learning rate: {}'.format(args.lr))
+    print('# learning rate decay: {}'.format(args.lrdecay))
     print('# momentum: {}'.format(args.momentum))
     print('# wieght decay: {}'.format(args.weightdecay))
     print('# dropout ratio: {}'.format(args.dropout))
@@ -344,9 +358,8 @@ def main():
     for e in range(max(1, args.resume_epoch), args.epoch+1):
         print('epoch:', e)
         t_stat, t_res = run_epoch(model, train, train_t, args.batchsize, optimizer=optimizer, xp=xp)
-        
+
         print('<training result>')
-        # t_stat, t_res = run_epoch(evaluator, train, train_t, args.batchsize, train=False, xp=xp)
         if e == 1:
             logger.write('INFO: train - %s\n' % t_stat)
             logger.write('data\tep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\tloss\n')
@@ -374,6 +387,13 @@ def main():
         logger.write('INFO: save the optimizer: %s\n' % opt_path)
         serializers.save_npz(mdl_path, model)
         serializers.save_npz(opt_path, optimizer)
+
+        
+        # learning rate decay (
+        if args.lrdecay > 0 and args.optimizer == 'sgd':
+            optimizer.lr = args.lr / (1 + e * args.lrdecay) # (Ma 2016)
+            print('lr:', optimizer.lr)
+            print()
 
     # Evaluate on test dataset
 
