@@ -2,8 +2,7 @@
 - (Zaremba 2015) の著者らによる torch 実装
   - (Zaremba 2015) RECURRENT NEURAL NETWORK REGULARIZATION, ICLR
   - https://github.com/tomsercu/lstm
--> 同等のプログラムの PFN による chainer 実装
--> 東山が改造
+-> 同等のプログラムの PFN による chainer 実装 -> 改造
 
 """
 
@@ -33,12 +32,31 @@ import util
 from conlleval import conlleval
 
 
-class RNN(chainer.Chain):
-    def __init__(self, n_layers, n_vocab, n_labels, n_units, dropout, use_bi_direction, use_cudnn):
-        super(RNN, self).__init__(
+# for chainer 2
+class RNN_v2(chainer.Chain):
+    def __init__(self, n_layers, n_vocab, n_labels, n_units, dropout, use_bi_direction):
+        l1 = L.NStepBiLSTM(n_layers, n_units, n_units, dropout) if use_bi_direction else L.NStepLSTM(n_layers, n_units, n_units, dropout)
+        super(RNN_v2, self).__init__(
             embed = L.EmbedID(n_vocab, n_units),
-            l1 = L.NStepBiLSTM(n_layers, n_units, n_units, dropout, use_cudnn=use_cudnn) 
-            if use_bi_direction else L.NStepLSTM(n_layers, n_units, n_units, dropout, use_cudnn=use_cudnn),
+            l1 = l1,
+            l2 = L.Linear(n_units * (2 if use_bi_direction else 1), n_labels),
+        )
+        
+    def __call__(self, hx, cx, xs, train=True):
+        xs = [self.embed(x) for x in xs]
+        with chainer.using_config('train', train):
+            hy, cy, ys = self.l1(hx, cx, xs)
+        ys = [self.l2(y) for y in ys]
+
+        return hy, cy, ys
+
+# for chainer 1
+class RNN_v1(chainer.Chain):
+    def __init__(self, n_layers, n_vocab, n_labels, n_units, dropout, use_bi_direction, use_cudnn):
+        l1 = L.NStepBiLSTM(n_layers, n_units, n_units, dropout) if use_bi_direction else L.NStepLSTM(n_layers, n_units, n_units, dropout, use_cudnn)
+        super(RNN_v1, self).__init__(
+            embed = L.EmbedID(n_vocab, n_units),
+            l1 = l1,
             l2 = L.Linear(n_units * (2 if use_bi_direction else 1), n_labels),
         )
         
@@ -75,7 +93,7 @@ class SequenceLabelingClassifier(link.Chain):
         self.eval_counts = None
         #self.result = {}
         
-    def __call__(self, *args):
+    def __call__(self, *args, **kwargs):
         assert len(args) >= 2
         inputs = args[:-1]      # hx, cx, xs
         ts = args[-1]
@@ -83,7 +101,7 @@ class SequenceLabelingClassifier(link.Chain):
         self.loss = None
         self.eval_counts = None
 
-        hy, cy, self.ys = self.predictor(*inputs)
+        hy, cy, self.ys = self.predictor(*inputs, **kwargs)
 
         # loss
         for y, t in zip(self.ys, ts):
@@ -119,36 +137,6 @@ class SequenceLabelingClassifier(link.Chain):
             yield [x_str, t_str, y_str]
 
             i += 1
-
-
-# does not work
-# class SequentialIterator(chainer.dataset.Iterator):
-
-#     def __init__(self, instances, labels, batch_size, train=True, xp=np):
-#         self.instances = instances
-#         self.labels = labels
-#         self.batch_size = batch_size
-#         self.size = len(instances)
-#         self.perm = np.random.permutation(self.size) if train else range(0, self.size)
-#         self.xp = xp
-#         self.ni = 0             # next index
-
-#     def __next__(self):
-#         if self.ni >= self.size:
-#             raise StopIteration
-
-#         i_max = min(self.ni + self.batch_size, self.size)
-#         print(self.ni, i_max)
-#         xs = [self.xp.asarray(self.instances[self.perm[i]], dtype=np.int32) 
-#               for i in range(self.ni, i_max)]
-#         hx = None
-#         cx = None
-#         ts = [self.xp.asarray(self.instances[self.perm[i]], dtype=np.int32)
-#               for i in range(self.ni, i_max)]
-
-#         self.ni = i_max
-
-#         return hx, cx, xs, ts
         
 
 def run_epoch(model, instances, labels, batchsize, train=True, optimizer=None, xp=np):
@@ -167,9 +155,16 @@ def run_epoch(model, instances, labels, batchsize, train=True, optimizer=None, x
         cx = None
         ts = [xp.asarray(labels[perm[i]], dtype=np.int32) for i in range(i, i_max)]
 
-        loss, ecounts = model(hx, cx, xs, ts)
         if train:
+            loss, ecounts = model(hx, cx, xs, ts, train=train)
             print('* batch', str(i+1)+'-'+str(i_max), 'loss:', loss.data)
+        else:
+            if chainer.__version__[0] == '2':
+                with chainer.no_backprop_mode():
+                    loss, ecounts = model(hx, cx, xs, ts, train=train)
+            else:
+                loss, ecounts = model(hx, cx, xs, ts, train=train)
+
         count += len(xs)
         total_loss += loss.data
 
@@ -207,55 +202,36 @@ def main():
     parser.add_argument('--gpu', '-g', type=int, default=-1,
                         help='GPU ID (negative value indicates CPU)')
     parser.add_argument('--cudnn', dest='use_cudnn', action='store_true')
-    parser.add_argument('--batchsize', '-b', type=int, default=20,
-                        help='Number of examples in each mini-batch')
-    parser.add_argument('--epoch', '-e', type=int, default=39,
-                        help='Number of sweeps over the dataset to train')
-    parser.add_argument('--layer', '-l', type=int, default=1,
-                        help='Number of LSTM layers')
-    parser.add_argument('--bidirection', action='store_true',
-                        help='Use bi-direction LSTM')
-    parser.add_argument('--unit', '-u', type=int, default=650,
-                        help='Number of LSTM units in each layer')
-    parser.add_argument('--lr', '-r', type=float, default=1,
-                        help='Value of initial learning rate')
+    parser.add_argument('--batchsize', '-b', type=int, default=20)
+    parser.add_argument('--epoch', '-e', type=int, default=10)
+    parser.add_argument('--layer', '-l', type=int, default=1, help='Number of LSTM layers')
+    parser.add_argument('--bidirection', action='store_true')
+    parser.add_argument('--unit', '-u', type=int, default=650)
+    parser.add_argument('--lr', '-r', type=float, default=1, help='Value of initial learning rate')
     parser.add_argument('--optimizer', '-o', default='sgd')
-    parser.add_argument('--momentum', '-m', type=float, default=0.9,
-                        help='Momentum ratio')
-    parser.add_argument('--lrdecay', type=float, default=0.05,
-                        help='Coefficient for learning rate decay')
-    parser.add_argument('--weightdecay', '-w', type=float, default=0.1,
-                        help='Weight decay ratio')
-    parser.add_argument('--dropout', '-d', type=float, default=0.5,
-                        help='Dropout ratio')
-    parser.add_argument('--gradclip', '-c', type=float, default=5,
-                        help='Gradient norm threshold to clip')
-    parser.add_argument('--resume', default='',
-                        help='Resume the training from snapshot')
-    parser.add_argument('--resume_epoch', type=int, default=1,
-                        help='Resume the training from the epoch')
-    parser.add_argument('--test', type=int, default=-1,
-                        help='Use tiny datasets for quick tests')
-    parser.add_argument('--format', '-f',
-                        help='Format of input data')
-    parser.add_argument('--dir_path', '-p',
-                        help='Directory path of input data (training, validation and test)')
-    parser.add_argument('--train_data', '-t',
-                        help='Filename of training data')
-    parser.add_argument('--validation_data', '-v',
-                        help='Filename of validation data')
-    # parser.add_argument('--out', '-o', default='out',
-    #                     help='Directory to output the result')
+    parser.add_argument('--momentum', '-m', type=float, default=0.9, help='Momentum ratio')
+    parser.add_argument('--lrdecay', type=float, default=0.05, help='Coefficient for learning rate decay')
+    parser.add_argument('--weightdecay', '-w', type=float, default=0.1, help='Weight decay ratio')
+    parser.add_argument('--dropout', '-d', type=float, default=0.5)
+    parser.add_argument('--gradclip', '-c', type=float, default=5,)
+    parser.add_argument('--resume', default='', help='Resume the training from snapshot')
+    parser.add_argument('--resume_epoch', type=int, default=1, help='Resume the training from the epoch')
+    parser.add_argument('--test', type=int, default=-1, help='Use tiny datasets for quick tests')
+    parser.add_argument('--format', '-f', help='Format of input data')
+    parser.add_argument('--subpos_depth', '-s', type=int, default=-1)
+    parser.add_argument('--dir_path', '-p', help='Directory path of input data (training, validation and test)')
+    parser.add_argument('--train_data', '-t', help='Filename of training data')
+    parser.add_argument('--validation_data', '-v', help='Filename of validation data')
     parser.set_defaults(optimizer='sgd')
-    parser.set_defaults(lrdecay=False)
-    parser.set_defaults(test=False)
     parser.set_defaults(use_cudnn=False)
     parser.set_defaults(bidirection=False)
     args = parser.parse_args()
 
+    if chainer.__version__[0] == '2':
+         chainer.config.cudnn_deterministic = True
+    
     print('# GPU: {}'.format(args.gpu))
     print('# cudnn: {}'.format(args.use_cudnn))
-    # print('# output directory: {}'.format(args.out))
     print('# minibatch-size: {}'.format(args.batchsize))
     print('# epoch: {}'.format(args.epoch))
     print('# bidirection: {}'.format(args.bidirection))
@@ -268,6 +244,7 @@ def main():
     print('# wieght decay: {}'.format(args.weightdecay))
     print('# dropout ratio: {}'.format(args.dropout))
     print('# gradient norm threshold to clip: {}'.format(args.gradclip))
+    print('# subpos depth: {}'.format(args.subpos_depth))
     print('# resume: {}'.format(args.resume))
     print('# epoch to resume: {}'.format(args.resume_epoch))
     print('# test: {}'.format(args.test))
@@ -279,6 +256,7 @@ def main():
     logger = open('log/' + time + '.log', 'w')
     logger.write('INFO: %s\n' % str(args))
     logger.write('INFO: start: %s\n' % time)
+    print('INFO: start: %s\n' % time)
 
     # Load dataset
 
@@ -293,16 +271,27 @@ def main():
             val_path, token2id=token2id, label2id=label2id, label_update=False, limit=limit)
         # test, test_t, token2id, label2id = util.create_data_per_char(
         #     test_path, token2id=token2id, label2id=label2id, token_update=False, label_update=False, limit=limit)
+    elif args.format == 'bccwj_pos':
+        train, train_t, token2id, label2id = util.create_data_for_pos_tagging(
+            train_path, subpos_depth=args.subpos_depth, limit=limit)
+        val, val_t, token2id, label2id = util.create_data_for_pos_tagging(
+            val_path, token2id=token2id, label2id=label2id, subpos_depth=args.subpos_depth, 
+            label_update=False, limit=limit)
+    elif args.format == 'wsj':
+        train, train_t, token2id, label2id = util.create_data_for_wsj(train_path, limit=limit)
+        val, val_t, token2id, label2id = util.create_data_for_wsj(
+            val_path, token2id=token2id, label2id=label2id, label_update=False, limit=limit)
     elif args.format == 'conll2003':
         train, train_t, token2id, label2id = util.create_data(train_path, limit=limit)
-        val, val_t, token2id, label2id = util.create_data(
+        val, val_t, token2id, label2id = util.create_data_for_conll2003(
             val_path, token2id=token2id, label2id=label2id, label_update=False, limit=limit)
     else:
         pass
 
+    test = []
     n_train = len(train)
     n_val = len(val)
-    n_test = 0 #len(test)
+    n_test = len(test)
     n_vocab = len(token2id)
     n_labels = len(label2id)
 
@@ -322,8 +311,13 @@ def main():
 
     # Prepare model
 
-    rnn = RNN(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection, args.use_cudnn)
+    if chainer.__version__[0] == '2':
+        rnn = RNN_v2(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection)
+    else:
+        rnn = RNN_v1(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection, 
+                     args.use_cudnn)
     model = SequenceLabelingClassifier(rnn, id2label)
+
     if args.resume:
         print('resume training from the model: %s' % args.resume)
         chainer.serializers.load_npz(args.resume, model)
@@ -356,6 +350,8 @@ def main():
     # Run
 
     for e in range(max(1, args.resume_epoch), args.epoch+1):
+        time2 = datetime.now().strftime('%Y%m%d_%H%M')
+        logger.write('INFO: %s\n' % time2)
         print('epoch:', e)
         t_stat, t_res = run_epoch(model, train, train_t, args.batchsize, optimizer=optimizer, xp=xp)
 
@@ -384,12 +380,12 @@ def main():
         opt_path = 'model/rnn_%s_e%d.opt' % (time, e)
 
         logger.write('INFO: save the model: %s\n' % mdl_path)
-        logger.write('INFO: save the optimizer: %s\n' % opt_path)
         serializers.save_npz(mdl_path, model)
-        serializers.save_npz(opt_path, optimizer)
+        # logger.write('INFO: save the optimizer: %s\n' % opt_path)
+        # serializers.save_npz(opt_path, optimizer)
 
         
-        # learning rate decay (
+        # learning rate decay
         if args.lrdecay > 0 and args.optimizer == 'sgd':
             optimizer.lr = args.lr / (1 + e * args.lrdecay) # (Ma 2016)
             print('lr:', optimizer.lr)
