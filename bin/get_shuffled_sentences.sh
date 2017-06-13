@@ -1,30 +1,31 @@
 #!/usr/local/bin/bash
 
-input=/home/shigashi/data_shigashi/resources/BCCWJ1.1/Disk4/TSV_SUW_OT/LB/LBb.txt
-out_dir=/home/shigashi/data_shigashi/resources/BCCWJ1.1/Disk4/processed/ma/
+input=$1                        # /home/shigashi/data_shigashi/resources/BCCWJ1.1/Disk4/TSV_SUW_OT/*/*.txt
+tmp=${input##*/}
+name=${tmp%%.*}
 
-out_train=${out_dir}LBb_train.tsv
-out_val=${out_dir}LBb_val.tsv
-out_test=${out_dir}LBb_test.tsv
+out_dir=/home/shigashi/data_shigashi/resources/BCCWJ1.1/Disk4/processed/ma2/
+out_train=${out_dir}${name}_train.tsv
+out_val=${out_dir}${name}_val.tsv
+out_test=${out_dir}${name}_test.tsv
+echo $input "->" $out_train
 
-#N=`cut -f10 $input | grep B | wc -l | cut -d' ' -f1`
-n1=42362                        # train
-n2=2000                         # val
-#n3=$(($N-$n1-$n2))              # test
-n3=2000
-N=$(($n1+$n2+$n3))
-echo $N $n1 $n2 $n3
+p1=9776                         # prob for class1
+p2=112                          # prob for class2
+p3=112                          # prob for class2
+#echo $p1 $p2 $p3
 
-p1=`echo "scale=5; $n1 / $N * 10000" | bc  -l`
-p1=${p1%.*}
-p2=`echo "scale=5; $n2 / $N * 10000" | bc  -l`
-p2=${p2%.*}
-p3=`echo "scale=5; $n3 / $N * 10000" | bc  -l`
-p3=${p3%.*}
 d1=$p1
 d2=$(($d1+$p2))
 d3=$(($d2+$p3))
-echo $d1 $d2 $d3
+#echo $d1 $d2 $d3
+
+N=`cut -f10 $input | grep B | wc -l | cut -d' ' -f1`
+n2=$(($N*$p2/10000))
+n3=$(($N*$p3/10000))
+n1=$(($N-$n2-$n3))
+echo $N $n1 $n2 $n3
+
 
 # read file
 

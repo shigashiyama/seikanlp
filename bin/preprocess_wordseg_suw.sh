@@ -1,5 +1,8 @@
 #!/usr/local/bin/bash
 
+# 1行1単語のBCCWJのフォーマットのファイルを1行1文字に変換する。
+# とても時間がかかる。
+
 in_dir='TSV_SUW_OT'
 out_dir='SUW_wordseg'
 
