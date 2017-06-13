@@ -1,7 +1,82 @@
+import re
 import numpy as np
 
 
 UNK_SYMBOL = '<UNK>'
+
+# for PTB WSJ (CoNLL-2005)
+#
+# example of input data:
+# 0001  1  0 B-NP    NNP   Pierre          NOFUNC          Vinken            1 B-S/B-NP/B-NP
+# 0001  1  1 I-NP    NNP   Vinken          NP-SBJ          join              8 I-S/I-NP/I-NP
+# 0001  1  2 O       COMMA COMMA           NOFUNC          Vinken            1 I-S/I-NP
+# ...
+# 0001  1 17 O       .     .               NOFUNC          join              8 I-S
+#
+def create_data_for_wsj(path, token2id={}, label2id={}, 
+                token_update=True, label_update=True, limit=-1):
+
+    # id2token = {}
+    # id2label = {}
+
+    instances = []
+    labels = []
+    if len(token2id) == 0:
+        token2id = {UNK_SYMBOL: np.int32(0)}
+    if len(label2id) == 0:
+        label2id = {UNK_SYMBOL: np.int32(0)} # '#' が val で出てくる
+
+    print("Read file:", path)
+    ins_cnt = 0
+    word_cnt = 0
+
+    with open(path) as f:
+        ins = []
+        lab = []
+
+        for line in f:
+            if line[0] == '#':
+                continue
+
+            if len(line) < 2:
+                if len(ins) > 0:
+                    # print([id2token[wi] for wi in ins])
+                    # print([id2label[li] for li in lab])
+                    # print()
+                    
+                    instances.append(ins)
+                    labels.append(lab)
+                    ins = []
+                    lab = []
+                    ins_cnt += 1
+                continue
+
+            if limit > 0 and ins_cnt >= limit:
+                break
+
+            line = re.split(' +', line.rstrip('\n'))
+            word = line[6].rstrip()
+            pos = line[5].rstrip()
+            chunk = line[4].rstrip()
+
+            wi = get_id(word, token2id, token_update)
+            li = get_id(pos, label2id, label_update)
+            ins.append(wi)
+            lab.append(li)
+            # print(wi, word)
+            # print(li, pos)
+            # id2token[wi] = word
+            # id2label[li] = pos
+
+            word_cnt += 1
+
+        if limit <= 0:
+            instances.append(ins)
+            labels.append(lab)
+            ins_cnt += 1
+
+    return instances, labels, token2id, label2id
+
 
 # for CoNLL-2003 NER
 # 単語単位で BIO2 フォーマットに変換 (未実施：先頭の I -> B へ置き換え)
@@ -12,7 +87,7 @@ UNK_SYMBOL = '<UNK>'
 # German JJ I-NP I-MISC
 # call NN I-NP O
 #
-def create_data(path, token2id={}, label2id={}, 
+def create_data_for_conll2003(path, token2id={}, label2id={},
                 token_update=True, label_update=True, limit=-1):
 
     # id2token = {}
@@ -77,6 +152,79 @@ def create_data(path, token2id={}, label2id={},
     return instances, labels, token2id, label2id
 
     
+# for pos tagging
+#
+# example of input data:
+# B       最後    名詞-普通名詞-一般$
+# I       の      助詞-格助詞$
+# I       会話    名詞-普通名詞-サ変可能$
+#
+def create_data_for_pos_tagging(path, token2id={}, label2id={}, cate_row=-1, subpos_depth=-1,
+                         token_update=True, label_update=True, limit=-1):
+    instances = []
+    labels = []
+    if len(token2id) == 0:
+        token2id = {UNK_SYMBOL: np.int32(0)}
+    if len(label2id) == 0:
+        label2id = {}
+
+    print("Read file:", path)
+    ins_cnt = 0
+    word_cnt = 0
+
+    with open(path) as f:
+        bof = True
+        ins = []
+        lab = []
+
+        for line in f:
+            if len(line) < 2:
+                continue
+
+            line = line.rstrip('\n').split('\t')
+            bos = line[0]
+            word = line[1]
+            label = line[2].rstrip('$')     # pos
+
+            if subpos_depth == 1:
+                label = label.split('-')[0]
+            elif subpos_depth > 1:
+                label = '_'.join(label.split('-')[0:subpos_depth])
+
+            if not bof and bos == 'B':
+                # if len(ins) > 1:
+
+                instances.append(ins)
+                labels.append(lab)
+                ins = []
+                lab = []
+                ins_cnt += 1
+
+                # else:
+                #     print(ins)
+
+            if limit > 0 and ins_cnt >= limit:
+                break
+
+            wi = get_id(word, token2id, token_update)
+            li = get_id(label, label2id, label_update)
+            ins.append(wi)
+            lab.append(li)
+            # print(wi, word)
+            # print(li, label)
+
+            bof = False
+            word_cnt += 1
+
+        if limit <= 0:
+            instances.append(ins)
+            labels.append(lab)
+            ins_cnt += 1
+
+    print(ins_cnt, word_cnt)
+    return instances, labels, token2id, label2id
+
+
 # for BCCWJ word segmentation
 # 文字単位で BIO2 フォーマットに変換
 #
@@ -159,3 +307,14 @@ def get_id(string, string2id, update=True):
         if not UNK_SYMBOL in string2id:
             print("WARN: "+string+" is unknown and <UNK> is not registered.")
         return string2id[UNK_SYMBOL]
+
+
+if __name__ == '__main__':
+
+    train_path = 'bccwj_data/Disk4/processed/ma/LBb_train_middle.tsv'
+
+    instances, labels, token2id, label2id = create_data_for_pos_tagging(train_path, subpos_depth=1)
+
+    #instances, labels, token2id, label2id = create_data_for_wsj(train_path, token_update=True, label_update=True)
+    print(len(instances))
+    print(len(label2id))
