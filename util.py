@@ -1,4 +1,5 @@
 import re
+import enum
 import numpy as np
 
 
@@ -233,8 +234,14 @@ def create_data_for_pos_tagging(path, token2id={}, label2id={}, cate_row=-1, sub
 # I       の      助詞-格助詞$
 # I       会話    名詞-普通名詞-サ変可能$
 #
-def create_data_per_char(path, token2id={}, label2id={}, cate_row=-1, 
-                         token_update=True, label_update=True, limit=-1):
+def create_data_wordseg(path, token2id={}, label2id={}, cate_row=-1, 
+                         token_update=True, label_update=True, scheme='BI', limit=-1):
+    Schema = enum.Enum("Schema", "BI BIES")
+    if scheme == 'BI':
+        sch = Schema.BI
+    else:
+        sch = Schema.BIES
+
     instances = []
     labels = []
     if len(token2id) == 0:
@@ -270,11 +277,18 @@ def create_data_per_char(path, token2id={}, label2id={}, cate_row=-1,
             if limit > 0 and ins_cnt >= limit:
                 break
 
+            wlen = len(word)
             ins.extend(
-                [get_id(word[i], token2id, token_update) for i in range(len(word))]
+                [get_id(word[i], token2id, token_update) for i in range(wlen)]
                 )
-            lab.extend(
-                [get_id(get_label(i, cate), label2id, label_update) for i in range(len(word))]
+
+            if sch == Schema.BI:
+                lab.extend(
+                    [get_id(get_label_BI(i, wlen, cate=cate), label2id, label_update) for i in range(wlen)]
+                )
+            else:
+                lab.extend(
+                    [get_id(get_label_BIES(i, wlen-1, cate=cate), label2id, label_update) for i in range(wlen)]
                 )
 
             bof = False
@@ -290,8 +304,75 @@ def create_data_per_char(path, token2id={}, label2id={}, cate_row=-1,
     return instances, labels, token2id, label2id
 
 
-def get_label(index, cate):
+# example of input data:
+# B       最後    名詞-普通名詞-一般$
+# I       の      助詞-格助詞$
+# I       会話    名詞-普通名詞-サ変可能$
+#
+def process_data_for_kytea(input, output, subpos_depth=1):
+    wf = open(output, 'w')
+
+    instances = []
+    labels = []
+
+    print("Read file:", input)
+
+    bof = True
+    with open(input) as f:
+        ins = []
+
+        for line in f:
+            if len(line) < 2:
+                continue
+
+            line = line.rstrip('\n').split('\t')
+            bos = line[0]
+            word = line[1]
+            pos = line[2].rstrip('$')
+            if subpos_depth == 1:
+                pos = pos.split('-')[0]
+            elif subpos_depth > 1:
+                pos = '_'.join(pos.split('-')[0:subpos_depth])
+
+            if not bof and bos == 'B':
+              write_for_kytea(wf, ins)
+              ins = []
+            ins.append('%s/%s' % (word, pos))
+                
+            bof = False
+
+    wf.close()
+    print('Output file:', output)
+
+    return
+
+
+def write_for_kytea(f, ins):
+    if len(ins) == 0:
+        return
+    
+    f.write('%s' % ins[0])
+    for i in range(1, len(ins)):
+        f.write(' %s' % ins[i])
+    f.write('\n')
+
+
+def get_label_BI(index, cate=None):
     prefix = 'B' if index == 0 else 'I'
+    suffix = '' if cate is None else '-' + cate
+    return prefix + suffix
+
+
+def get_label_BIES(index, last, cate=None):
+    if last == 0:
+        prefix = 'S'
+    else:
+        if index == 0:
+            prefix = 'B'
+        elif index < last:
+            prefix = 'I'
+        else:
+            prefix = 'E'
     suffix = '' if cate is None else '-' + cate
     return prefix + suffix
 
