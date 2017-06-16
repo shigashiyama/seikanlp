@@ -33,10 +33,10 @@ from conlleval import conlleval
 
 
 # for chainer 2
-class RNN_v2(chainer.Chain):
+class RNN(chainer.Chain):
     def __init__(self, n_layers, n_vocab, n_labels, n_units, dropout, use_bi_direction):
         l1 = L.NStepBiLSTM(n_layers, n_units, n_units, dropout) if use_bi_direction else L.NStepLSTM(n_layers, n_units, n_units, dropout)
-        super(RNN_v2, self).__init__(
+        super(RNN, self).__init__(
             embed = L.EmbedID(n_vocab, n_units),
             l1 = l1,
             l2 = L.Linear(n_units * (2 if use_bi_direction else 1), n_labels),
@@ -91,7 +91,6 @@ class SequenceLabelingClassifier(link.Chain):
         self.ys = None
         self.loss = None
         self.eval_counts = None
-        #self.result = {}
         
     def __call__(self, *args, **kwargs):
         assert len(args) >= 2
@@ -139,61 +138,62 @@ class SequenceLabelingClassifier(link.Chain):
             i += 1
         
 
-def run_epoch(model, instances, labels, batchsize, train=True, optimizer=None, xp=np):
-    stat = ''
-    res = ''
-    count = 0
-    total_loss = 0
-    total_ecounts = conlleval.EvalCounts()
+def batch_generator(instances, labels, batchsize, shuffle=True, xp=np):
 
     len_data = len(instances)
-    perm = np.random.permutation(len_data) if train else range(0, len_data)
+    perm = np.random.permutation(len_data) if shuffle else range(0, len_data)
     for i in range(0, len_data, batchsize):
         i_max = min(i + batchsize, len_data)
         xs = [xp.asarray(instances[perm[i]], dtype=np.int32) for i in range(i, i_max)]
-        hx = None
-        cx = None
         ts = [xp.asarray(labels[perm[i]], dtype=np.int32) for i in range(i, i_max)]
 
-        if train:
-            loss, ecounts = model(hx, cx, xs, ts, train=train)
-            print('* batch', str(i+1)+'-'+str(i_max), 'loss:', loss.data)
-        else:
-            if chainer.__version__[0] == '2':
-                with chainer.no_backprop_mode():
-                    loss, ecounts = model(hx, cx, xs, ts, train=train)
-            else:
-                loss, ecounts = model(hx, cx, xs, ts, train=train)
+        yield xs, ts
+    raise StopIteration
 
+
+def evaluate(model, instances, labels, batchsize, xp=np):
+    evaluator = model.copy()          # to use different state
+    evaluator.predictor.train = False # dropout does nothing
+    evaluator.compute_fscore = True
+
+    count = 0
+    num_tokens = 0
+    total_loss = 0
+    total_ecounts = conlleval.EvalCounts()
+
+    for xs, ts in batch_generator(instances, labels, batchsize, shuffle=False, xp=xp):
+        if chainer.__version__[0] == '2':
+            with chainer.no_backprop_mode():
+                loss, ecounts = evaluator(None, None, xs, ts, train=False)
+        else:
+            loss, ecounts = evaluator(None, None, xs, ts, train=False)
+
+        num_tokens += sum([len(x) for x in xs])
         count += len(xs)
         total_loss += loss.data
-
-        if model.compute_fscore:
-            total_ecounts = conlleval.merge_counts(total_ecounts, ecounts)
-            c = total_ecounts
-            acc = conlleval.calculate_accuracy(c.correct_tags, c.token_counter)
-            overall = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
-
-        if train:
-            optimizer.target.cleargrads() # Clear the parameter gradients
-            loss.backward()               # Backprop
-            loss.unchain_backward()       # Truncate the graph
-            optimizer.update()            # Update the parameters
-
-    if model.compute_fscore:
-        print('loss: ', total_loss)
-        print('#sen, #token, #chunk, #chunk_pred: %d %d %d %d' %
-              (count, c.token_counter, c.found_correct, c.found_guessed))
-        print('TP, FP, FN: %d %d %d' % (overall.tp, overall.fp, overall.fn))
-        print('A, P, R, F:%6.2f %6.2f %6.2f %6.2f' % 
-              (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore))
-        
-        stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (count, c.token_counter, c.found_correct, c.found_guessed)
-        res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f' % ((100.*acc), (100.*overall.prec), (100.*overall.rec), (100.*overall.fscore), overall.tp, overall.fp, overall.fn, total_loss)
+        ave_loss = total_loss / num_tokens
+        total_ecounts = conlleval.merge_counts(total_ecounts, ecounts)
+        c = total_ecounts
+        acc = conlleval.calculate_accuracy(c.correct_tags, c.token_counter)
+        overall = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
+           
+    print_results(total_loss, ave_loss, count, c, acc, overall)
+    stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (count, c.token_counter, c.found_correct, c.found_guessed)
+    res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.5f' % ((100.*acc), (100.*overall.prec), (100.*overall.rec), (100.*overall.fscore), overall.tp, overall.fp, overall.fn, total_loss, ave_loss)
             
     return stat, res
 
-        
+
+def print_results(total_loss, ave_loss, count, c, acc, overall):
+    print('total loss: %.4f' % total_loss)
+    print('ave loss: %.5f'% ave_loss)
+    print('#sen, #token, #chunk, #chunk_pred: %d %d %d %d' %
+          (count, c.token_counter, c.found_correct, c.found_guessed))
+    print('TP, FP, FN: %d %d %d' % (overall.tp, overall.fp, overall.fn))
+    print('A, P, R, F:%6.2f %6.2f %6.2f %6.2f' % 
+          (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore))
+
+
 def main():
 
     # get arguments
@@ -203,37 +203,38 @@ def main():
                         help='GPU ID (negative value indicates CPU)')
     parser.add_argument('--cudnn', dest='use_cudnn', action='store_true')
     parser.add_argument('--batchsize', '-b', type=int, default=20)
+    # parser.add_argument('--bproplen', type=int, default=35, help='length of truncated BPTT')
     parser.add_argument('--epoch', '-e', type=int, default=10)
+    parser.add_argument('--resume', default='', help='Resume the training from snapshot')
+    parser.add_argument('--resume_epoch', type=int, default=1, help='Resume the training from the epoch')
+    parser.add_argument('--iter_to_report', '-i', type=int, default=10000)
     parser.add_argument('--layer', '-l', type=int, default=1, help='Number of LSTM layers')
     parser.add_argument('--bidirection', action='store_true')
     parser.add_argument('--unit', '-u', type=int, default=650)
-    parser.add_argument('--lr', '-r', type=float, default=1, help='Value of initial learning rate')
     parser.add_argument('--optimizer', '-o', default='sgd')
+    parser.add_argument('--lr', '-r', type=float, default=1, help='Value of initial learning rate')
     parser.add_argument('--momentum', '-m', type=float, default=0.9, help='Momentum ratio')
     parser.add_argument('--lrdecay', type=float, default=0.05, help='Coefficient for learning rate decay')
     parser.add_argument('--weightdecay', '-w', type=float, default=0.1, help='Weight decay ratio')
     parser.add_argument('--dropout', '-d', type=float, default=0.5)
     parser.add_argument('--gradclip', '-c', type=float, default=5,)
-    parser.add_argument('--resume', default='', help='Resume the training from snapshot')
-    parser.add_argument('--resume_epoch', type=int, default=1, help='Resume the training from the epoch')
     parser.add_argument('--test', type=int, default=-1, help='Use tiny datasets for quick tests')
     parser.add_argument('--format', '-f', help='Format of input data')
     parser.add_argument('--subpos_depth', '-s', type=int, default=-1)
-    parser.add_argument('--dir_path', '-p', help='Directory path of input data (training, validation and test)')
+    parser.add_argument('--dir_path', '-p', help='Directory path of input data (train, valid and test)')
     parser.add_argument('--train_data', '-t', help='Filename of training data')
     parser.add_argument('--validation_data', '-v', help='Filename of validation data')
-    parser.set_defaults(optimizer='sgd')
+    parser.add_argument('--tag_schema', default='BI')
     parser.set_defaults(use_cudnn=False)
     parser.set_defaults(bidirection=False)
     args = parser.parse_args()
 
-    if chainer.__version__[0] == '2':
-         chainer.config.cudnn_deterministic = True
-    
     print('# GPU: {}'.format(args.gpu))
     print('# cudnn: {}'.format(args.use_cudnn))
     print('# minibatch-size: {}'.format(args.batchsize))
     print('# epoch: {}'.format(args.epoch))
+    print('# iteration to report: {}'.format(args.iter_to_report))
+    # print('# bproplen: {}'.format(args.bproplen))
     print('# bidirection: {}'.format(args.bidirection))
     print('# layer: {}'.format(args.layer))
     print('# unit: {}'.format(args.unit))
@@ -247,16 +248,37 @@ def main():
     print('# subpos depth: {}'.format(args.subpos_depth))
     print('# resume: {}'.format(args.resume))
     print('# epoch to resume: {}'.format(args.resume_epoch))
+    print('# tag schema: {}'.format(args.tag_schema))
     print('# test: {}'.format(args.test))
     print('')
 
     # Prepare logger
 
-    time = datetime.now().strftime('%Y%m%d_%H%M')
-    logger = open('log/' + time + '.log', 'w')
-    logger.write('INFO: %s\n' % str(args))
-    logger.write('INFO: start: %s\n' % time)
-    print('INFO: start: %s\n' % time)
+    time0 = datetime.now().strftime('%Y%m%d_%H%M')
+    print('INFO: start: %s\n' % time0)
+    if args.test == -1:
+        logger = open('log/' + time0 + '.log', 'w')
+        logger.write(str(args))
+        # logger.write('INFO: param - GPU: {}\n'.format(args.gpu))
+        # logger.write('INFO: param - cudnn: {}\n'.format(args.use_cudnn))
+        # logger.write('INFO: param - minibatch-size: {}\n'.format(args.batchsize))
+        # logger.write('INFO: param - epoch: {}\n'.format(args.epoch))
+        # logger.write('INFO: param - iteration to report: {}\n'.format(args.iter_to_report))
+        # # logger.write('INFO: param - bproplen: {}\n'.format(args.bproplen))
+        # logger.write('INFO: param - bidirection: {}\n'.format(args.bidirection))
+        # logger.write('INFO: param - layer: {}\n'.format(args.layer))
+        # logger.write('INFO: param - unit: {}\n'.format(args.unit))
+        # logger.write('INFO: param - optimization algorithm: {}\n'.format(args.optimizer))
+        # logger.write('INFO: param - learning rate: {}\n'.format(args.lr))
+        # logger.write('INFO: param - learning rate decay: {}\n'.format(args.lrdecay))
+        # logger.write('INFO: param - momentum: {}\n'.format(args.momentum))
+        # logger.write('INFO: param - wieght decay: {}\n'.format(args.weightdecay))
+        # logger.write('INFO: param - dropout ratio: {}\n'.format(args.dropout))
+        # logger.write('INFO: param - gradient norm threshold to clip: {}\n'.format(args.gradclip))
+        # logger.write('INFO: param - subpos depth: {}\n'.format(args.subpos_depth))
+        # logger.write('INFO: param - resume: {}\n'.format(args.resume))
+        # logger.write('INFO: param - epoch to resume: {}\n'.format(args.resume_epoch))
+        # logger.write('INFO: param - test: {}\n'.format(args.test))
 
     # Load dataset
 
@@ -264,12 +286,14 @@ def main():
     val_path = args.dir_path + args.validation_data
     test_path = args.dir_path + 'LBb_test.tsv'
 
-    limit=args.test if args.test > 0 else -1
+    limit = args.test if args.test > 0 else -1
     if args.format == 'bccwj':
-        train, train_t, token2id, label2id = util.create_data_per_char(train_path, limit=limit)
-        val, val_t, token2id, label2id = util.create_data_per_char(
-            val_path, token2id=token2id, label2id=label2id, label_update=False, limit=limit)
-        # test, test_t, token2id, label2id = util.create_data_per_char(
+        train, train_t, token2id, label2id = util.create_data_wordseg(
+            train_path, scheme=args.tag_schema, limit=limit)
+        val, val_t, token2id, label2id = util.create_data_wordseg(
+            val_path, token2id=token2id, label2id=label2id, label_update=False, 
+            scheme=args.tag_schema, limit=limit)
+        # test, test_t, token2id, label2id = util.create_data_wordseg(
         #     test_path, token2id=token2id, label2id=label2id, token_update=False, label_update=False, limit=limit)
     elif args.format == 'bccwj_pos':
         train, train_t, token2id, label2id = util.create_data_for_pos_tagging(
@@ -306,17 +330,20 @@ def main():
     print('token2id:', t2i_tmp[:3], '...', t2i_tmp[len(t2i_tmp)-3:])
     print('label2id:', label2id)
     print()
-    logger.write('INFO: vocab = %d\n' % n_vocab)
-    logger.write('INFO: data length: train=%d val=%d\n' % (n_train, n_val))
+    if args.test == -1:
+        logger.write('INFO: vocab = %d\n' % n_vocab)
+        logger.write('INFO: data length: train=%d val=%d\n' % (n_train, n_val))
 
     # Prepare model
 
     if chainer.__version__[0] == '2':
-        rnn = RNN_v2(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection)
+        chainer.config.cudnn_deterministic = args.use_cudnn
+        rnn = RNN(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection)
     else:
         rnn = RNN_v1(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection, 
                      args.use_cudnn)
     model = SequenceLabelingClassifier(rnn, id2label)
+    model.compute_fscore = True
 
     if args.resume:
         print('resume training from the model: %s' % args.resume)
@@ -349,53 +376,95 @@ def main():
 
     # Run
 
+    n_iter_report = args.iter_to_report
+    n_iter = 0
     for e in range(max(1, args.resume_epoch), args.epoch+1):
-        time2 = datetime.now().strftime('%Y%m%d_%H%M')
-        logger.write('INFO: %s\n' % time2)
-        print('epoch:', e)
-        t_stat, t_res = run_epoch(model, train, train_t, args.batchsize, optimizer=optimizer, xp=xp)
+        time = datetime.now().strftime('%Y%m%d_%H%M')
+        if args.test == -1:
+            logger.write('INFO: start epoch %d at %s\n' % (e, time))
+        print('start epoch %d: %s' % (e, time))
 
-        print('<training result>')
-        if e == 1:
-            logger.write('INFO: train - %s\n' % t_stat)
-            logger.write('data\tep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\tloss\n')
-        logger.write('train\t%d\t%s\n' % (e, t_res))
-        print()
+        count = 0
+        total_loss = 0
+        num_tokens = 0
+        total_ecounts = conlleval.EvalCounts()
 
-        # Evaluation
-        evaluator = model.copy()          # to use different state
-        evaluator.predictor.train = False # dropout does nothing
-        evaluator.compute_fscore = True
+        i = 0
+        for xs, ts in batch_generator(train, train_t, args.batchsize, shuffle=True, xp=xp):
+            loss, ecounts = model(None, None, xs, ts, train=True)
+            num_tokens += sum([len(x) for x in xs])
+            count += len(xs)
+            total_loss += loss.data
+            total_ecounts = conlleval.merge_counts(total_ecounts, ecounts)
+            i_max = min(i + args.batchsize, n_train)
+            print('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
+            i = i_max
+            n_iter += 1
 
-        print('<validation result>')
-        v_stat, v_res = run_epoch(evaluator, val, val_t, args.batchsize, train=False, xp=xp)
-        if e == 1:
-            logger.write('INFO: valid - %s\n' % v_stat)
-        logger.write('valid\t%d\t%s\n' % (e, v_res))
-        print()
+            optimizer.target.cleargrads() # Clear the parameter gradients
+            loss.backward()               # Backprop
+            loss.unchain_backward()       # Truncate the graph
+            optimizer.update()            # Update the parameters
 
-        # Save the model and the optimizer
+            # Evaluation
+            if (n_iter * args.batchsize) % n_iter_report == 0 or i == n_train:
 
-        mdl_path = 'model/rnn_%s_e%d.mdl' % (time, e)
-        opt_path = 'model/rnn_%s_e%d.opt' % (time, e)
+                now_e = '%.2f' % (n_iter * args.batchsize / n_train)
+                time = datetime.now().strftime('%Y%m%d_%H%M')
+                print()
+                print('### iteration %s (epoch %s)' % ((n_iter * args.batchsize), now_e))
+                print('<training result for previous iterations>')
 
-        logger.write('INFO: save the model: %s\n' % mdl_path)
-        serializers.save_npz(mdl_path, model)
-        # logger.write('INFO: save the optimizer: %s\n' % opt_path)
-        # serializers.save_npz(opt_path, optimizer)
+                ave_loss = total_loss / num_tokens
+                c = total_ecounts
+                acc = conlleval.calculate_accuracy(c.correct_tags, c.token_counter)
+                overall = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
+                print_results(total_loss, ave_loss, count, c, acc, overall)
+                print()
 
+                if args.test == -1:
+                    t_stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
+                        count, c.token_counter, c.found_correct, c.found_guessed)
+                    t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
+                        (100.*acc), (100.*overall.prec), (100.*overall.rec), (100.*overall.fscore), 
+                        overall.tp, overall.fp, overall.fn, total_loss, ave_loss)
+                    logger.write('INFO: train - %s\n' % t_stat)
+                    if n_iter == 1:
+                        logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                    logger.write('train\t%d\t%s\t%s\n' % (n_iter, now_e, t_res))
+
+                print('<validation result>')
+                v_stat, v_res = evaluate(model, val, val_t, args.batchsize, xp=xp)
+                print()
+
+                if args.test == -1:
+                    logger.write('INFO: valid - %s\n' % v_stat)
+                    if n_iter == 1:
+                        logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                    logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
+
+                # Save the model
+                mdl_path = 'model/rnn_%s_i%.2fk.mdl' % (time0, (1.0 * n_iter / 1000))
+                if args.test == -1:
+                    logger.write('INFO: save the model: %s\n' % mdl_path)
+                    serializers.save_npz(mdl_path, model)
         
-        # learning rate decay
-        if args.lrdecay > 0 and args.optimizer == 'sgd':
-            optimizer.lr = args.lr / (1 + e * args.lrdecay) # (Ma 2016)
-            print('lr:', optimizer.lr)
-            print()
+                # Reset counters
+                count = 0
+                total_loss = 0
+                num_tokens = 0
+                total_ecounts = conlleval.EvalCounts()
 
-    # Evaluate on test dataset
+        # # learning rate decay
+        # if args.lrdecay > 0 and args.optimizer == 'sgd':
+        #     optimizer.lr = args.lr / (1 + e * args.lrdecay) # (Ma 2016)
+        #     print('lr:', optimizer.lr)
+        #     print()
 
     time = datetime.now().strftime('%Y%m%d_%H%M')
-    logger.write('finish: %s\n' % time)
-    logger.close()
+    if args.test == -1:
+        logger.write('finish: %s\n' % time)
+        logger.close()
    
 if __name__ == '__main__':
     main()
