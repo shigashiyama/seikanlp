@@ -71,7 +71,7 @@ def parse_result(res):
         # read = feats[2]
 
         chars.extend([word[i] for i in range(len(word))])
-        bounds.extend([util.get_label(i, None) for i in range(len(word))])
+        bounds.extend([util.get_label_BI(i, None) for i in range(len(word))])
         
     return chars, bounds
 
