@@ -27,120 +27,80 @@ from chainer import cuda
 from chainer.training import extensions
 from chainer.functions.evaluation import accuracy
 from chainer.functions.loss import softmax_cross_entropy
+from chainer.links.connection.n_step_rnn import argsort_list_descent, permutate_list
 
 import util
 from conlleval import conlleval
 
 
-class RNN_V2(chainer.Chain):
+class RNN_CRF(chainer.Chain):
     def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bi_direction):
-        l1 = L.NStepBiLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout) if use_bi_direction else L.NStepLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout)
-        super(RNN_V2, self).__init__(
-            embed = L.EmbedID(n_vocab, n_lt_units),
-            l1 = l1,
-            l2 = L.Linear(n_lstm_units * (2 if use_bi_direction else 1), n_labels),
-        )
-        
-    def __call__(self, hx, cx, xs, train=True):
-        xs = [self.embed(x) for x in xs]
+        super(RNN_CRF, self).__init__()
+        with self.init_scope():
+            self.lookup = L.EmbedID(n_vocab, n_lt_units)
+            self.lstm = L.NStepBiLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout) if use_bi_direction else L.NStepLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout)
+            self.linear = L.Linear(n_lstm_units * (2 if use_bi_direction else 1), n_labels)
+            self.crf = L.CRF1d(n_labels)
+
+    def __call__(self, xs, ts, train=True):
+        xs = [self.lookup(x) for x in xs]
+
         with chainer.using_config('train', train):
-            hy, cy, ys = self.l1(hx, cx, xs)
-        ys = [self.l2(y) for y in ys]
+            # lstm layers
+            hy, cy, hs = self.lstm(None, None, xs)
 
-        return hy, cy, ys
+            # linear layer
+            hs = [self.linear(h) for h in hs]
+
+            # crf layer
+            indices = argsort_list_descent(hs)
+            trans_hs = F.transpose_sequence(permutate_list(hs, indices, inv=False))
+            trans_ts = F.transpose_sequence(permutate_list(ts, indices, inv=False))
+            loss = self.crf(trans_hs, trans_ts)
+            score, trans_ys = self.crf.argmax(trans_hs)
+            ys = permutate_list(F.transpose_sequence(trans_ys), indices, inv=True)
+
+        return loss, ys
 
 
-# for chainer 2
-class RNN(chainer.Chain):
-    def __init__(self, n_layers, n_vocab, n_labels, n_units, dropout, use_bi_direction):
-        l1 = L.NStepBiLSTM(n_layers, n_units, n_units, dropout) if use_bi_direction else L.NStepLSTM(n_layers, n_units, n_units, dropout)
-        super(RNN, self).__init__(
-            embed = L.EmbedID(n_vocab, n_units),
-            l1 = l1,
-            l2 = L.Linear(n_units * (2 if use_bi_direction else 1), n_labels),
-        )
+# class RNN_v2(chainer.Chain):
+#     def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bi_direction):
+#         l1 = L.NStepBiLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout) if use_bi_direction else L.NStepLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout)
+#         super(RNN_v2, self).__init__(
+#             embed = L.EmbedID(n_vocab, n_lt_units),
+#             l1 = l1,
+#             l2 = L.Linear(n_lstm_units * (2 if use_bi_direction else 1), n_labels),
+#         )
         
-    def __call__(self, hx, cx, xs, train=True):
-        xs = [self.embed(x) for x in xs]
-        with chainer.using_config('train', train):
-            hy, cy, ys = self.l1(hx, cx, xs)
-        ys = [self.l2(y) for y in ys]
+#     def __call__(self, hx, cx, xs, train=True):
+#         xs = [self.embed(x) for x in xs]
+#         with chainer.using_config('train', train):
+#             hy, cy, ys = self.l1(hx, cx, xs)
+#         ys = [self.l2(y) for y in ys]
 
-        return hy, cy, ys
-
-# for chainer 1
-class RNN_chainer1(chainer.Chain):
-    def __init__(self, n_layers, n_vocab, n_labels, n_units, dropout, use_bi_direction, use_cudnn):
-        l1 = L.NStepBiLSTM(n_layers, n_units, n_units, dropout) if use_bi_direction else L.NStepLSTM(n_layers, n_units, n_units, dropout, use_cudnn)
-        super(RNN_chainer1, self).__init__(
-            embed = L.EmbedID(n_vocab, n_units),
-            l1 = l1,
-            l2 = L.Linear(n_units * (2 if use_bi_direction else 1), n_labels),
-        )
-        
-    def __call__(self, hx, cx, xs, train=True):
-        #print('xs', len(xs), [len(x) for x in xs])
-
-        xs = [self.embed(x) for x in xs]
-        # print('xs-embed', len(xs), [x.data.shape for x in xs])
-        # print()
-        # for i in range(4):
-        #     print('l1-'+str(i), [self.l1._children[i].__dict__['w'+str(j)].shape for j in range(8)])
-        # print()
-
-        hy, cy, ys = self.l1(hx, cx, xs, train=train)
-        # print('ys', len(ys), [y.data.shape for y in ys])
-        # print()
-
-        ys = [self.l2(y) for y in ys]
-        return hy, cy, ys
+#         return hy, cy, ys
 
 
 class SequenceLabelingClassifier(link.Chain):
     compute_fscore = True
 
-    def __init__(self, predictor, id2label,
-                 lossfun=softmax_cross_entropy.softmax_cross_entropy,
-                 accfun=accuracy.accuracy):
+    def __init__(self, predictor, id2label):
         super(SequenceLabelingClassifier, self).__init__(predictor=predictor)
         self.id2label = id2label
-        self.lossfun = lossfun
-        self.accfun = accfun
-        self.ys = None
-        self.loss = None
-        self.eval_counts = None
         
     def __call__(self, *args, **kwargs):
         assert len(args) >= 2
-        inputs = args[:-1]      # hx, cx, xs
-        ts = args[-1]
-        self.ys = None
-        self.loss = None
-        self.eval_counts = None
-
-        hy, cy, self.ys = self.predictor(*inputs, **kwargs)
-
-        # loss
-        for y, t in zip(self.ys, ts):
-            if self.loss is not None:
-                self.loss += self.lossfun(y, t)
-            else:
-                self.loss = self.lossfun(y, t)
-                
-        # reporter_module.report({'loss': self.loss}, self)
-        # self.result.update({'loss': self.loss})
+        xs = args[0]
+        ts = args[1]
+        loss, ys = self.predictor(*args, **kwargs)
 
         if self.compute_fscore:
-            xs = inputs[2]
-            tmp = [len(x) for x in xs]
+            eval_counts = None
+            for x, t, y in zip(xs, ts, ys):
+                generator = self.generate_lines(x, t, y.data)
+                eval_counts = conlleval.merge_counts(eval_counts, conlleval.evaluate(generator))
 
-            for x, t, y in zip(xs, ts, self.ys):
-                p = [np.argmax(yi.data) for yi in y]
-                generator = self.generate_lines(x, t, p)
-                self.eval_counts = conlleval.merge_counts(self.eval_counts, 
-                                                          conlleval.evaluate(generator))
-
-        return self.loss, self.eval_counts
+        return loss, eval_counts
 
     def generate_lines(self, x, t, y):
         i = 0
@@ -148,6 +108,7 @@ class SequenceLabelingClassifier(link.Chain):
             if i == len(x):
                 raise StopIteration
             x_str = str(x[i])
+            #print(x_str, t[i], y[i])
             t_str = self.id2label[int(t[i])]
             y_str = self.id2label[int(y[i])]
 
@@ -182,9 +143,9 @@ def evaluate(model, instances, labels, batchsize, xp=np):
     for xs, ts in batch_generator(instances, labels, batchsize, shuffle=False, xp=xp):
         if chainer.__version__[0] == '2':
             with chainer.no_backprop_mode():
-                loss, ecounts = evaluator(None, None, xs, ts, train=False)
+                loss, ecounts = evaluator(xs, ts, train=False)
         else:
-            loss, ecounts = evaluator(None, None, xs, ts, train=False)
+            loss, ecounts = evaluator(xs, ts, train=False)
 
         num_tokens += sum([len(x) for x in xs])
         count += len(xs)
@@ -339,11 +300,8 @@ def main():
 
     if chainer.__version__[0] == '2':
         chainer.config.cudnn_deterministic = args.use_cudnn
-        #rnn = RNN(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection)
-        #rnn = RNN_V2(args.layer, n_vocab, args.hidden_unit, args.lookup_dim, n_labels, args.dropout, args.bidirection)
-        rnn = RNN_V2(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, args.bidirection)
+        rnn = RNN_CRF(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, args.bidirection)
     else:
-        #rnn = RNN_chainer1(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection, 
         print("chainer version>=2.0.0 is required.")
         sys.exit()
 
@@ -396,7 +354,7 @@ def main():
 
         i = 0
         for xs, ts in batch_generator(train, train_t, args.batchsize, shuffle=True, xp=xp):
-            loss, ecounts = model(None, None, xs, ts, train=True)
+            loss, ecounts = model(xs, ts, train=True)
             num_tokens += sum([len(x) for x in xs])
             count += len(xs)
             total_loss += loss.data
