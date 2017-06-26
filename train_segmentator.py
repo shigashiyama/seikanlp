@@ -32,6 +32,24 @@ import util
 from conlleval import conlleval
 
 
+class RNN_V2(chainer.Chain):
+    def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bi_direction):
+        l1 = L.NStepBiLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout) if use_bi_direction else L.NStepLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout)
+        super(RNN_V2, self).__init__(
+            embed = L.EmbedID(n_vocab, n_lt_units),
+            l1 = l1,
+            l2 = L.Linear(n_lstm_units * (2 if use_bi_direction else 1), n_labels),
+        )
+        
+    def __call__(self, hx, cx, xs, train=True):
+        xs = [self.embed(x) for x in xs]
+        with chainer.using_config('train', train):
+            hy, cy, ys = self.l1(hx, cx, xs)
+        ys = [self.l2(y) for y in ys]
+
+        return hy, cy, ys
+
+
 # for chainer 2
 class RNN(chainer.Chain):
     def __init__(self, n_layers, n_vocab, n_labels, n_units, dropout, use_bi_direction):
@@ -51,10 +69,10 @@ class RNN(chainer.Chain):
         return hy, cy, ys
 
 # for chainer 1
-class RNN_v1(chainer.Chain):
+class RNN_chainer1(chainer.Chain):
     def __init__(self, n_layers, n_vocab, n_labels, n_units, dropout, use_bi_direction, use_cudnn):
         l1 = L.NStepBiLSTM(n_layers, n_units, n_units, dropout) if use_bi_direction else L.NStepLSTM(n_layers, n_units, n_units, dropout, use_cudnn)
-        super(RNN_v1, self).__init__(
+        super(RNN_chainer1, self).__init__(
             embed = L.EmbedID(n_vocab, n_units),
             l1 = l1,
             l2 = L.Linear(n_units * (2 if use_bi_direction else 1), n_labels),
@@ -210,13 +228,14 @@ def main():
     parser.add_argument('--iter_to_report', '-i', type=int, default=10000)
     parser.add_argument('--layer', '-l', type=int, default=1, help='Number of LSTM layers')
     parser.add_argument('--bidirection', action='store_true')
-    parser.add_argument('--unit', '-u', type=int, default=650)
+    parser.add_argument('--hidden_unit', '-u', type=int, default=650)    
+    parser.add_argument('--lookup_dim', '-d', type=int, default=650)
     parser.add_argument('--optimizer', '-o', default='sgd')
     parser.add_argument('--lr', '-r', type=float, default=1, help='Value of initial learning rate')
     parser.add_argument('--momentum', '-m', type=float, default=0.9, help='Momentum ratio')
     parser.add_argument('--lrdecay', type=float, default=0.05, help='Coefficient for learning rate decay')
     parser.add_argument('--weightdecay', '-w', type=float, default=0.1, help='Weight decay ratio')
-    parser.add_argument('--dropout', '-d', type=float, default=0.5)
+    parser.add_argument('--dropout', type=float, default=0.5)
     parser.add_argument('--gradclip', '-c', type=float, default=5,)
     parser.add_argument('--test', type=int, default=-1, help='Use tiny datasets for quick tests')
     parser.add_argument('--format', '-f', help='Format of input data')
@@ -237,7 +256,8 @@ def main():
     # print('# bproplen: {}'.format(args.bproplen))
     print('# bidirection: {}'.format(args.bidirection))
     print('# layer: {}'.format(args.layer))
-    print('# unit: {}'.format(args.unit))
+    print('# lookup table dimension: {}'.format(args.lookup_dim))
+    print('# hiddlen unit: {}'.format(args.hidden_unit))
     print('# optimization algorithm: {}'.format(args.optimizer))
     print('# learning rate: {}'.format(args.lr))
     print('# learning rate decay: {}'.format(args.lrdecay))
@@ -251,34 +271,15 @@ def main():
     print('# tag schema: {}'.format(args.tag_schema))
     print('# test: {}'.format(args.test))
     print('')
+    print(args)
 
     # Prepare logger
 
     time0 = datetime.now().strftime('%Y%m%d_%H%M')
     print('INFO: start: %s\n' % time0)
     if args.test == -1:
-        logger = open('log/' + time0 + '.log', 'w')
+        logger = open('log/' + time0 + '.log', 'a')
         logger.write(str(args))
-        # logger.write('INFO: param - GPU: {}\n'.format(args.gpu))
-        # logger.write('INFO: param - cudnn: {}\n'.format(args.use_cudnn))
-        # logger.write('INFO: param - minibatch-size: {}\n'.format(args.batchsize))
-        # logger.write('INFO: param - epoch: {}\n'.format(args.epoch))
-        # logger.write('INFO: param - iteration to report: {}\n'.format(args.iter_to_report))
-        # # logger.write('INFO: param - bproplen: {}\n'.format(args.bproplen))
-        # logger.write('INFO: param - bidirection: {}\n'.format(args.bidirection))
-        # logger.write('INFO: param - layer: {}\n'.format(args.layer))
-        # logger.write('INFO: param - unit: {}\n'.format(args.unit))
-        # logger.write('INFO: param - optimization algorithm: {}\n'.format(args.optimizer))
-        # logger.write('INFO: param - learning rate: {}\n'.format(args.lr))
-        # logger.write('INFO: param - learning rate decay: {}\n'.format(args.lrdecay))
-        # logger.write('INFO: param - momentum: {}\n'.format(args.momentum))
-        # logger.write('INFO: param - wieght decay: {}\n'.format(args.weightdecay))
-        # logger.write('INFO: param - dropout ratio: {}\n'.format(args.dropout))
-        # logger.write('INFO: param - gradient norm threshold to clip: {}\n'.format(args.gradclip))
-        # logger.write('INFO: param - subpos depth: {}\n'.format(args.subpos_depth))
-        # logger.write('INFO: param - resume: {}\n'.format(args.resume))
-        # logger.write('INFO: param - epoch to resume: {}\n'.format(args.resume_epoch))
-        # logger.write('INFO: param - test: {}\n'.format(args.test))
 
     # Load dataset
 
@@ -338,10 +339,14 @@ def main():
 
     if chainer.__version__[0] == '2':
         chainer.config.cudnn_deterministic = args.use_cudnn
-        rnn = RNN(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection)
+        #rnn = RNN(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection)
+        #rnn = RNN_V2(args.layer, n_vocab, args.hidden_unit, args.lookup_dim, n_labels, args.dropout, args.bidirection)
+        rnn = RNN_V2(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, args.bidirection)
     else:
-        rnn = RNN_v1(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection, 
-                     args.use_cudnn)
+        #rnn = RNN_chainer1(args.layer, n_vocab, n_labels, args.unit, args.dropout, args.bidirection, 
+        print("chainer version>=2.0.0 is required.")
+        sys.exit()
+
     model = SequenceLabelingClassifier(rnn, id2label)
     model.compute_fscore = True
 
@@ -407,7 +412,7 @@ def main():
             optimizer.update()            # Update the parameters
 
             # Evaluation
-            if (n_iter * args.batchsize) % n_iter_report == 0 or i == n_train:
+            if (n_iter * args.batchsize) % n_iter_report == 0: # or i == n_train:
 
                 now_e = '%.2f' % (n_iter * args.batchsize / n_train)
                 time = datetime.now().strftime('%Y%m%d_%H%M')
@@ -444,7 +449,9 @@ def main():
                     logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
 
                 # Save the model
-                mdl_path = 'model/rnn_%s_i%.2fk.mdl' % (time0, (1.0 * n_iter / 1000))
+                #mdl_path = 'model/rnn_%s_i%.2fk.mdl' % (time0, (1.0 * n_iter / 1000))
+                mdl_path = 'model/rnn_%s_i%s.mdl' % (time0, now_e)
+                print('save the model: %s\n' % mdl_path)
                 if args.test == -1:
                     logger.write('INFO: save the model: %s\n' % mdl_path)
                     serializers.save_npz(mdl_path, model)
@@ -454,6 +461,10 @@ def main():
                 total_loss = 0
                 num_tokens = 0
                 total_ecounts = conlleval.EvalCounts()
+
+                if args.test == -1:
+                    logger.close()
+                    logger = open('log/' + time0 + '.log', 'a')
 
         # # learning rate decay
         # if args.lrdecay > 0 and args.optimizer == 'sgd':
