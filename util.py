@@ -284,7 +284,7 @@ def create_data_wordseg(path, token2id={}, label2id={}, cate_row=-1,
 
             if sch == Schema.BI:
                 lab.extend(
-                    [get_id(get_label_BI(i, wlen, cate=cate), label2id, label_update) for i in range(wlen)]
+                    [get_id(get_label_BI(i, cate=cate), label2id, label_update) for i in range(wlen)]
                 )
             else:
                 lab.extend(
