@@ -59,33 +59,105 @@ class RNN_CRF(chainer.Chain):
             loss = self.crf(trans_hs, trans_ts)
             score, trans_ys = self.crf.argmax(trans_hs)
             ys = permutate_list(F.transpose_sequence(trans_ys), indices, inv=True)
+            ys = [y.data for y in ys]
 
         return loss, ys
 
 
-# class RNN_v2(chainer.Chain):
-#     def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bi_direction):
-#         l1 = L.NStepBiLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout) if use_bi_direction else L.NStepLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout)
-#         super(RNN_v2, self).__init__(
-#             embed = L.EmbedID(n_vocab, n_lt_units),
-#             l1 = l1,
-#             l2 = L.Linear(n_lstm_units * (2 if use_bi_direction else 1), n_labels),
-#         )
+class RNN_CRF2(chainer.Chain):
+    def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, n_left_contexts, n_right_contexts, dropout, use_bi_direction):
+        super(RNN_CRF2, self).__init__()
+        with self.init_scope():
+            # padding for context window
+            index = n_vocab
+            self.left_padding_ids = np.array([], dtype=np.int32)
+            for i in range(n_left_contexts):
+                self.left_padding_ids = np.append(self.left_padding_ids, np.int32(index))
+                index += 1
+            self.right_padding_ids = np.array([], dtype=np.int32)
+            for i in range(n_right_contexts):
+                self.right_padding_ids = np.append(self.right_padding_ids, np.int32(index))
+                index += 1
+
+            self.lookup_dim = n_lt_units
+            self.context_size = 1 + n_left_contexts + n_right_contexts
+            self.input_vec_size = self.lookup_dim * self.context_size
+            vocab_size = n_vocab + n_left_contexts + n_right_contexts
+            lstm_in = n_lt_units * self.context_size
+
+            # init layers
+            self.lookup = L.EmbedID(vocab_size, self.lookup_dim)
+            self.lstm = L.NStepBiLSTM(n_lstm_layers, lstm_in, n_lstm_units, dropout) if use_bi_direction else L.NStepLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout)
+            self.linear = L.Linear(n_lstm_units * (2 if use_bi_direction else 1), n_labels)
+            self.crf = L.CRF1d(n_labels)
+
+    def __call__(self, xs, ts, train=True):
+        # create input vector considering context window
+        nxs = []
+        for x in xs:
+            emb_array = self.lookup(self.left_padding_ids).data
+            emb_array = np.append(emb_array, self.lookup(x).data)
+            emb_array = np.append(emb_array, self.lookup(self.right_padding_ids).data)
+            emb_array = emb_array.reshape(len(x) + self.context_size - 1, self.lookup_dim)
+
+            nx = np.array([], dtype=np.float32)
+            for i in range(len(x)):
+                for j in range(i, i + self.context_size):
+                    nx = np.append(nx, emb_array[j])
+            nx = nx.reshape(len(x), self.input_vec_size)
+            nxs.append(nx)
+        xs = nxs
+
+        with chainer.using_config('train', train):
+            # lstm layers
+            hy, cy, hs = self.lstm(None, None, xs)
+
+            # linear layer
+            hs = [self.linear(h) for h in hs]
+
+            # crf layer
+            indices = argsort_list_descent(hs)
+            trans_hs = F.transpose_sequence(permutate_list(hs, indices, inv=False))
+            trans_ts = F.transpose_sequence(permutate_list(ts, indices, inv=False))
+            loss = self.crf(trans_hs, trans_ts)
+            score, trans_ys = self.crf.argmax(trans_hs)
+            ys = permutate_list(F.transpose_sequence(trans_ys), indices, inv=True)
+
+        return loss, ys
+
+
+class RNN(chainer.Chain):
+    def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bi_direction):
+        super(RNN, self).__init__()
+        with self.init_scope():
+            self.embed = L.EmbedID(n_vocab, n_lt_units)
+            self.l1 = L.NStepBiLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout) if use_bi_direction else L.NStepLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout)
+            self.l2 = L.Linear(n_lstm_units * (2 if use_bi_direction else 1), n_labels)
+            self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
         
-#     def __call__(self, hx, cx, xs, train=True):
-#         xs = [self.embed(x) for x in xs]
-#         with chainer.using_config('train', train):
-#             hy, cy, ys = self.l1(hx, cx, xs)
-#         ys = [self.l2(y) for y in ys]
+    def __call__(self, xs, ts, train=True):
+        xs = [self.embed(x) for x in xs]
+        with chainer.using_config('train', train):
+            hy, cy, hs = self.l1(None, None, xs)
+        ys = [self.l2(h) for h in hs]
 
-#         return hy, cy, ys
+        loss = None
+        ps = []
+        for y, t in zip(ys, ts):
+            if loss is not None:
+                loss += self.loss_fun(y, t)
+            else:
+                loss = self.loss_fun(y, t)
+                ps.append([np.argmax(yi.data) for yi in y])
+
+        return loss, ps
 
 
-class SequenceLabelingClassifier(link.Chain):
+class SequenceTagger(link.Chain):
     compute_fscore = True
 
     def __init__(self, predictor, id2label):
-        super(SequenceLabelingClassifier, self).__init__(predictor=predictor)
+        super(SequenceTagger, self).__init__(predictor=predictor)
         self.id2label = id2label
         
     def __call__(self, *args, **kwargs):
@@ -97,7 +169,8 @@ class SequenceLabelingClassifier(link.Chain):
         if self.compute_fscore:
             eval_counts = None
             for x, t, y in zip(xs, ts, ys):
-                generator = self.generate_lines(x, t, y.data)
+                generator = self.generate_lines(x, t, y)
+                # generator = self.generate_lines(x, t, y.data)                
                 eval_counts = conlleval.merge_counts(eval_counts, conlleval.evaluate(generator))
 
         return loss, eval_counts
@@ -108,7 +181,6 @@ class SequenceLabelingClassifier(link.Chain):
             if i == len(x):
                 raise StopIteration
             x_str = str(x[i])
-            #print(x_str, t[i], y[i])
             t_str = self.id2label[int(t[i])]
             y_str = self.id2label[int(y[i])]
 
@@ -141,10 +213,7 @@ def evaluate(model, instances, labels, batchsize, xp=np):
     total_ecounts = conlleval.EvalCounts()
 
     for xs, ts in batch_generator(instances, labels, batchsize, shuffle=False, xp=xp):
-        if chainer.__version__[0] == '2':
-            with chainer.no_backprop_mode():
-                loss, ecounts = evaluator(xs, ts, train=False)
-        else:
+        with chainer.no_backprop_mode():
             loss, ecounts = evaluator(xs, ts, train=False)
 
         num_tokens += sum([len(x) for x in xs])
@@ -188,9 +257,12 @@ def main():
     parser.add_argument('--resume_epoch', type=int, default=1, help='Resume the training from the epoch')
     parser.add_argument('--iter_to_report', '-i', type=int, default=10000)
     parser.add_argument('--layer', '-l', type=int, default=1, help='Number of LSTM layers')
+    parser.add_argument('--crf', action='store_true')
     parser.add_argument('--bidirection', action='store_true')
     parser.add_argument('--hidden_unit', '-u', type=int, default=650)    
     parser.add_argument('--lookup_dim', '-d', type=int, default=650)
+    parser.add_argument('--lc', type=int, default=0, help='Left context size')
+    parser.add_argument('--rc', type=int, default=0, help='Right context size')
     parser.add_argument('--optimizer', '-o', default='sgd')
     parser.add_argument('--lr', '-r', type=float, default=1, help='Value of initial learning rate')
     parser.add_argument('--momentum', '-m', type=float, default=0.9, help='Momentum ratio')
@@ -206,6 +278,7 @@ def main():
     parser.add_argument('--validation_data', '-v', help='Filename of validation data')
     parser.add_argument('--tag_schema', default='BI')
     parser.set_defaults(use_cudnn=False)
+    parser.set_defaults(crf=False)
     parser.set_defaults(bidirection=False)
     args = parser.parse_args()
 
@@ -215,10 +288,13 @@ def main():
     print('# epoch: {}'.format(args.epoch))
     print('# iteration to report: {}'.format(args.iter_to_report))
     # print('# bproplen: {}'.format(args.bproplen))
+    print('# crf: {}'.format(args.crf))
     print('# bidirection: {}'.format(args.bidirection))
     print('# layer: {}'.format(args.layer))
     print('# lookup table dimension: {}'.format(args.lookup_dim))
     print('# hiddlen unit: {}'.format(args.hidden_unit))
+    print('# left context size: {}'.format(args.lc))
+    print('# right context size: {}'.format(args.rc))
     print('# optimization algorithm: {}'.format(args.optimizer))
     print('# learning rate: {}'.format(args.lr))
     print('# learning rate decay: {}'.format(args.lrdecay))
@@ -298,27 +374,29 @@ def main():
 
     # Prepare model
 
-    if chainer.__version__[0] == '2':
-        chainer.config.cudnn_deterministic = args.use_cudnn
-        rnn = RNN_CRF(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, args.bidirection)
-    else:
+    xp = cuda.cupy if args.gpu >= 1 else np
+    if chainer.__version__[0] != '2':
         print("chainer version>=2.0.0 is required.")
         sys.exit()
 
-    model = SequenceLabelingClassifier(rnn, id2label)
+    chainer.config.cudnn_deterministic = args.use_cudnn
+    if args.crf:
+        rnn = RNN_CRF(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, args.bidirection)
+        # rnn = RNN_CRF2(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.lc, args.rc, args.dropout, args.bidirection)
+    else:
+        rnn = RNN(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, args.bidirection)
+
+    model = SequenceTagger(rnn, id2label)
     model.compute_fscore = True
 
     if args.resume:
         print('resume training from the model: %s' % args.resume)
         chainer.serializers.load_npz(args.resume, model)
 
-    if args.gpu >= 0:
+    if args.gpu >= 1:
         # Make the specified GPU current
         cuda.get_device_from_id(args.gpu).use()
         model.to_gpu()
-        xp = cuda.cupy
-    else:
-        xp = np
 
     # Set up optimizer
 
