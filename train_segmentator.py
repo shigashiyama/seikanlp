@@ -102,37 +102,6 @@ class RNN_CRF(chainer.Chain):
         return cuda.to_gpu(ids) if gpu >= 0 else ids
 
 
-class RNN_CRF_v1(chainer.Chain):
-    def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bidirection=True):
-        super(RNN_CRF_v1, self).__init__()
-        with self.init_scope():
-            self.lookup = L.EmbedID(n_vocab, n_lt_units)
-            self.lstm = L.NStepBiLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout) if use_bidirection else L.NStepLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout)
-            self.linear = L.Linear(n_lstm_units * (2 if use_bidirection else 1), n_labels)
-            self.crf = L.CRF1d(n_labels)
-
-    def __call__(self, xs, ts, train=True):
-        xs = [self.lookup(x) for x in xs]
-
-        with chainer.using_config('train', train):
-            # lstm layers
-            hy, cy, hs = self.lstm(None, None, xs)
-
-            # linear layer
-            hs = [self.linear(h) for h in hs]
-
-            # crf layer
-            indices = argsort_list_descent(hs)
-            trans_hs = F.transpose_sequence(permutate_list(hs, indices, inv=False))
-            trans_ts = F.transpose_sequence(permutate_list(ts, indices, inv=False))
-            loss = self.crf(trans_hs, trans_ts)
-            score, trans_ys = self.crf.argmax(trans_hs)
-            ys = permutate_list(F.transpose_sequence(trans_ys), indices, inv=True)
-            ys = [y.data for y in ys]
-
-        return loss, ys
-
-
 class RNN(chainer.Chain):
     def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bidirection=True):
         super(RNN, self).__init__()
