@@ -1,9 +1,11 @@
 import re
+import copy
 import enum
 import numpy as np
 
 
 UNK_SYMBOL = '<UNK>'
+Schema = enum.Enum("Schema", "BI BIES")
 
 # for PTB WSJ (CoNLL-2005)
 #
@@ -89,25 +91,30 @@ def create_data_for_wsj(path, token2id={}, label2id={},
 # call NN I-NP O
 #
 def create_data_for_conll2003(path, token2id={}, label2id={},
-                token_update=True, label_update=True, limit=-1):
+                              token_update=True, label_update=True, schema='BI', limit=-1):
 
-    # id2token = {}
-    # id2label = {}
+    if schema == 'BI':
+        sch = Schema.BI
+    else:
+        sch = Schema.BIES
 
-    instances = []
-    labels = []
+    id2token = {}
+    id2label = {}
+
     if len(token2id) == 0:
         token2id = {UNK_SYMBOL: np.int32(0)}
     if len(label2id) == 0:
         label2id = {}
 
-    print("Read file:", path)
+    instances = []
+    labels = []
     ins_cnt = 0
     word_cnt = 0
 
+    print("Read file:", path)
     with open(path) as f:
         ins = []
-        lab = []
+        org_lab = []
 
         for line in f:
             if len(line) < 2:
@@ -117,10 +124,15 @@ def create_data_for_conll2003(path, token2id={}, label2id={},
                     # print()
                     
                     instances.append(ins)
-                    labels.append(lab)
+                    labels.append(convert_label_sequence(org_lab, sch, label2id, label_update))
+                    # print(ins)
+                    # print(labels[-1])
+                    # print()
+
                     ins = []
-                    lab = []
+                    org_lab = []
                     ins_cnt += 1
+
                 continue
 
             if limit > 0 and ins_cnt >= limit:
@@ -131,28 +143,83 @@ def create_data_for_conll2003(path, token2id={}, label2id={},
             pos = line[1]
             chunk = line[2]
             label = line[3]
+
             if word == '-DOCSTART-':
                 continue
 
-            wi = get_id(word, token2id, token_update)
-            li = get_id(label, label2id, label_update)
-            ins.append(wi)
-            lab.append(li)
-            # print(wi, word)
-            # print(li, label)
-            # id2token[wi] = word
-            # id2label[li] = label
+            ins.append(get_id(word, token2id, token_update))
+            org_lab.append(label)
 
             word_cnt += 1
 
         if limit <= 0:
             instances.append(ins)
-            labels.append(lab)
+            labels.append(convert_label_sequence(org_lab, sch, label2id, label_update))
             ins_cnt += 1
 
     return instances, labels, token2id, label2id
 
     
+def convert_label_sequence(org_lab, sch, label2id, label_update):
+    org_lab = org_lab.copy()
+    org_lab.append('<END>') # dummy
+    O_id = get_id('O', label2id, label_update)
+
+    new_lab = []
+    new_lab_debug = []
+    stack = []
+
+    for i in range(len(org_lab)):
+        if len(stack) == 0:
+            if org_lab[i] == '<END>':
+                break
+            elif org_lab[i] == 'O':
+                new_lab.append(O_id)
+                # new_lab_debug.append('O')
+            else:
+                stack.append(org_lab[i])
+
+        else:
+            if org_lab[i] == stack[-1]:
+                stack.append(org_lab[i])
+            else:
+                cate = stack[-1].split('-')[1]
+                chunk_len = len(stack)
+                
+                if sch == Schema.BI:
+                    new_lab.extend(
+                        [get_id(get_label_BI(j, cate=cate), 
+                                label2id, label_update) for j in range(chunk_len)]
+                    )
+                    # new_lab_debug.extend(
+                    #     [get_label_BI(j, cate=cate) for j in range(chunk_len)]
+                    # )
+                else:
+                    new_lab.extend(
+                        [get_id(get_label_BIES(j, chunk_len-1, cate=cate), 
+                                label2id, label_update) for j in range(chunk_len)]
+                    )
+                    # new_lab_debug.extend(
+                    #     [get_label_BIES(j, chunk_len-1, cate=cate) for j in range(chunk_len)]
+                    # )
+                    
+                    stack = []
+                    if org_lab[i] == '<END>':
+                        pass
+                    elif org_lab[i] == 'O':
+                        new_lab.append(O_id)
+                        # new_lab_debug.append('O')
+                    else:
+                        stack.append(org_lab[i])
+                            
+    # print(ins)
+    # print(org_lab)
+    # print(new_lab_debug)
+    # print(new_lab)
+    # print()
+
+    return new_lab
+
 # for pos tagging
 #
 # example of input data:
@@ -227,7 +294,7 @@ def create_data_for_pos_tagging(path, token2id={}, label2id={}, cate_row=-1, sub
 
 
 # for BCCWJ word segmentation
-# 文字単位で BIO2 フォーマットに変換
+# 文字単位で BI or BIES フォーマットに変換
 #
 # example of input data:
 # B       最後    名詞-普通名詞-一般$
@@ -235,9 +302,9 @@ def create_data_for_pos_tagging(path, token2id={}, label2id={}, cate_row=-1, sub
 # I       会話    名詞-普通名詞-サ変可能$
 #
 def create_data_wordseg(path, token2id={}, label2id={}, cate_row=-1, 
-                         token_update=True, label_update=True, scheme='BI', limit=-1):
-    Schema = enum.Enum("Schema", "BI BIES")
-    if scheme == 'BI':
+                         token_update=True, label_update=True, schema='BI', limit=-1):
+    #Schema = enum.Enum("Schema", "BI BIES")
+    if schema == 'BI':
         sch = Schema.BI
     else:
         sch = Schema.BIES
@@ -298,6 +365,72 @@ def create_data_wordseg(path, token2id={}, label2id={}, cate_row=-1,
         if limit <= 0:
             instances.append(ins)
             labels.append(lab)
+            ins_cnt += 1
+
+    #print(ins_cnt, word_cnt, token_cnt)
+    return instances, labels, token2id, label2id
+
+
+# 文字単位で BI or BIES フォーマットに変換
+#
+# example of input data:
+# 偶尔  有  老乡  拥  上来  想  看 ...
+# 说  ，  这  “  不是  一种  风险  ，  而是  一种  保证  。
+# ...
+def create_data_wordseg2(path, token2id={}, label2id={}, cate_row=-1, 
+                         token_update=True, label_update=True, schema='BI', limit=-1):
+    if schema == 'BI':
+        sch = Schema.BI
+    else:
+        sch = Schema.BIES
+
+    instances = []
+    labels = []
+    if len(token2id) == 0:
+        token2id = {UNK_SYMBOL: np.int32(0)}
+    if len(label2id) == 0:
+        label2id = {}
+
+    print("Read file:", path)
+    ins_cnt = 0
+    word_cnt = 0
+    token_cnt = 0
+
+    with open(path) as f:
+        ins = []
+        lab = []
+        for line in f:
+            if limit > 0 and ins_cnt >= limit:
+                break
+
+            line = line.rstrip('\n')
+            if len(line) < 1:
+                continue
+
+            words = line.replace('  ', ' ').split(' ')
+            for word in words:
+                wlen = len(word)
+                ins.extend(
+                    [get_id(word[i], token2id, token_update) for i in range(wlen)]
+                )
+
+                if sch == Schema.BI:
+                    lab.extend(
+                        [get_id(get_label_BI(i), label2id, label_update) for i in range(wlen)]
+                    )
+                else:
+                    lab.extend(
+                        [get_id(get_label_BIES(i, wlen-1), 
+                                label2id, label_update) for i in range(wlen)]
+                    )
+
+                word_cnt += 1
+                token_cnt += len(word)
+
+            instances.append(ins)
+            labels.append(lab)
+            ins = []
+            lab = []
             ins_cnt += 1
 
     #print(ins_cnt, word_cnt, token_cnt)
@@ -392,10 +525,14 @@ def get_id(string, string2id, update=True):
 
 if __name__ == '__main__':
 
-    train_path = 'bccwj_data/Disk4/processed/ma/LBb_train_middle.tsv'
+    # train_path = 'bccwj_data/Disk4/processed/ma/LBb_train_middle.tsv'
+    # instances, labels, token2id, label2id = create_data_for_pos_tagging(train_path, subpos_depth=1)
+    # instances, labels, token2id, label2id = create_data_for_wsj(train_path, token_update=True, label_update=True)
+    # train_path = '/home/shigashi/data_shigashi/resources/SIGHAN2005/icwb2-data/training/pku_training.utf8'
+    # instances, labels, token2id, label2id = create_data_wordseg2(train_path, schema='BIES')
 
-    instances, labels, token2id, label2id = create_data_for_pos_tagging(train_path, subpos_depth=1)
+    train_path = 'conll2003_data/eng.train'
+    instances, labels, token2id, label2id = create_data_for_conll2003(train_path, schema='BIES')
 
-    #instances, labels, token2id, label2id = create_data_for_wsj(train_path, token_update=True, label_update=True)
     print(len(instances))
-    print(len(label2id))
+    print(label2id)
