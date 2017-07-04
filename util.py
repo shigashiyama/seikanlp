@@ -396,6 +396,9 @@ def create_data_wordseg2(path, token2id={}, label2id={}, cate_row=-1,
     word_cnt = 0
     token_cnt = 0
 
+    id2token = {}
+    id2label = {}
+
     with open(path) as f:
         ins = []
         lab = []
@@ -408,11 +411,15 @@ def create_data_wordseg2(path, token2id={}, label2id={}, cate_row=-1,
                 continue
 
             words = line.replace('  ', ' ').split(' ')
+            # print('sen:', words)
             for word in words:
                 wlen = len(word)
                 ins.extend(
                     [get_id(word[i], token2id, token_update) for i in range(wlen)]
                 )
+                # id2token.update(
+                #     {get_id(word[i], token2id, token_update): word[i] for i in range(wlen)}
+                # )
 
                 if sch == Schema.BI:
                     lab.extend(
@@ -423,12 +430,21 @@ def create_data_wordseg2(path, token2id={}, label2id={}, cate_row=-1,
                         [get_id(get_label_BIES(i, wlen-1), 
                                 label2id, label_update) for i in range(wlen)]
                     )
+                    # id2label.update(
+                    #     {get_id(get_label_BIES(i, wlen-1), label2id, label_update):get_label_BIES(i, wlen-1) for i in range(wlen)}
+                    # )
 
                 word_cnt += 1
                 token_cnt += len(word)
 
             instances.append(ins)
             labels.append(lab)
+
+            # print(ins)
+            # print([id2token[id] for id in ins])
+            # print([(id2label[id]+' ') for id in lab])
+            # print()
+
             ins = []
             lab = []
             ins_cnt += 1
@@ -525,14 +541,26 @@ def get_id(string, string2id, update=True):
 
 if __name__ == '__main__':
 
-    # train_path = 'bccwj_data/Disk4/processed/ma/LBb_train_middle.tsv'
-    # instances, labels, token2id, label2id = create_data_for_pos_tagging(train_path, subpos_depth=1)
-    # instances, labels, token2id, label2id = create_data_for_wsj(train_path, token_update=True, label_update=True)
-    # train_path = '/home/shigashi/data_shigashi/resources/SIGHAN2005/icwb2-data/training/pku_training.utf8'
-    # instances, labels, token2id, label2id = create_data_wordseg2(train_path, schema='BIES')
+    # train_path = 'bccwj_data/Disk4/processed/ma2/BCCWJ-LB-a2b_train.tsv'
+    # train_path = 'conll2003_data/eng.train'
+    train_path = 'cws_data/pku_train.tsv'
 
-    train_path = 'conll2003_data/eng.train'
-    instances, labels, token2id, label2id = create_data_for_conll2003(train_path, schema='BIES')
+    # train, train_t, token2id, label2id = create_data_for_pos_tagging(train_path, subpos_depth=1)
+    # train, train_t, token2id, label2id = create_data_for_wsj(train_path)
+    # train, train_t, token2id, label2id = create_data_for_conll2003(train_path, schema='BIES')
+    # train, train_t, token2id, label2id = create_data_wordseg(train_path, schema='BIES')
+    train, train_t, token2id, label2id = create_data_wordseg2(train_path, schema='BIES', limit=20)
 
-    print(len(instances))
+    print(len(train))
+    print(len(token2id))
     print(label2id)
+
+    # val_path = 'bccwj_data/Disk4/processed/ma2/BCCWJ-LB-a2b_val.tsv'
+    # val_path = 'cws_data/pku_val.tsv'
+
+    # val, val_t, token2id, label2id = create_data_wordseg(val_path, token2id=token2id, label2id=label2id, schema='BIES')
+    # val, val_t, token2id, label2id = create_data_wordseg2(val_path, token2id=token2id, label2id=label2id, schema='BIES')
+
+    # print(len(val))
+    # print(len(token2id))
+    # print(label2id)
