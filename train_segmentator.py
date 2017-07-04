@@ -30,14 +30,19 @@ from chainer.functions.loss import softmax_cross_entropy
 from chainer.links.connection.n_step_rnn import argsort_list_descent, permutate_list
 
 import util
+import embedding as emb
 from conlleval import conlleval
 
 
 class RNN_CRF(chainer.Chain):
-    def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bidirection=True, n_left_contexts=0, n_right_contexts=0, gpu=-1):
+    def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bidirection=True, n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
         super(RNN_CRF, self).__init__()
 
         with self.init_scope():
+            if init_embed != None:
+                n_vocab = init_embed.W.shape[0]
+                n_lt_units = init_embed.W.shape[1]
+
             # padding indices for context window
             self.left_padding_ids = self.get_id_array(n_vocab, n_left_contexts, gpu)
             self.right_padding_ids = self.get_id_array(n_vocab + n_left_contexts, n_right_contexts, gpu)
@@ -50,10 +55,29 @@ class RNN_CRF(chainer.Chain):
             lstm_in = n_lt_units * self.context_size
 
             # init layers
-            self.lookup = L.EmbedID(vocab_size, self.lookup_dim)
+            self.lookup = L.EmbedID(vocab_size, self.lookup_dim) if init_embed == None else init_embed
             self.lstm = L.NStepBiLSTM(n_lstm_layers, lstm_in, n_lstm_units, dropout) if use_bidirection else L.NStepLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout)
             self.linear = L.Linear(n_lstm_units * (2 if use_bidirection else 1), n_labels)
             self.crf = L.CRF1d(n_labels)
+
+            print('## parameters')
+            print('# lookup:', self.lookup.W.shape)
+            print('# lstm:')
+            i = 0
+            for c in self.lstm._children:
+                print('#   param', i)
+                print('#      0 -', c.w0.shape, '+', c.b0.shape)
+                print('#      1 -', c.w1.shape, '+', c.b1.shape)
+                print('#      2 -', c.w2.shape, '+', c.b2.shape)
+                print('#      3 -', c.w3.shape, '+', c.b3.shape)
+                print('#      4 -', c.w4.shape, '+', c.b4.shape)
+                print('#      5 -', c.w5.shape, '+', c.b5.shape)
+                print('#      6 -', c.w6.shape, '+', c.b6.shape)
+                print('#      7 -', c.w7.shape, '+', c.b7.shape)
+                i += 1
+            print('# linear:', self.linear.W.shape, '+', self.linear.b.shape)
+            print('# crf:', self.crf.cost.shape)
+            print()
 
     def __call__(self, xs, ts, train=True):
         # create input vector considering context window
@@ -220,6 +244,10 @@ def print_results(total_loss, ave_loss, count, c, acc, overall):
 
 def main():
 
+    if chainer.__version__[0] != '2':
+        print("chainer version>=2.0.0 is required.")
+        sys.exit()
+
     # get arguments
 
     parser = argparse.ArgumentParser()
@@ -236,7 +264,8 @@ def main():
     parser.add_argument('--crf', action='store_true')
     parser.add_argument('--bidirection', action='store_true')
     parser.add_argument('--hidden_unit', '-u', type=int, default=650)    
-    parser.add_argument('--lookup_dim', '-d', type=int, default=650)
+    parser.add_argument('--lookup_dim', '-d', type=int, default=300)
+    parser.add_argument('--embed_model', default='')
     parser.add_argument('--lc', type=int, default=0, help='Left context size')
     parser.add_argument('--rc', type=int, default=0, help='Right context size')
     parser.add_argument('--optimizer', '-o', default='sgd')
@@ -269,6 +298,7 @@ def main():
     print('# layer: {}'.format(args.layer))
     print('# lookup table dimension: {}'.format(args.lookup_dim))
     print('# hiddlen unit: {}'.format(args.hidden_unit))
+    print('# pre-trained embedding model: {}'.format(args.embed_model))
     print('# left context size: {}'.format(args.lc))
     print('# right context size: {}'.format(args.rc))
     print('# optimization algorithm: {}'.format(args.optimizer))
@@ -292,7 +322,7 @@ def main():
     print('INFO: start: %s\n' % time0)
     if args.test == -1:
         logger = open('log/' + time0 + '.log', 'a')
-        logger.write(str(args))
+        logger.write(str(args)+'\n')
 
     # Load dataset
 
@@ -301,28 +331,41 @@ def main():
     test_path = args.dir_path + 'LBb_test.tsv'
 
     limit = args.test if args.test > 0 else -1
+    token2id = {}
     if args.format == 'bccwj':
         train, train_t, token2id, label2id = util.create_data_wordseg(
-            train_path, scheme=args.tag_schema, limit=limit)
+            train_path, token2id=token2id, schema=args.tag_schema, limit=limit)
         val, val_t, token2id, label2id = util.create_data_wordseg(
             val_path, token2id=token2id, label2id=label2id, label_update=False, 
-            scheme=args.tag_schema, limit=limit)
+            schema=args.tag_schema, limit=limit)
         # test, test_t, token2id, label2id = util.create_data_wordseg(
         #     test_path, token2id=token2id, label2id=label2id, token_update=False, label_update=False, limit=limit)
+    elif args.format == 'cws':
+        train, train_t, token2id, label2id = util.create_data_wordseg2(
+            train_path, token2id=token2id, schema=args.tag_schema, limit=limit)
+        val, val_t, token2id, label2id = util.create_data_wordseg2(
+            val_path, token2id=token2id, label2id=label2id, label_update=False, 
+            schema=args.tag_schema, limit=limit)
+
     elif args.format == 'bccwj_pos':
         train, train_t, token2id, label2id = util.create_data_for_pos_tagging(
-            train_path, subpos_depth=args.subpos_depth, limit=limit)
+            train_path, token2id=token2id, subpos_depth=args.subpos_depth, limit=limit)
         val, val_t, token2id, label2id = util.create_data_for_pos_tagging(
             val_path, token2id=token2id, label2id=label2id, subpos_depth=args.subpos_depth, 
-            label_update=False, limit=limit)
+            label_update=False, schema=args.tag_schema, limit=limit)
+
     elif args.format == 'wsj':
-        train, train_t, token2id, label2id = util.create_data_for_wsj(train_path, limit=limit)
+        train, train_t, token2id, label2id = util.create_data_for_wsj(
+            train_path, token2id=token2id, limit=limit)
         val, val_t, token2id, label2id = util.create_data_for_wsj(
             val_path, token2id=token2id, label2id=label2id, label_update=False, limit=limit)
+
     elif args.format == 'conll2003':
-        train, train_t, token2id, label2id = util.create_data(train_path, limit=limit)
+        train, train_t, token2id, label2id = util.create_data_for_conll2003(
+            train_path, token2id=token2id, schema=args.tag_schema, limit=limit)
         val, val_t, token2id, label2id = util.create_data_for_conll2003(
-            val_path, token2id=token2id, label2id=label2id, label_update=False, limit=limit)
+            val_path, token2id=token2id, label2id=label2id, label_update=False, 
+            schema=args.tag_schema, limit=limit)
     else:
         pass
 
@@ -333,20 +376,30 @@ def main():
     n_vocab = len(token2id)
     n_labels = len(label2id)
 
+    t2i_tmp = list(token2id.items())
+    id2token = {v:k for k,v in token2id.items()}
+    id2label = {v:k for k,v in label2id.items()}
     print('vocab =', n_vocab)
     print('data length: train=%d val=%d test=%d' % (n_train, n_val, n_test))
     print()
     print('train:', train[:3], '...', train[n_train-3:])
     print('train_t:', train_t[:3], '...', train[n_train-3:])
     print()
-    t2i_tmp = list(token2id.items())
-    id2label = {v:k for k,v in label2id.items()}
     print('token2id:', t2i_tmp[:3], '...', t2i_tmp[len(t2i_tmp)-3:])
     print('label2id:', label2id)
     print()
     if args.test == -1:
         logger.write('INFO: vocab = %d\n' % n_vocab)
         logger.write('INFO: data length: train=%d val=%d\n' % (n_train, n_val))
+
+
+    # Load pre-trained embedding model
+
+    if args.embed_model:
+        embed, _ = emb.construct_lookup_table(id2token, args.embed_model, gpu=args.gpu)
+        _ = None                # gensim KeyedVectors object
+    else:
+        embed = None
 
     # Prepare model
 
@@ -357,13 +410,9 @@ def main():
     else:
         xp = np
 
-    if chainer.__version__[0] != '2':
-        print("chainer version>=2.0.0 is required.")
-        sys.exit()
-
     chainer.config.cudnn_deterministic = args.use_cudnn
     if args.crf:
-        rnn = RNN_CRF(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, use_bidirection=args.bidirection, n_left_contexts=args.lc, n_right_contexts=args.rc, gpu=args.gpu)
+        rnn = RNN_CRF(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, use_bidirection=args.bidirection, n_left_contexts=args.lc, n_right_contexts=args.rc, init_embed=embed, gpu=args.gpu)
     else:
         rnn = RNN(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, use_bidirection=args.bidirection)
 
