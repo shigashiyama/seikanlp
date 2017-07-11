@@ -251,9 +251,12 @@ def main():
     # get arguments
 
     parser = argparse.ArgumentParser()
+    parser.add_argument('--nolog', action='store_true')
     parser.add_argument('--gpu', '-g', type=int, default=-1,
                         help='GPU ID (negative value indicates CPU)')
     parser.add_argument('--cudnn', dest='use_cudnn', action='store_true')
+    parser.add_argument('--eval', action='store_true', help='Evaluate on given model using input date without training')
+    parser.add_argument('--limit', type=int, default=-1, help='Limit the number of samples for quick tests')
     parser.add_argument('--batchsize', '-b', type=int, default=20)
     # parser.add_argument('--bproplen', type=int, default=35, help='length of truncated BPTT')
     parser.add_argument('--epoch', '-e', type=int, default=10)
@@ -261,40 +264,45 @@ def main():
     parser.add_argument('--resume_epoch', type=int, default=1, help='Resume the training from the epoch')
     parser.add_argument('--iter_to_report', '-i', type=int, default=10000)
     parser.add_argument('--layer', '-l', type=int, default=1, help='Number of LSTM layers')
-    parser.add_argument('--crf', action='store_true')
     parser.add_argument('--bidirection', action='store_true')
-    parser.add_argument('--hidden_unit', '-u', type=int, default=650)    
+    parser.add_argument('--crf', action='store_true')
+    parser.add_argument('--activation', '-a', default='')
+    parser.add_argument('--hidden_unit', '-u', type=int, default=800)
     parser.add_argument('--lookup_dim', '-d', type=int, default=300)
     parser.add_argument('--embed_model', default='')
     parser.add_argument('--lc', type=int, default=0, help='Left context size')
     parser.add_argument('--rc', type=int, default=0, help='Right context size')
     parser.add_argument('--optimizer', '-o', default='sgd')
     parser.add_argument('--lr', '-r', type=float, default=1, help='Value of initial learning rate')
-    parser.add_argument('--momentum', '-m', type=float, default=0.9, help='Momentum ratio')
-    parser.add_argument('--lrdecay', type=float, default=0.05, help='Coefficient for learning rate decay')
-    parser.add_argument('--weightdecay', '-w', type=float, default=0.1, help='Weight decay ratio')
-    parser.add_argument('--dropout', type=float, default=0.5)
+    parser.add_argument('--momentum', '-m', type=float, default=0, help='Momentum ratio')
+    parser.add_argument('--lrdecay', type=float, default=0, help='Coefficient for learning rate decay')
+    parser.add_argument('--weightdecay', '-w', type=float, default=0, help='Weight decay ratio')
+    parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--gradclip', '-c', type=float, default=5,)
-    parser.add_argument('--test', type=int, default=-1, help='Use tiny datasets for quick tests')
     parser.add_argument('--format', '-f', help='Format of input data')
     parser.add_argument('--subpos_depth', '-s', type=int, default=-1)
     parser.add_argument('--dir_path', '-p', help='Directory path of input data (train, valid and test)')
     parser.add_argument('--train_data', '-t', help='Filename of training data')
     parser.add_argument('--validation_data', '-v', help='Filename of validation data')
+    parser.add_argument('--test_data', help='Filename of test data')
     parser.add_argument('--tag_schema', default='BI')
     parser.set_defaults(use_cudnn=False)
     parser.set_defaults(crf=False)
     parser.set_defaults(bidirection=False)
     args = parser.parse_args()
 
+    print('# No log: {}'.format(args.nolog))
     print('# GPU: {}'.format(args.gpu))
     print('# cudnn: {}'.format(args.use_cudnn))
+    print('# eval: {}'.format(args.eval))
+    print('# limit: {}'.format(args.limit))
     print('# minibatch-size: {}'.format(args.batchsize))
     print('# epoch: {}'.format(args.epoch))
     print('# iteration to report: {}'.format(args.iter_to_report))
     # print('# bproplen: {}'.format(args.bproplen))
-    print('# crf: {}'.format(args.crf))
     print('# bidirection: {}'.format(args.bidirection))
+    print('# crf: {}'.format(args.crf))
+    print('# activation: {}'.format(args.activation))
     print('# layer: {}'.format(args.layer))
     print('# lookup table dimension: {}'.format(args.lookup_dim))
     print('# hiddlen unit: {}'.format(args.hidden_unit))
@@ -312,64 +320,89 @@ def main():
     print('# resume: {}'.format(args.resume))
     print('# epoch to resume: {}'.format(args.resume_epoch))
     print('# tag schema: {}'.format(args.tag_schema))
-    print('# test: {}'.format(args.test))
-    print('')
     print(args)
+    print('')
 
     # Prepare logger
 
     time0 = datetime.now().strftime('%Y%m%d_%H%M')
     print('INFO: start: %s\n' % time0)
-    if args.test == -1:
+    if not args.nolog:
         logger = open('log/' + time0 + '.log', 'a')
         logger.write(str(args)+'\n')
 
-    # Load dataset
+    # Load word embedding model
+
+    if args.embed_model:
+        embed_model = emb.read_model(args.embed_model)
+
+    # Load dataset and pre-trained embedding model
 
     train_path = args.dir_path + args.train_data
     val_path = args.dir_path + args.validation_data
-    test_path = args.dir_path + 'LBb_test.tsv'
-
-    limit = args.test if args.test > 0 else -1
+    test_path = args.dir_path + (args.test_data if args.test_data else '')
+    refer_vocab = embed_model.wv if args.embed_model else set()
     token2id = {}
+    test = []
+
+    limit = args.limit if args.limit > 0 else -1
     if args.format == 'bccwj':
         train, train_t, token2id, label2id = util.create_data_wordseg(
             train_path, token2id=token2id, schema=args.tag_schema, limit=limit)
         val, val_t, token2id, label2id = util.create_data_wordseg(
-            val_path, token2id=token2id, label2id=label2id, label_update=False, 
+            val_path, token2id=token2id, label2id=label2id,
             schema=args.tag_schema, limit=limit)
-        # test, test_t, token2id, label2id = util.create_data_wordseg(
-        #     test_path, token2id=token2id, label2id=label2id, token_update=False, label_update=False, limit=limit)
+        if args.test_data:
+            test, test_t, token2id, label2id = util.create_data_wordseg(
+                test_path, token2id=token2id, label2id=label2id, update_token=False,
+                schema=args.tag_schema, limit=limit)
+
     elif args.format == 'cws':
         train, train_t, token2id, label2id = util.create_data_wordseg2(
             train_path, token2id=token2id, schema=args.tag_schema, limit=limit)
         val, val_t, token2id, label2id = util.create_data_wordseg2(
-            val_path, token2id=token2id, label2id=label2id, label_update=False, 
+            val_path, token2id=token2id, label2id=label2id,
             schema=args.tag_schema, limit=limit)
-
+        if args.test_data:
+            test, test_t, token2id, label2id = util.create_data_wordseg2(
+                test_path, token2id=token2id, label2id=label2id, update_token=False,
+                schema=args.tag_schema, limit=limit)
+            
     elif args.format == 'bccwj_pos':
         train, train_t, token2id, label2id = util.create_data_for_pos_tagging(
             train_path, token2id=token2id, subpos_depth=args.subpos_depth, limit=limit)
         val, val_t, token2id, label2id = util.create_data_for_pos_tagging(
-            val_path, token2id=token2id, label2id=label2id, subpos_depth=args.subpos_depth, 
-            label_update=False, schema=args.tag_schema, limit=limit)
+            val_path, token2id=token2id, label2id=label2id, subpos_depth=args.subpos_depth, limit=limit)
+        if args.test_data:
+            test, test_t, token2id, label2id = util.create_data_for_pos_tagging(
+                test_path, token2id=token2id, label2id=label2id, subpos_depth=args.subpos_depth,
+                update_token=False, refer_vocab=refer_vocab, limit=limit)
 
     elif args.format == 'wsj':
         train, train_t, token2id, label2id = util.create_data_for_wsj(
             train_path, token2id=token2id, limit=limit)
         val, val_t, token2id, label2id = util.create_data_for_wsj(
-            val_path, token2id=token2id, label2id=label2id, label_update=False, limit=limit)
+            val_path, token2id=token2id, label2id=label2id, limit=limit)
+        if args.test_data:
+            test, test_t, token2id, label2id = util.create_data_for_wsj(
+                test_path, token2id=token2id, label2id=label2id, update_token=False,
+                refer_vocab=refer_vocab, limit=limit)
 
     elif args.format == 'conll2003':
         train, train_t, token2id, label2id = util.create_data_for_conll2003(
             train_path, token2id=token2id, schema=args.tag_schema, limit=limit)
+        print('vocab size:', len(token2id))
         val, val_t, token2id, label2id = util.create_data_for_conll2003(
-            val_path, token2id=token2id, label2id=label2id, label_update=False, 
-            schema=args.tag_schema, limit=limit)
+            val_path, token2id=token2id, label2id=label2id, schema=args.tag_schema, limit=limit)
+        print('vocab size:', len(token2id))
+        if args.test_data:
+            test, test_t, token2id, label2id = util.create_data_for_conll2003(
+                test_path, token2id=token2id, label2id=label2id, update_token=False,
+                refer_vocab=refer_vocab, schema=args.tag_schema, limit=limit)
+            print('vocab size:', len(token2id))
     else:
         pass
 
-    test = []
     n_train = len(train)
     n_val = len(val)
     n_test = len(test)
@@ -388,18 +421,10 @@ def main():
     print('token2id:', t2i_tmp[:3], '...', t2i_tmp[len(t2i_tmp)-3:])
     print('label2id:', label2id)
     print()
-    if args.test == -1:
+    if not args.nolog:
         logger.write('INFO: vocab = %d\n' % n_vocab)
         logger.write('INFO: data length: train=%d val=%d\n' % (n_train, n_val))
 
-
-    # Load pre-trained embedding model
-
-    if args.embed_model:
-        embed, _ = emb.construct_lookup_table(id2token, args.embed_model, gpu=args.gpu)
-        _ = None                # gensim KeyedVectors object
-    else:
-        embed = None
 
     # Prepare model
 
@@ -411,8 +436,12 @@ def main():
         xp = np
 
     chainer.config.cudnn_deterministic = args.use_cudnn
+    if args.embed_model:
+        embed = emb.construct_lookup_table(id2token, embed_model, gpu=args.gpu)
+    else:
+        embed = None
     if args.crf:
-        rnn = RNN_CRF(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, use_bidirection=args.bidirection, n_left_contexts=args.lc, n_right_contexts=args.rc, init_embed=embed, gpu=args.gpu)
+        rnn = RNN_CRF(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, use_bidirection=args.bidirection, activation=args.activation, n_left_contexts=args.lc, n_right_contexts=args.rc, init_embed=embed, gpu=args.gpu)
     else:
         rnn = RNN(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, use_bidirection=args.bidirection)
 
@@ -420,8 +449,11 @@ def main():
     model.compute_fscore = True
 
     if args.resume:
-        print('resume training from the model: %s' % args.resume)
+        print('read a model: %s' % args.resume)
         chainer.serializers.load_npz(args.resume, model)
+    elif args.eval:
+        print('a trained model is required on eval mode.')
+        sys.exit()
 
     if args.gpu >= 0:
         model.to_gpu()
@@ -440,16 +472,33 @@ def main():
 
     optimizer.setup(model)
     optimizer.add_hook(chainer.optimizer.GradientClipping(args.gradclip))
-    optimizer.add_hook(chainer.optimizer.WeightDecay(args.weightdecay))
+    if args.weightdecay > 0:
+        optimizer.add_hook(chainer.optimizer.WeightDecay(args.weightdecay))
 
 
     # Run
 
+    if args.eval:
+        # print('<validation result>')
+        # v_stat, v_res = evaluate(model, val, val_t, args.batchsize, xp=xp)
+        # print()
+        print('<test result>')
+        te_stat, te_res = evaluate(model, test, test_t, args.batchsize, xp=xp)
+        print()
+
+        time = datetime.now().strftime('%Y%m%d_%H%M')
+        if not args.nolog:
+            logger.write('finish: %s\n' % time)
+            logger.close()
+        print('finish: %s\n' % time)
+        sys.exit()
+
+    
     n_iter_report = args.iter_to_report
     n_iter = 0
     for e in range(max(1, args.resume_epoch), args.epoch+1):
         time = datetime.now().strftime('%Y%m%d_%H%M')
-        if args.test == -1:
+        if not args.nolog:
             logger.write('INFO: start epoch %d at %s\n' % (e, time))
         print('start epoch %d: %s' % (e, time))
 
@@ -491,7 +540,7 @@ def main():
                 print_results(total_loss, ave_loss, count, c, acc, overall)
                 print()
 
-                if args.test == -1:
+                if not args.nolog:
                     t_stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
                         count, c.token_counter, c.found_correct, c.found_guessed)
                     t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
@@ -506,7 +555,7 @@ def main():
                 v_stat, v_res = evaluate(model, val, val_t, args.batchsize, xp=xp)
                 print()
 
-                if args.test == -1:
+                if not args.nolog:
                     logger.write('INFO: valid - %s\n' % v_stat)
                     if n_iter == 1:
                         logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
@@ -516,7 +565,7 @@ def main():
                 #mdl_path = 'model/rnn_%s_i%.2fk.mdl' % (time0, (1.0 * n_iter / 1000))
                 mdl_path = 'model/rnn_%s_i%s.mdl' % (time0, now_e)
                 print('save the model: %s\n' % mdl_path)
-                if args.test == -1:
+                if not args.nolog:
                     logger.write('INFO: save the model: %s\n' % mdl_path)
                     serializers.save_npz(mdl_path, model)
         
@@ -526,7 +575,7 @@ def main():
                 num_tokens = 0
                 total_ecounts = conlleval.EvalCounts()
 
-                if args.test == -1:
+                if not args.nolog:
                     logger.close()
                     logger = open('log/' + time0 + '.log', 'a')
 
@@ -537,7 +586,7 @@ def main():
         #     print()
 
     time = datetime.now().strftime('%Y%m%d_%H%M')
-    if args.test == -1:
+    if not args.nolog:
         logger.write('finish: %s\n' % time)
         logger.close()
    
