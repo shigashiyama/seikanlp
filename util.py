@@ -16,8 +16,8 @@ Schema = enum.Enum("Schema", "BI BIES")
 # ...
 # 0001  1 17 O       .     .               NOFUNC          join              8 I-S
 #
-def create_data_for_wsj(path, token2id={}, label2id={}, 
-                token_update=True, label_update=True, limit=-1):
+def create_data_for_wsj(path, token2id={}, label2id={}, update_token=True, 
+                        update_label=True, refer_vocab=set(), limit=-1):
 
     # id2token = {}
     # id2label = {}
@@ -62,8 +62,9 @@ def create_data_for_wsj(path, token2id={}, label2id={},
             pos = line[5].rstrip()
             chunk = line[4].rstrip()
 
-            wi = get_id(word, token2id, token_update)
-            li = get_id(pos, label2id, label_update)
+            update_this_token = update_token or word in refer_vocab
+            wi = get_id(word, token2id, update_this_token)
+            li = get_id(pos, label2id, update_label)
             ins.append(wi)
             lab.append(li)
             # print(wi, word)
@@ -90,8 +91,8 @@ def create_data_for_wsj(path, token2id={}, label2id={},
 # German JJ I-NP I-MISC
 # call NN I-NP O
 #
-def create_data_for_conll2003(path, token2id={}, label2id={},
-                              token_update=True, label_update=True, schema='BI', limit=-1):
+def create_data_for_conll2003(path, token2id={}, label2id={}, update_token=True, 
+                              update_label=True, refer_vocab=set(), schema='BI', limit=-1):
 
     if schema == 'BI':
         sch = Schema.BI
@@ -124,7 +125,7 @@ def create_data_for_conll2003(path, token2id={}, label2id={},
                     # print()
                     
                     instances.append(ins)
-                    labels.append(convert_label_sequence(org_lab, sch, label2id, label_update))
+                    labels.append(convert_label_sequence(org_lab, sch, label2id, update_label))
                     # print(ins)
                     # print(labels[-1])
                     # print()
@@ -147,23 +148,24 @@ def create_data_for_conll2003(path, token2id={}, label2id={},
             if word == '-DOCSTART-':
                 continue
 
-            ins.append(get_id(word, token2id, token_update))
+            update_this_token = update_token or word in refer_vocab
+            ins.append(get_id(word, token2id, update_this_token))
             org_lab.append(label)
 
             word_cnt += 1
 
         if limit <= 0:
             instances.append(ins)
-            labels.append(convert_label_sequence(org_lab, sch, label2id, label_update))
+            labels.append(convert_label_sequence(org_lab, sch, label2id, update_label))
             ins_cnt += 1
 
     return instances, labels, token2id, label2id
 
     
-def convert_label_sequence(org_lab, sch, label2id, label_update):
+def convert_label_sequence(org_lab, sch, label2id, update_label):
     org_lab = org_lab.copy()
     org_lab.append('<END>') # dummy
-    O_id = get_id('O', label2id, label_update)
+    O_id = get_id('O', label2id, update_label)
 
     new_lab = []
     new_lab_debug = []
@@ -189,7 +191,7 @@ def convert_label_sequence(org_lab, sch, label2id, label_update):
                 if sch == Schema.BI:
                     new_lab.extend(
                         [get_id(get_label_BI(j, cate=cate), 
-                                label2id, label_update) for j in range(chunk_len)]
+                                label2id, update_label) for j in range(chunk_len)]
                     )
                     # new_lab_debug.extend(
                     #     [get_label_BI(j, cate=cate) for j in range(chunk_len)]
@@ -197,7 +199,7 @@ def convert_label_sequence(org_lab, sch, label2id, label_update):
                 else:
                     new_lab.extend(
                         [get_id(get_label_BIES(j, chunk_len-1, cate=cate), 
-                                label2id, label_update) for j in range(chunk_len)]
+                                label2id, update_label) for j in range(chunk_len)]
                     )
                     # new_lab_debug.extend(
                     #     [get_label_BIES(j, chunk_len-1, cate=cate) for j in range(chunk_len)]
@@ -228,7 +230,7 @@ def convert_label_sequence(org_lab, sch, label2id, label_update):
 # I       会話    名詞-普通名詞-サ変可能$
 #
 def create_data_for_pos_tagging(path, token2id={}, label2id={}, cate_row=-1, subpos_depth=-1,
-                         token_update=True, label_update=True, limit=-1):
+                         update_token=True, update_label=True, refer_vocab=set(), limit=-1):
     instances = []
     labels = []
     if len(token2id) == 0:
@@ -274,8 +276,9 @@ def create_data_for_pos_tagging(path, token2id={}, label2id={}, cate_row=-1, sub
             if limit > 0 and ins_cnt >= limit:
                 break
 
-            wi = get_id(word, token2id, token_update)
-            li = get_id(label, label2id, label_update)
+            update_this_token = update_token or word in refer_vocab
+            wi = get_id(word, token2id, update_this_token)
+            li = get_id(label, label2id, update_label)
             ins.append(wi)
             lab.append(li)
             # print(wi, word)
@@ -302,7 +305,7 @@ def create_data_for_pos_tagging(path, token2id={}, label2id={}, cate_row=-1, sub
 # I       会話    名詞-普通名詞-サ変可能$
 #
 def create_data_wordseg(path, token2id={}, label2id={}, cate_row=-1, 
-                         token_update=True, label_update=True, schema='BI', limit=-1):
+                         update_token=True, update_label=True, schema='BI', limit=-1):
     #Schema = enum.Enum("Schema", "BI BIES")
     if schema == 'BI':
         sch = Schema.BI
@@ -346,16 +349,16 @@ def create_data_wordseg(path, token2id={}, label2id={}, cate_row=-1,
 
             wlen = len(word)
             ins.extend(
-                [get_id(word[i], token2id, token_update) for i in range(wlen)]
+                [get_id(word[i], token2id, update_token) for i in range(wlen)]
                 )
 
             if sch == Schema.BI:
                 lab.extend(
-                    [get_id(get_label_BI(i, cate=cate), label2id, label_update) for i in range(wlen)]
+                    [get_id(get_label_BI(i, cate=cate), label2id, update_label) for i in range(wlen)]
                 )
             else:
                 lab.extend(
-                    [get_id(get_label_BIES(i, wlen-1, cate=cate), label2id, label_update) for i in range(wlen)]
+                    [get_id(get_label_BIES(i, wlen-1, cate=cate), label2id, update_label) for i in range(wlen)]
                 )
 
             bof = False
@@ -378,7 +381,7 @@ def create_data_wordseg(path, token2id={}, label2id={}, cate_row=-1,
 # 说  ，  这  “  不是  一种  风险  ，  而是  一种  保证  。
 # ...
 def create_data_wordseg2(path, token2id={}, label2id={}, cate_row=-1, 
-                         token_update=True, label_update=True, schema='BI', limit=-1):
+                         update_token=True, update_label=True, schema='BI', limit=-1):
     if schema == 'BI':
         sch = Schema.BI
     else:
@@ -393,8 +396,6 @@ def create_data_wordseg2(path, token2id={}, label2id={}, cate_row=-1,
 
     print("Read file:", path)
     ins_cnt = 0
-    word_cnt = 0
-    token_cnt = 0
 
     id2token = {}
     id2label = {}
@@ -406,7 +407,7 @@ def create_data_wordseg2(path, token2id={}, label2id={}, cate_row=-1,
             if limit > 0 and ins_cnt >= limit:
                 break
 
-            line = line.rstrip('\n')
+            line = line.rstrip('\n').strip()
             if len(line) < 1:
                 continue
 
@@ -415,41 +416,35 @@ def create_data_wordseg2(path, token2id={}, label2id={}, cate_row=-1,
             for word in words:
                 wlen = len(word)
                 ins.extend(
-                    [get_id(word[i], token2id, token_update) for i in range(wlen)]
+                    [get_id(word[i], token2id, update_token) for i in range(wlen)]
                 )
                 # id2token.update(
-                #     {get_id(word[i], token2id, token_update): word[i] for i in range(wlen)}
+                #     {get_id(word[i], token2id, update_token): word[i] for i in range(wlen)}
                 # )
 
                 if sch == Schema.BI:
                     lab.extend(
-                        [get_id(get_label_BI(i), label2id, label_update) for i in range(wlen)]
+                        [get_id(get_label_BI(i), label2id, update_label) for i in range(wlen)]
                     )
                 else:
                     lab.extend(
                         [get_id(get_label_BIES(i, wlen-1), 
-                                label2id, label_update) for i in range(wlen)]
+                                label2id, update_label) for i in range(wlen)]
                     )
                     # id2label.update(
-                    #     {get_id(get_label_BIES(i, wlen-1), label2id, label_update):get_label_BIES(i, wlen-1) for i in range(wlen)}
+                    #     {get_id(get_label_BIES(i, wlen-1), label2id, update_label):get_label_BIES(i, wlen-1) for i in range(wlen)}
                     # )
-
-                word_cnt += 1
-                token_cnt += len(word)
 
             instances.append(ins)
             labels.append(lab)
-
             # print(ins)
             # print([id2token[id] for id in ins])
             # print([(id2label[id]+' ') for id in lab])
             # print()
-
             ins = []
             lab = []
             ins_cnt += 1
 
-    #print(ins_cnt, word_cnt, token_cnt)
     return instances, labels, token2id, label2id
 
 
