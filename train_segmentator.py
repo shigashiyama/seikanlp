@@ -30,15 +30,21 @@ from chainer.functions.loss import softmax_cross_entropy
 from chainer.links.connection.n_step_rnn import argsort_list_descent, permutate_list
 
 import util
-import embedding as emb
+import read_embedding as emb
 from conlleval import conlleval
 
 
 class RNN_CRF(chainer.Chain):
-    def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bidirection=True, n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
+    def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bidirection=True, activation='identity', n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
         super(RNN_CRF, self).__init__()
 
         with self.init_scope():
+            self.activation = activation # tmp
+            self.act = get_activation(activation)
+            if not self.act:
+                print('unsupported activation function.')
+                sys.exit()
+
             if init_embed != None:
                 n_vocab = init_embed.W.shape[0]
                 n_lt_units = init_embed.W.shape[1]
@@ -76,6 +82,7 @@ class RNN_CRF(chainer.Chain):
                 print('#      7 -', c.w7.shape, '+', c.b7.shape)
                 i += 1
             print('# linear:', self.linear.W.shape, '+', self.linear.b.shape)
+            print('# activation:', self.act)
             print('# crf:', self.crf.cost.shape)
             print()
 
@@ -105,7 +112,11 @@ class RNN_CRF(chainer.Chain):
             hy, cy, hs = self.lstm(None, None, xs)
 
             # linear layer
-            hs = [self.linear(h) for h in hs]
+            
+            if not self.activation or self.activation == 'identity':
+                hs = [self.linear(h) for h in hs]                
+            else:
+                hs = [self.act(self.linear(h)) for h in hs]
 
             # crf layer
             indices = argsort_list_descent(hs)
@@ -126,10 +137,52 @@ class RNN_CRF(chainer.Chain):
         return cuda.to_gpu(ids) if gpu >= 0 else ids
 
 
+    # temporaly code for memory checking
+    def reset(self):
+        print('reset')
+        del self.lookup, self.lstm, self.linear, self.crf
+        gc.collect()
+
+        self.lookup = L.EmbedID(self.vocab_size, self.lookup_dim)
+        self.lstm = L.NStepBiLSTM(self.n_lstm_layers, self.lstm_in, self.n_lstm_units, self.dropout) if self.use_bidirection else L.NStepLSTM(self.n_lstm_layers, self.n_lt_units, self.n_lstm_units, self.dropout)
+        self.linear = L.Linear(self.n_lstm_units * (2 if self.use_bidirection else 1), self.n_labels)
+        self.crf = L.CRF1d(self.n_labels)
+
+        self.lookup = self.lookup.to_gpu()
+        self.lstm = self.lstm.to_gpu()
+        self.linear = self.linear.to_gpu()
+        self.crf = self.crf.to_gpu()
+
+        # print('## parameters')
+        # print('# lookup:', self.lookup.W.shape)
+        # print('# lstm:')
+        # i = 0
+        # for c in self.lstm._children:
+        #     print('#   param', i)
+        #     print('#      0 -', c.w0.shape, '+', c.b0.shape)
+        #     print('#      1 -', c.w1.shape, '+', c.b1.shape)
+        #     print('#      2 -', c.w2.shape, '+', c.b2.shape)
+        #     print('#      3 -', c.w3.shape, '+', c.b3.shape)
+        #     print('#      4 -', c.w4.shape, '+', c.b4.shape)
+        #     print('#      5 -', c.w5.shape, '+', c.b5.shape)
+        #     print('#      6 -', c.w6.shape, '+', c.b6.shape)
+        #     print('#      7 -', c.w7.shape, '+', c.b7.shape)
+        #     i += 1
+        # print('# linear:', self.linear.W.shape, '+', self.linear.b.shape)
+        # print('# activation:', self.act)
+        # print('# crf:', self.crf.cost.shape)
+        # print()
+        
+
 class RNN(chainer.Chain):
-    def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bidirection=True):
+    def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bidirection=True, activation='identity'):
         super(RNN, self).__init__()
         with self.init_scope():
+            self.act = get_activation(activation)
+            if not self.act:
+                print('unsupported activation function.')
+                sys.exit()
+
             self.embed = L.EmbedID(n_vocab, n_lt_units)
             self.l1 = L.NStepBiLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout) if use_bidirection else L.NStepLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout)
             self.l2 = L.Linear(n_lstm_units * (2 if use_bidirection else 1), n_labels)
@@ -139,7 +192,7 @@ class RNN(chainer.Chain):
         xs = [self.embed(x) for x in xs]
         with chainer.using_config('train', train):
             hy, cy, hs = self.l1(None, None, xs)
-        ys = [self.l2(h) for h in hs]
+            ys = [self.act(self.l2(h)) for h in hs]
 
         loss = None
         ps = []
@@ -443,7 +496,7 @@ def main():
     if args.crf:
         rnn = RNN_CRF(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, use_bidirection=args.bidirection, activation=args.activation, n_left_contexts=args.lc, n_right_contexts=args.rc, init_embed=embed, gpu=args.gpu)
     else:
-        rnn = RNN(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, use_bidirection=args.bidirection)
+        rnn = RNN(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, use_bidirection=args.bidirection, activation=args.activation)
 
     model = SequenceTagger(rnn, id2label)
     model.compute_fscore = True
