@@ -403,72 +403,29 @@ def main():
     if args.embed_model:
         embed_model = emb.read_model(args.embed_model)
 
-    # Load dataset and pre-trained embedding model
+    # Load dataset
 
     train_path = args.dir_path + args.train_data
     val_path = args.dir_path + args.validation_data
     test_path = args.dir_path + (args.test_data if args.test_data else '')
     refer_vocab = embed_model.wv if args.embed_model else set()
-    token2id = {}
-    test = []
 
     limit = args.limit if args.limit > 0 else -1
-    if args.format == 'bccwj':
-        train, train_t, token2id, label2id = util.create_data_wordseg(
-            train_path, token2id=token2id, schema=args.tag_schema, limit=limit)
-        val, val_t, token2id, label2id = util.create_data_wordseg(
-            val_path, token2id=token2id, label2id=label2id,
-            schema=args.tag_schema, limit=limit)
-        if args.test_data:
-            test, test_t, token2id, label2id = util.create_data_wordseg(
-                test_path, token2id=token2id, label2id=label2id, update_token=False,
-                schema=args.tag_schema, limit=limit)
 
-    elif args.format == 'cws':
-        train, train_t, token2id, label2id = util.create_data_wordseg2(
-            train_path, token2id=token2id, schema=args.tag_schema, limit=limit)
-        val, val_t, token2id, label2id = util.create_data_wordseg2(
-            val_path, token2id=token2id, label2id=label2id,
-            schema=args.tag_schema, limit=limit)
-        if args.test_data:
-            test, test_t, token2id, label2id = util.create_data_wordseg2(
-                test_path, token2id=token2id, label2id=label2id, update_token=False,
-                schema=args.tag_schema, limit=limit)
-            
-    elif args.format == 'bccwj_pos':
-        train, train_t, token2id, label2id = util.create_data_for_pos_tagging(
-            train_path, token2id=token2id, subpos_depth=args.subpos_depth, limit=limit)
-        val, val_t, token2id, label2id = util.create_data_for_pos_tagging(
-            val_path, token2id=token2id, label2id=label2id, subpos_depth=args.subpos_depth, limit=limit)
-        if args.test_data:
-            test, test_t, token2id, label2id = util.create_data_for_pos_tagging(
-                test_path, token2id=token2id, label2id=label2id, subpos_depth=args.subpos_depth,
-                update_token=False, refer_vocab=refer_vocab, limit=limit)
+    train, train_t, token2id, label2id = util.read_data(
+        args.format, train_path, subpos_depth=args.subpos_depth,
+        schema=args.tag_schema, limit=limit)
 
-    elif args.format == 'wsj':
-        train, train_t, token2id, label2id = util.create_data_for_wsj(
-            train_path, token2id=token2id, limit=limit)
-        val, val_t, token2id, label2id = util.create_data_for_wsj(
-            val_path, token2id=token2id, label2id=label2id, limit=limit)
-        if args.test_data:
-            test, test_t, token2id, label2id = util.create_data_for_wsj(
-                test_path, token2id=token2id, label2id=label2id, update_token=False,
-                refer_vocab=refer_vocab, limit=limit)
+    val, val_t, token2id, label2id = util.read_data(
+        args.format, val_path, token2id=token2id, label2id=label2id, subpos_depth=args.subpos_depth,
+        schema=args.tag_schema, limit=limit)
 
-    elif args.format == 'conll2003':
-        train, train_t, token2id, label2id = util.create_data_for_conll2003(
-            train_path, token2id=token2id, schema=args.tag_schema, limit=limit)
-        print('vocab size:', len(token2id))
-        val, val_t, token2id, label2id = util.create_data_for_conll2003(
-            val_path, token2id=token2id, label2id=label2id, schema=args.tag_schema, limit=limit)
-        print('vocab size:', len(token2id))
-        if args.test_data:
-            test, test_t, token2id, label2id = util.create_data_for_conll2003(
-                test_path, token2id=token2id, label2id=label2id, update_token=False,
-                refer_vocab=refer_vocab, schema=args.tag_schema, limit=limit)
-            print('vocab size:', len(token2id))
+    if args.test_data:
+        test, test_t, token2id, label2id = util.read_data(
+            args.format, test_path, token2id=token2id, label2id=label2id, update_token=False,
+            refer_vocab=refer_vocab, schema=args.tag_schema, limit=limit)
     else:
-        pass
+        test = []
 
     n_train = len(train)
     n_val = len(val)

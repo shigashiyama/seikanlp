@@ -16,8 +16,8 @@ Schema = enum.Enum("Schema", "BI BIES")
 # ...
 # 0001  1 17 O       .     .               NOFUNC          join              8 I-S
 #
-def create_data_for_wsj(path, token2id={}, label2id={}, update_token=True, 
-                        update_label=True, refer_vocab=set(), limit=-1):
+def read_wsj_data(path, token2id={}, label2id={}, update_token=True, 
+                  update_label=True, refer_vocab=set(), limit=-1):
 
     # id2token = {}
     # id2label = {}
@@ -83,7 +83,7 @@ def create_data_for_wsj(path, token2id={}, label2id={}, update_token=True,
 
 
 # for CoNLL-2003 NER
-# 単語単位で BIO2 フォーマットに変換 (未実施：先頭の I -> B へ置き換え)
+# 単語単位で BI or BIES フォーマットに変換
 #
 # example of input data:
 # EU NNP I-NP I-ORG
@@ -91,8 +91,8 @@ def create_data_for_wsj(path, token2id={}, label2id={}, update_token=True,
 # German JJ I-NP I-MISC
 # call NN I-NP O
 #
-def create_data_for_conll2003(path, token2id={}, label2id={}, update_token=True, 
-                              update_label=True, refer_vocab=set(), schema='BI', limit=-1):
+def read_conll2003_data(path, token2id={}, label2id={}, update_token=True, 
+                        update_label=True, refer_vocab=set(), schema='BI', limit=-1):
 
     if schema == 'BI':
         sch = Schema.BI
@@ -222,15 +222,15 @@ def convert_label_sequence(org_lab, sch, label2id, update_label):
 
     return new_lab
 
-# for pos tagging
+# for BCCWJ pos tagging
 #
 # example of input data:
 # B       最後    名詞-普通名詞-一般$
 # I       の      助詞-格助詞$
 # I       会話    名詞-普通名詞-サ変可能$
 #
-def create_data_for_pos_tagging(path, token2id={}, label2id={}, cate_row=-1, subpos_depth=-1,
-                         update_token=True, update_label=True, refer_vocab=set(), limit=-1):
+def read_bccwj_data_for_postag(path, token2id={}, label2id={}, cate_row=-1, subpos_depth=-1,
+                               update_token=True, update_label=True, refer_vocab=set(), limit=-1):
     instances = []
     labels = []
     if len(token2id) == 0:
@@ -304,9 +304,8 @@ def create_data_for_pos_tagging(path, token2id={}, label2id={}, cate_row=-1, sub
 # I       の      助詞-格助詞$
 # I       会話    名詞-普通名詞-サ変可能$
 #
-def create_data_wordseg(path, token2id={}, label2id={}, cate_row=-1, 
-                         update_token=True, update_label=True, schema='BI', limit=-1):
-    #Schema = enum.Enum("Schema", "BI BIES")
+def read_bccwj_data_for_wordseg(path, token2id={}, label2id={}, cate_row=-1, 
+                                update_token=True, update_label=True, schema='BI', limit=-1):
     if schema == 'BI':
         sch = Schema.BI
     else:
@@ -380,8 +379,8 @@ def create_data_wordseg(path, token2id={}, label2id={}, cate_row=-1,
 # 偶尔  有  老乡  拥  上来  想  看 ...
 # 说  ，  这  “  不是  一种  风险  ，  而是  一种  保证  。
 # ...
-def create_data_wordseg2(path, token2id={}, label2id={}, cate_row=-1, 
-                         update_token=True, update_label=True, schema='BI', limit=-1):
+def read_cws_data(path, token2id={}, label2id={}, cate_row=-1, 
+                  update_token=True, update_label=True, schema='BI', limit=-1):
     if schema == 'BI':
         sch = Schema.BI
     else:
@@ -453,7 +452,7 @@ def create_data_wordseg2(path, token2id={}, label2id={}, cate_row=-1,
 # I       の      助詞-格助詞$
 # I       会話    名詞-普通名詞-サ変可能$
 #
-def process_data_for_kytea(input, output, subpos_depth=1):
+def process_bccwj_data_for_kytea(input, output, subpos_depth=1):
     wf = open(output, 'w')
 
     instances = []
@@ -534,28 +533,31 @@ def get_id(string, string2id, update=True):
         return string2id[UNK_SYMBOL]
 
 
+def read_data(data_format, path, token2id={}, label2id={}, subpos_depth=-1, update_token=True, 
+              update_label=True, refer_vocab=set(), schema='BIES', limit=-1):
+    if data_format == 'bccwj_ws' or data_format == 'cws':
+        read_data = read_bccwj_data_for_wordseg if data_format == 'bccwj_ws' else read_cws_data
+
+        instances, labels, token2id, label2id = read_data_wordseg(
+            path, token2id=token2id, label2id=label2id, update_token=update_token, 
+            update_label=update_label, schema=schema, limit=limit)
+
+    elif data_format == 'bccwj_pos' or data_format == 'wsj':
+        read_data = read_bccwj_data_for_postag if data_format == 'bccwj_pos' else read_wsj_data
+
+        instances, labels, token2id, label2id = read_data(
+            path, token2id=token2id, label2id=label2id, update_token=update_token, 
+            update_label=update_label, subpos_depth=subpos_depth, refer_vocab=refer_vocab, limit=limit)
+
+    elif data_format == 'conll2003':
+        read_data = read_conll2003_data
+
+        instances, labels, token2id, label2id = read_data(
+            path, token2id=token2id, label2id=label2id, update_token=update_token, update_label=update_label, 
+            subpos_depth=subpos_depth, refer_vocab=refer_vocab, schema=schema, limit=limit)
+
+    return instances, labels, token2id, label2id
+
+
 if __name__ == '__main__':
-
-    # train_path = 'bccwj_data/Disk4/processed/ma2/BCCWJ-LB-a2b_train.tsv'
-    # train_path = 'conll2003_data/eng.train'
-    train_path = 'cws_data/pku_train.tsv'
-
-    # train, train_t, token2id, label2id = create_data_for_pos_tagging(train_path, subpos_depth=1)
-    # train, train_t, token2id, label2id = create_data_for_wsj(train_path)
-    # train, train_t, token2id, label2id = create_data_for_conll2003(train_path, schema='BIES')
-    # train, train_t, token2id, label2id = create_data_wordseg(train_path, schema='BIES')
-    train, train_t, token2id, label2id = create_data_wordseg2(train_path, schema='BIES', limit=20)
-
-    print(len(train))
-    print(len(token2id))
-    print(label2id)
-
-    # val_path = 'bccwj_data/Disk4/processed/ma2/BCCWJ-LB-a2b_val.tsv'
-    # val_path = 'cws_data/pku_val.tsv'
-
-    # val, val_t, token2id, label2id = create_data_wordseg(val_path, token2id=token2id, label2id=label2id, schema='BIES')
-    # val, val_t, token2id, label2id = create_data_wordseg2(val_path, token2id=token2id, label2id=label2id, schema='BIES')
-
-    # print(len(val))
-    # print(len(token2id))
-    # print(label2id)
+    pass
