@@ -240,12 +240,26 @@ class SequenceTagger(link.Chain):
             yield [x_str, t_str, y_str]
 
             i += 1
-        
+
+
+def get_activation(activation):
+    if not activation  or activation == 'identity':
+        return F.identity
+    elif activation == 'relu':
+        return F.relu
+    elif activation == 'tanh':
+        return F.tanh
+    elif activation == 'sigmoid':
+        return F.sigmoid
+    else:
+        return
+
 
 def batch_generator(instances, labels, batchsize, shuffle=True, xp=np):
 
     len_data = len(instances)
     perm = np.random.permutation(len_data) if shuffle else range(0, len_data)
+
     for i in range(0, len_data, batchsize):
         i_max = min(i + batchsize, len_data)
         xs = [xp.asarray(instances[perm[i]], dtype=np.int32) for i in range(i, i_max)]
