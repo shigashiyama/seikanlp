@@ -1,10 +1,15 @@
 import re
+import pickle
+import argparse
 import copy
 import enum
 import numpy as np
 
+import models
+import read_embedding as emb
 
 UNK_SYMBOL = '<UNK>'
+NUM_SYMBOL = '<NUM>'
 Schema = enum.Enum("Schema", "BI BIES")
 
 # for PTB WSJ (CoNLL-2005)
@@ -17,8 +22,8 @@ Schema = enum.Enum("Schema", "BI BIES")
 # 0001  1 17 O       .     .               NOFUNC          join              8 I-S
 #
 def read_wsj_data(path, token2id={}, label2id={}, update_token=True, 
-                  update_label=True, refer_vocab=set(), limit=-1):
-
+                  update_label=True, refer_vocab=set(), limit=-1,
+                  lowercase=True, replace_digits=True):
     # id2token = {}
     # id2label = {}
 
@@ -62,6 +67,12 @@ def read_wsj_data(path, token2id={}, label2id={}, update_token=True,
             pos = line[5].rstrip()
             chunk = line[4].rstrip()
 
+            if lowercase:
+                word = word.lower()
+
+            if replace_digits:
+                word = re.sub(r'[0-9]+', NUM_SYMBOL, word)
+
             update_this_token = update_token or word in refer_vocab
             wi = get_id(word, token2id, update_this_token)
             li = get_id(pos, label2id, update_label)
@@ -92,7 +103,8 @@ def read_wsj_data(path, token2id={}, label2id={}, update_token=True,
 # call NN I-NP O
 #
 def read_conll2003_data(path, token2id={}, label2id={}, update_token=True, 
-                        update_label=True, refer_vocab=set(), schema='BI', limit=-1):
+                        update_label=True, refer_vocab=set(), schema='BI', limit=-1,
+                        lowercase=True, replace_digits=True):
 
     if schema == 'BI':
         sch = Schema.BI
@@ -147,6 +159,12 @@ def read_conll2003_data(path, token2id={}, label2id={}, update_token=True,
 
             if word == '-DOCSTART-':
                 continue
+
+            if lowercase:
+                word = word.lower()
+
+            if replace_digits:
+                word = re.sub(r'[0-9]+', NUM_SYMBOL, word)
 
             update_this_token = update_token or word in refer_vocab
             ins.append(get_id(word, token2id, update_this_token))
@@ -534,7 +552,8 @@ def get_id(string, string2id, update=True):
 
 
 def read_data(data_format, path, token2id={}, label2id={}, subpos_depth=-1, update_token=True, 
-              update_label=True, refer_vocab=set(), schema='BIES', limit=-1):
+              update_label=True, refer_vocab=set(), schema='BIES', limit=-1, lowercase=True, replace_digits=True):
+
     if data_format == 'bccwj_ws' or data_format == 'cws':
         read_data = read_bccwj_data_for_wordseg if data_format == 'bccwj_ws' else read_cws_data
 
@@ -542,24 +561,216 @@ def read_data(data_format, path, token2id={}, label2id={}, subpos_depth=-1, upda
             path, token2id=token2id, label2id=label2id, update_token=update_token, 
             update_label=update_label, schema=schema, limit=limit)
 
-    elif data_format == 'bccwj_pos' or data_format == 'wsj':
-        read_data = read_bccwj_data_for_postag if data_format == 'bccwj_pos' else read_wsj_data
-
+    elif data_format == 'bccwj_pos':
+        read_data = read_bccwj_data_for_postag
+        
         instances, labels, token2id, label2id = read_data(
             path, token2id=token2id, label2id=label2id, update_token=update_token, 
             update_label=update_label, subpos_depth=subpos_depth, refer_vocab=refer_vocab, limit=limit)
+
+    elif data_format == 'wsj':
+        read_data = read_wsj_data
+
+        instances, labels, token2id, label2id = read_data(
+            path, token2id=token2id, label2id=label2id, update_token=update_token, update_label=update_label, 
+            refer_vocab=refer_vocab, limit=limit,
+            lowercase=lowercase, replace_digits=replace_digits)
 
     elif data_format == 'conll2003':
         read_data = read_conll2003_data
 
         instances, labels, token2id, label2id = read_data(
             path, token2id=token2id, label2id=label2id, update_token=update_token, update_label=update_label, 
-            subpos_depth=subpos_depth, refer_vocab=refer_vocab, schema=schema, limit=limit)
+            refer_vocab=refer_vocab, schema=schema, limit=limit, 
+            lowercase=lowercase, replace_digits=replace_digits)
     else:
         return
 
     return instances, labels, token2id, label2id
 
 
+def read_dictionary(path):
+    if path.endswith('bin'):
+        with open(path, 'rb') as f:
+            dic = pickle.load(f)
+    else:
+        dic = {}
+        with open(path, 'r') as f:
+            for line in f:
+                arr = line.strip().split('\t')
+                if len(arr) < 2:
+                    continue
+
+                dic.update({arr[0]:arr[1]})
+
+    return dic
+
+
+def write_dictionary(dic, path):
+    if path.endswith('bin'):
+        with open(path, 'wb') as f:
+            pickle.dump(dic, f)
+    else:
+        with open(path, 'w') as f:
+            for token, index in dic.items():
+                f.write('%s\t%d\n' % (token, index))
+
+
+def read_param_file(path):
+    params = {}
+
+    with open(path, 'r') as f:
+        for line in f:
+            arr = line.strip().split(' ')
+            if len(arr) < 2:
+                continue
+            
+            params.update({arr[0]:arr[1]})
+
+    return params
+
+
+def load_model_from_params(params, model_path='', token2id=None, label2id=None, embed_model=None, gpu=-1):
+    if not 'embed_dim' in params:
+        params['embed_dim'] = 300
+    else:
+        params['embed_dim'] = int(params['embed_dim'])
+
+    if not 'rnn_layer' in params:
+        params['rnn_layer'] = 1
+    else:
+        params['rnn_layer'] = int(params['rnn_layer'])
+
+    if not 'rnn_hiddlen_unit' in params:
+        params['rnn_hidden_unit'] = 500
+    else:
+        params['rnn_hidden_unit'] = int(params['rnn_hidden_unit'])
+
+    if not 'rnn_unit_type' in params:
+        params['rnn_unit_type'] = 'lstm'
+
+    if not 'rnn_bidirection' in params:
+        params['rnn_bidirection'] = False
+    else:
+        params['rnn_bidirection'] = str(params['rnn_bidirection']).lower() == 'true'
+
+    if not 'crf' in params:
+        params['crf'] = False
+    else:
+        params['crf'] = str(params['crf']).lower() == 'true'
+
+    if not 'linear_activation' in params:
+        params['linear_activation'] = 'identity'
+
+    if not 'left_contexts' in params:
+        params['left_contexts'] = 0
+    else:
+        params['left_contexts'] = int(params['left_contexts'])
+
+    if not 'right_contexts' in params:
+        params['right_contexts'] = 0
+    else:
+        params['right_contexts'] = int(params['right_contexts'])
+
+    if not 'dropout' in params:
+        params['dropout'] = 0
+    else:
+        params['dropout'] = int(params['dropout'])
+        
+    if not 'tag_schema' in params:
+        params['tag_schema'] = 'BIES'
+    
+    if not embed_model and not 'embed_path' in params:
+        id2token = {v:k for k,v in token2id.items()}
+        embed_model = emb.read_model(params['embed_path'])
+        embed = emb.construct_lookup_table(id2token, embed_model, gpu=gpu)
+        embed_dim = embed.W.shape[1]
+    else:
+        embed = None
+
+    if not token2id:
+        token2id = read_dictionary(token2id_path)
+    if not label2id:
+        label2id = read_dictionary(label2id_path)
+    id2label = {v:k for k,v in label2id.items()}
+
+    if params['crf']:
+        rnn = models.RNN_CRF(
+            params['rnn_layer'], len(token2id), params['embed_dim'], params['rnn_hidden_unit'], 
+            len(label2id), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
+            rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
+            n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
+            init_embed=embed, gpu=gpu)
+    else:
+        rnn = models.RNN(
+            params['rnn_layer'], len(token2id), params['embed_dim'], params['rnn_hidden_unit'], 
+            len(label2id), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
+            rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
+            # n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
+            init_embed=embed, gpu=gpu)
+
+    model = models.SequenceTagger(rnn, id2label)
+    if model_path:
+        chainer.serializers.load_npz(model_path, model)
+    if gpu >= 0:
+        model.to_gpu()
+
+    return model
+
+        
+def write_param_file(params, path):
+    with open(path, 'w') as f:
+        f.write('# %s\n\n' % path)
+        f.write('# paths\n')
+        f.write('token2id_path %s\n' % params['token2id_path'])
+        f.write('label2id_path %s\n' % params['label2id_path'])
+        if 'embed_path' in params:
+            f.write('embed_path %s\n' % params['embed_path'])
+
+        f.write('# model parameters\n')
+        f.write('embed_dim %d\n' % params['embed_dim'])
+        f.write('rnn_layer %d\n' % params['rnn_layer'])
+        f.write('rnn_hiddlen_unit %d\n' %  params['rnn_hidden_unit'])
+        f.write('rnn_unit_type %s'  % params['rnn_unit_type'])
+        f.write('rnn_bidirection %s\n' % str(params['rnn_bidirection']))
+        f.write('crf %s\n' % str(params['crf']))
+        f.write('linear_activation %s\n' % params['linear_activation'])
+        f.write('left_contexts %d\n' % params['left_contexts'])
+        f.write('right_contexts %d\n' % params['right_contexts'])
+        f.write('dropout %d\n' % params['dropout'])
+
+        f.write('# others\n')
+        f.write('model_date %s\n' % params['model_date'])
+        f.write('tag_schema %s\n' % params['tag_schema'])
+    
+
 if __name__ == '__main__':
-    pass
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input_path', '-i', default='')
+    parser.add_argument('--input_format', '-f', default='')
+    parser.add_argument('--subpos_depth', '-s', type=int, default=-1)
+    parser.add_argument('--tag_schema', '-t', default='BIES')
+    parser.add_argument('--limit', '-l', type=int, default=-1)
+    parser.add_argument('--output_filename', '-o', default='')
+    parser.add_argument('--output_format', '-x', default='bin')
+    args = parser.parse_args()
+
+    instances, labels, token2id, label2id = read_data(
+        args.input_format, args.input_path, subpos_depth=args.subpos_depth, schema=args.tag_schema, limit=args.limit)
+
+    t2i_tmp = list(token2id.items())
+    id2token = {v:k for k,v in token2id.items()}
+    id2label = {v:k for k,v in label2id.items()}
+
+    print('vocab =', len(token2id))
+    print('data length:', len(instances))
+    print()
+    print('instances:', instances[:3], '...', instances[len(instances)-3:])
+    print('labels:', labels[:3], '...', labels[len(labels)-3:])
+    print()
+    print('token2id:', t2i_tmp[:3], '...', t2i_tmp[len(t2i_tmp)-3:])
+    print('label2id:', label2id)
+
+    if args.output_filename:
+        write_dictionary(token2id, args.output_filename + '_t2i.' + args.output_format)
+        write_dictionary(label2id, args.output_filename + '_l2i.' + args.output_format)
