@@ -35,11 +35,10 @@ from conlleval import conlleval
 
 
 class RNN_CRF(chainer.Chain):
-    def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bidirection=True, activation='identity', n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
+    def __init__(self, n_rnn_layers, n_vocab, n_lt_units, n_rnn_units, n_labels, dropout, rnn_type='lstm', use_bidirection=True, activation='identity', n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
         super(RNN_CRF, self).__init__()
 
         with self.init_scope():
-            self.activation = activation # tmp
             self.act = get_activation(activation)
             if not self.act:
                 print('unsupported activation function.')
@@ -58,29 +57,46 @@ class RNN_CRF(chainer.Chain):
             self.context_size = 1 + n_left_contexts + n_right_contexts
             self.input_vec_size = self.lookup_dim * self.context_size
             vocab_size = n_vocab + n_left_contexts + n_right_contexts
-            lstm_in = n_lt_units * self.context_size
+            rnn_in = n_lt_units * self.context_size
 
             # init layers
             self.lookup = L.EmbedID(vocab_size, self.lookup_dim) if init_embed == None else init_embed
-            self.lstm = L.NStepBiLSTM(n_lstm_layers, lstm_in, n_lstm_units, dropout) if use_bidirection else L.NStepLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout)
-            self.linear = L.Linear(n_lstm_units * (2 if use_bidirection else 1), n_labels)
+
+            self.rnn_type = rnn_type
+            if rnn_type == 'lstm':
+                if use_bidirection:
+                    self.rnn_unit = L.NStepBiLSTM(n_rnn_layers, rnn_in, n_rnn_units, dropout)
+                else:
+                    self.rnn_unit = L.NStepLSTM(n_rnn_layers, n_lt_units, n_rnn_units, dropout)
+            elif rnn_type == 'gru':
+                if use_bidirection:
+                    self.rnn_unit = L.NStepBiGRU(n_rnn_layers, rnn_in, n_rnn_units, dropout) 
+                else:
+                    self.rnn_unit = L.NStepGRU(n_rnn_layers, n_lt_units, n_rnn_units, dropout)
+            else:
+                if use_bidirection:
+                    self.rnn_unit = L.NStepBiRNNTanh(n_rnn_layers, rnn_in, n_rnn_units, dropout) 
+                else:
+                    self.rnn_unit = L.NStepRNNTanh(n_rnn_layers, n_lt_units, n_rnn_units, dropout)
+
+            self.linear = L.Linear(n_rnn_units * (2 if use_bidirection else 1), n_labels)
             self.crf = L.CRF1d(n_labels)
 
             print('## parameters')
             print('# lookup:', self.lookup.W.shape)
-            print('# lstm:')
-            i = 0
-            for c in self.lstm._children:
-                print('#   param', i)
-                print('#      0 -', c.w0.shape, '+', c.b0.shape)
-                print('#      1 -', c.w1.shape, '+', c.b1.shape)
-                print('#      2 -', c.w2.shape, '+', c.b2.shape)
-                print('#      3 -', c.w3.shape, '+', c.b3.shape)
-                print('#      4 -', c.w4.shape, '+', c.b4.shape)
-                print('#      5 -', c.w5.shape, '+', c.b5.shape)
-                print('#      6 -', c.w6.shape, '+', c.b6.shape)
-                print('#      7 -', c.w7.shape, '+', c.b7.shape)
-                i += 1
+            print('# rnn unit:', self.rnn_unit)
+            # i = 0
+            # for c in self.rnn_unit._children:
+            #     print('#   param', i)
+            #     print('#      0 -', c.w0.shape, '+', c.b0.shape)
+            #     print('#      1 -', c.w1.shape, '+', c.b1.shape)
+            #     print('#      2 -', c.w2.shape, '+', c.b2.shape)
+            #     print('#      3 -', c.w3.shape, '+', c.b3.shape)
+            #     print('#      4 -', c.w4.shape, '+', c.b4.shape)
+            #     print('#      5 -', c.w5.shape, '+', c.b5.shape)
+            #     print('#      6 -', c.w6.shape, '+', c.b6.shape)
+            #     print('#      7 -', c.w7.shape, '+', c.b7.shape)
+            #     i += 1
             print('# linear:', self.linear.W.shape, '+', self.linear.b.shape)
             print('# activation:', self.act)
             print('# crf:', self.crf.cost.shape)
@@ -108,12 +124,15 @@ class RNN_CRF(chainer.Chain):
         xs = exs
 
         with chainer.using_config('train', train):
-            # lstm layers
-            hy, cy, hs = self.lstm(None, None, xs)
+            # rnn layers
+            if self.rnn_type == 'lstm':
+                hy, cy, hs = self.rnn_unit(None, None, xs)
+            else:
+                hy, hs = self.rnn_unit(None, xs)
 
             # linear layer
             
-            if not self.activation or self.activation == 'identity':
+            if not self.act or self.act == 'identity':
                 hs = [self.linear(h) for h in hs]                
             else:
                 hs = [self.act(self.linear(h)) for h in hs]
@@ -140,16 +159,16 @@ class RNN_CRF(chainer.Chain):
     # temporaly code for memory checking
     def reset(self):
         print('reset')
-        del self.lookup, self.lstm, self.linear, self.crf
+        del self.lookup, self.rnn_unit, self.linear, self.crf
         gc.collect()
 
         self.lookup = L.EmbedID(self.vocab_size, self.lookup_dim)
-        self.lstm = L.NStepBiLSTM(self.n_lstm_layers, self.lstm_in, self.n_lstm_units, self.dropout) if self.use_bidirection else L.NStepLSTM(self.n_lstm_layers, self.n_lt_units, self.n_lstm_units, self.dropout)
-        self.linear = L.Linear(self.n_lstm_units * (2 if self.use_bidirection else 1), self.n_labels)
+        self.rnn_unit = L.NStepBiLSTM(self.n_rnn_layers, self.rnn_unit_in, self.n_rnn_units, self.dropout) if self.use_bidirection else L.NStepLSTM(self.n_rnn_layers, self.n_lt_units, self.n_rnn_units, self.dropout)
+        self.linear = L.Linear(self.n_rnn_units * (2 if self.use_bidirection else 1), self.n_labels)
         self.crf = L.CRF1d(self.n_labels)
 
         self.lookup = self.lookup.to_gpu()
-        self.lstm = self.lstm.to_gpu()
+        self.rnn_unit = self.rnn_unit.to_gpu()
         self.linear = self.linear.to_gpu()
         self.crf = self.crf.to_gpu()
 
@@ -157,7 +176,7 @@ class RNN_CRF(chainer.Chain):
         # print('# lookup:', self.lookup.W.shape)
         # print('# lstm:')
         # i = 0
-        # for c in self.lstm._children:
+        # for c in self.rnn_unit._children:
         #     print('#   param', i)
         #     print('#      0 -', c.w0.shape, '+', c.b0.shape)
         #     print('#      1 -', c.w1.shape, '+', c.b1.shape)
@@ -175,7 +194,7 @@ class RNN_CRF(chainer.Chain):
         
 
 class RNN(chainer.Chain):
-    def __init__(self, n_lstm_layers, n_vocab, n_lt_units, n_lstm_units, n_labels, dropout, use_bidirection=True, activation='identity'):
+    def __init__(self, n_rnn_layers, n_vocab, n_lt_units, n_rnn_units, n_labels, dropout, rnn_type='lstm', use_bidirection=True, activation='identity'):
         super(RNN, self).__init__()
         with self.init_scope():
             self.act = get_activation(activation)
@@ -184,15 +203,35 @@ class RNN(chainer.Chain):
                 sys.exit()
 
             self.embed = L.EmbedID(n_vocab, n_lt_units)
-            self.l1 = L.NStepBiLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout) if use_bidirection else L.NStepLSTM(n_lstm_layers, n_lt_units, n_lstm_units, dropout)
-            self.l2 = L.Linear(n_lstm_units * (2 if use_bidirection else 1), n_labels)
+
+            self.rnn_type = rnn_type
+            if rnn_type == 'lstm':
+                if use_bidirection:
+                    self.rnn_unit = L.NStepBiLSTM(n_rnn_layers, rnn_in, n_rnn_units, dropout)
+                else:
+                    self.rnn_unit = L.NStepLSTM(n_rnn_layers, n_lt_units, n_rnn_units, dropout)
+            elif rnn_type == 'gru':
+                if use_bidirection:
+                    self.rnn_unit = L.NStepBiGRU(n_rnn_layers, rnn_in, n_rnn_units, dropout) 
+                else:
+                    self.rnn_unit = L.NStepGRU(n_rnn_layers, n_lt_units, n_rnn_units, dropout)
+            else:
+                if use_bidirection:
+                    self.rnn_unit = L.NStepBiRNNTanh(n_rnn_layers, rnn_in, n_rnn_units, dropout) 
+                else:
+                    self.rnn_unit = L.NStepRNNTanh(n_rnn_layers, n_lt_units, n_rnn_units, dropout)
+
+            self.linear = L.Linear(n_rnn_units * (2 if use_bidirection else 1), n_labels)
             self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
         
     def __call__(self, xs, ts, train=True):
         xs = [self.embed(x) for x in xs]
         with chainer.using_config('train', train):
-            hy, cy, hs = self.l1(None, None, xs)
-            ys = [self.act(self.l2(h)) for h in hs]
+            if self.rnn_type == 'lstm':
+                hy, cy, hs = self.rnn_unit(None, None, xs)
+            else:
+                hy, hs = self.rnn_unit(None, xs)
+            ys = [self.act(self.linear(h)) for h in hs]
 
         loss = None
         ps = []
@@ -330,7 +369,8 @@ def main():
     parser.add_argument('--resume', default='', help='Resume the training from snapshot')
     parser.add_argument('--resume_epoch', type=int, default=1, help='Resume the training from the epoch')
     parser.add_argument('--iter_to_report', '-i', type=int, default=10000)
-    parser.add_argument('--layer', '-l', type=int, default=1, help='Number of LSTM layers')
+    parser.add_argument('--layer', '-l', type=int, default=1, help='Number of RNN layers')
+    parser.add_argument('--rnn_unit_type', default='lstm')
     parser.add_argument('--bidirection', action='store_true')
     parser.add_argument('--crf', action='store_true')
     parser.add_argument('--activation', '-a', default='')
@@ -342,7 +382,7 @@ def main():
     parser.add_argument('--optimizer', '-o', default='sgd')
     parser.add_argument('--lr', '-r', type=float, default=1, help='Value of initial learning rate')
     parser.add_argument('--momentum', '-m', type=float, default=0, help='Momentum ratio')
-    parser.add_argument('--lrdecay', type=float, default=0, help='Coefficient for learning rate decay')
+    parser.add_argument('--lrdecay', default='', help='\'start:width:decay rate\'')
     parser.add_argument('--weightdecay', '-w', type=float, default=0, help='Weight decay ratio')
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--gradclip', '-c', type=float, default=5,)
@@ -358,6 +398,7 @@ def main():
     parser.set_defaults(bidirection=False)
     args = parser.parse_args()
 
+    # print('# bproplen: {}'.format(args.bproplen))
     print('# No log: {}'.format(args.nolog))
     print('# GPU: {}'.format(args.gpu))
     print('# cudnn: {}'.format(args.use_cudnn))
@@ -366,7 +407,7 @@ def main():
     print('# minibatch-size: {}'.format(args.batchsize))
     print('# epoch: {}'.format(args.epoch))
     print('# iteration to report: {}'.format(args.iter_to_report))
-    # print('# bproplen: {}'.format(args.bproplen))
+    print('# rnn unit type: {}'.format(args.rnn_unit_type))
     print('# bidirection: {}'.format(args.bidirection))
     print('# crf: {}'.format(args.crf))
     print('# activation: {}'.format(args.activation))
@@ -379,6 +420,14 @@ def main():
     print('# optimization algorithm: {}'.format(args.optimizer))
     print('# learning rate: {}'.format(args.lr))
     print('# learning rate decay: {}'.format(args.lrdecay))
+    if args.lrdecay:
+        array = args.lrdecay.split(':')
+        lrdecay_start = int(array[0])
+        lrdecay_width = int(array[1])
+        lrdecay_rate = float(array[2])
+        print('# learning rate decay start:', lrdecay_start)
+        print('# learning rate decay width:', lrdecay_width)
+        print('# learning rate decay rate:',  lrdecay_rate)
     print('# momentum: {}'.format(args.momentum))
     print('# wieght decay: {}'.format(args.weightdecay))
     print('# dropout ratio: {}'.format(args.dropout))
@@ -465,9 +514,12 @@ def main():
     else:
         embed = None
     if args.crf:
-        rnn = RNN_CRF(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, use_bidirection=args.bidirection, activation=args.activation, n_left_contexts=args.lc, n_right_contexts=args.rc, init_embed=embed, gpu=args.gpu)
+        rnn = RNN_CRF(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, 
+                      rnn_type=args.rnn_unit_type, use_bidirection=args.bidirection, activation=args.activation, 
+                      n_left_contexts=args.lc, n_right_contexts=args.rc, init_embed=embed, gpu=args.gpu)
     else:
-        rnn = RNN(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, use_bidirection=args.bidirection, activation=args.activation)
+        rnn = RNN(args.layer, n_vocab, args.lookup_dim, args.hidden_unit, n_labels, args.dropout, 
+                  rnn_type=args.rnn_unit_type, use_bidirection=args.bidirection, activation=args.activation)
 
     model = SequenceTagger(rnn, id2label)
     model.compute_fscore = True
@@ -503,9 +555,6 @@ def main():
     # Run
 
     if args.eval:
-        # print('<validation result>')
-        # v_stat, v_res = evaluate(model, val, val_t, args.batchsize, xp=xp)
-        # print()
         print('<test result>')
         te_stat, te_res = evaluate(model, test, test_t, args.batchsize, xp=xp)
         print()
@@ -525,6 +574,16 @@ def main():
         if not args.nolog:
             logger.write('INFO: start epoch %d at %s\n' % (e, time))
         print('start epoch %d: %s' % (e, time))
+
+        # learning rate decay
+
+        if args.lrdecay and args.optimizer == 'sgd':
+            if (e - lrdecay_start) % lrdecay_width == 0:
+                lr_tmp = optimizer.lr
+                optimizer.lr = optimizer.lr * lrdecay_rate
+                if not args.nolog:
+                    logger.write('learning decay: %f -> %f' % (lr_tmp, optimizer.lr))
+                print('learning decay: %f -> %f' % (lr_tmp, optimizer.lr))
 
         count = 0
         total_loss = 0
@@ -587,7 +646,7 @@ def main():
 
                 # Save the model
                 #mdl_path = 'model/rnn_%s_i%.2fk.mdl' % (time0, (1.0 * n_iter / 1000))
-                mdl_path = 'model/rnn_%s_i%s.mdl' % (time0, now_e)
+                mdl_path = 'nn_model/rnn_%s_i%s.mdl' % (time0, now_e)
                 print('save the model: %s\n' % mdl_path)
                 if not args.nolog:
                     logger.write('INFO: save the model: %s\n' % mdl_path)
@@ -602,12 +661,6 @@ def main():
                 if not args.nolog:
                     logger.close()
                     logger = open('log/' + time0 + '.log', 'a')
-
-        # # learning rate decay
-        # if args.lrdecay > 0 and args.optimizer == 'sgd':
-        #     optimizer.lr = args.lr / (1 + e * args.lrdecay) # (Ma 2016)
-        #     print('lr:', optimizer.lr)
-        #     print()
 
     time = datetime.now().strftime('%Y%m%d_%H%M')
     if not args.nolog:
