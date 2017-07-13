@@ -252,10 +252,10 @@ def read_bccwj_data_for_postag(path, token2id={}, label2id={}, cate_row=-1, subp
                 continue
 
             line = line.rstrip('\n').split('\t')
-            bos = line[0]
-            word = line[1]
-            label = line[2].rstrip('$')     # pos
-
+            bos = line[2]
+            word = line[5]
+            label = line[3]     # pos
+            
             if subpos_depth == 1:
                 label = label.split('-')[0]
             elif subpos_depth > 1:
@@ -331,9 +331,9 @@ def read_bccwj_data_for_wordseg(path, token2id={}, label2id={}, cate_row=-1,
             if len(line) < 2:
                 continue
 
-            pair = line.rstrip('\n').split('\t')
-            bos = pair[0]
-            word = pair[1]
+            line = line.rstrip('\n').split('\t')
+            bos = line[2]
+            word = line[5]
             cate = None if cate_row < 1 else pair[cate_row]
 
             if not bof and bos == 'B':
@@ -469,9 +469,9 @@ def process_bccwj_data_for_kytea(input, output, subpos_depth=1):
                 continue
 
             line = line.rstrip('\n').split('\t')
-            bos = line[0]
-            word = line[1]
-            pos = line[2].rstrip('$')
+            bos = line[2]
+            word = line[5]
+            pos = line[3].rstrip('$')
             if subpos_depth == 1:
                 pos = pos.split('-')[0]
             elif subpos_depth > 1:
@@ -538,7 +538,7 @@ def read_data(data_format, path, token2id={}, label2id={}, subpos_depth=-1, upda
     if data_format == 'bccwj_ws' or data_format == 'cws':
         read_data = read_bccwj_data_for_wordseg if data_format == 'bccwj_ws' else read_cws_data
 
-        instances, labels, token2id, label2id = read_data_wordseg(
+        instances, labels, token2id, label2id = read_data(
             path, token2id=token2id, label2id=label2id, update_token=update_token, 
             update_label=update_label, schema=schema, limit=limit)
 
@@ -555,6 +555,8 @@ def read_data(data_format, path, token2id={}, label2id={}, subpos_depth=-1, upda
         instances, labels, token2id, label2id = read_data(
             path, token2id=token2id, label2id=label2id, update_token=update_token, update_label=update_label, 
             subpos_depth=subpos_depth, refer_vocab=refer_vocab, schema=schema, limit=limit)
+    else:
+        return
 
     return instances, labels, token2id, label2id
 
