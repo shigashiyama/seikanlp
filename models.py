@@ -15,6 +15,7 @@ import chainer.links as L
 from chainer import cuda
 from chainer.functions.loss import softmax_cross_entropy
 from chainer.links.connection.n_step_rnn import argsort_list_descent, permutate_list
+from chainer import initializers
 
 from conlleval import conlleval
 
@@ -67,7 +68,7 @@ class RNN_CRF(chainer.Chain):
             self.linear = L.Linear(n_rnn_units * (2 if rnn_bidirection else 1), n_labels)
             self.crf = L.CRF1d(n_labels)
 
-            #tmp
+            # tmp
             self.vocab_size = vocab_size
             self.n_rnn_layers = n_rnn_layers
             self.rnn_unit_in = rnn_in
@@ -143,7 +144,7 @@ class RNN_CRF(chainer.Chain):
         return loss, ys
 
 
-    def get_id_array(self, start, width, gpu):
+    def get_id_array(self, start, width, gpu=-1):
         ids = np.array([], dtype=np.int32)
         for i in range(start, start + width):
             ids = np.append(ids, np.int32(i))
@@ -151,20 +152,20 @@ class RNN_CRF(chainer.Chain):
 
 
     # temporaly code for memory checking
-    def reset(self):
-        print('reset')
-        del self.lookup, self.rnn_unit, self.linear, self.crf
-        gc.collect()
+    # def reset(self):
+    #     print('reset')
+    #     del self.lookup, self.rnn_unit, self.linear, self.crf
+    #     gc.collect()
 
-        self.lookup = L.EmbedID(self.vocab_size, self.embed_dim)
-        self.rnn_unit = L.NStepBiLSTM(self.n_rnn_layers, self.rnn_unit_in, self.n_rnn_units, self.dropout) if self.rnn_bidirection else L.NStepLSTM(self.n_rnn_layers, self.embed_dim, self.n_rnn_units, self.dropout)
-        self.linear = L.Linear(self.n_rnn_units * (2 if self.rnn_bidirection else 1), self.n_labels)
-        self.crf = L.CRF1d(self.n_labels)
+    #     self.lookup = L.EmbedID(self.vocab_size, self.embed_dim)
+    #     self.rnn_unit = L.NStepBiLSTM(self.n_rnn_layers, self.rnn_unit_in, self.n_rnn_units, self.dropout) if self.rnn_bidirection else L.NStepLSTM(self.n_rnn_layers, self.embed_dim, self.n_rnn_units, self.dropout)
+    #     self.linear = L.Linear(self.n_rnn_units * (2 if self.rnn_bidirection else 1), self.n_labels)
+    #     self.crf = L.CRF1d(self.n_labels)
 
-        self.lookup = self.lookup.to_gpu()
-        self.rnn_unit = self.rnn_unit.to_gpu()
-        self.linear = self.linear.to_gpu()
-        self.crf = self.crf.to_gpu()
+    #     self.lookup = self.lookup.to_gpu()
+    #     self.rnn_unit = self.rnn_unit.to_gpu()
+    #     self.linear = self.linear.to_gpu()
+    #     self.crf = self.crf.to_gpu()
 
         # print('## parameters')
         # print('# lookup:', self.lookup.W.shape)
@@ -267,6 +268,32 @@ class SequenceTagger(chainer.link.Chain):
     def decode(self, *args, **kwargs):
         _, ps = self.pridictor(*args, **kwargs)
         return ps
+
+    def grow_lookup_table(self, token2id_new, gpu=-1):
+        n_left_contexts = len(self.predictor.left_padding_ids)
+        n_right_contexts = len(self.predictor.right_padding_ids)
+        padding_size = n_left_contexts + n_right_contexts
+
+
+        weight1 = self.predictor.lookup.W if padding_size > 0 else self.predictor.lookup.W[-padding_size:]
+        diff = len(token2id_new) - len(weight1)
+        weight2 = chainer.variable.Parameter(initializers.normal.Normal(1.0), (diff, weight1.shape[1]))
+        weight = F.concat((weight1, weight2), 0)
+        if padding_size > 0:
+            n_vocab = len(weight)
+            self.predictor.left_padding_ids = predictor.get_id_array(n_vocab, n_left_contexts, gpu)
+            self.predictor.right_padding_ids = predictor.get_id_array(n_vocab + n_left_contexts, 
+                                                                      n_right_contexts, gpu)
+            weight3 = predictor.lookup.W[:-padding_size]
+            weight = F.concat((weight, weight3), 0)
+
+        embed = L.EmbedID(0, 0)
+        embed.W = chainer.Parameter(initializer=weight.data)
+        self.predictor.lookup = embed
+
+        print('# grow vocab size: %d -> %d' % (weight1.shape[0], weight.shape[0]))
+        print('# lookup:', self.predictor.lookup.W.shape)
+
 
     def generate_lines(self, x, t, y):
         i = 0

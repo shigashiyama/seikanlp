@@ -4,6 +4,9 @@ import logging
 import argparse
 import copy
 import numpy as np
+import os
+import pickle
+import gc
 
 import chainer
 from chainer import serializers
@@ -23,6 +26,18 @@ def batch_generator(instances, labels, batchsize, shuffle=True, xp=np):
         i_max = min(i + batchsize, len_data)
         xs = [xp.asarray(instances[perm[i]], dtype=np.int32) for i in range(i, i_max)]
         ts = [xp.asarray(labels[perm[i]], dtype=np.int32) for i in range(i, i_max)]
+
+        # if not shuffle:        
+        #     print(i,i_max)
+        #     if i == 2000:
+        #         for i in range(len(xs)):
+        #             x = xs[i]
+        #             t = ts[i]
+        #             if len(x) != len(t):
+        #                 print('*WARN*')
+        #             print(i)
+        #             print('x', len(x), x)
+        #             print('t', len(t), t)
 
         yield xs, ts
     raise StopIteration
@@ -69,7 +84,6 @@ def print_results(total_loss, ave_loss, count, c, acc, overall):
 
 
 def main():
-
     if chainer.__version__[0] != '2':
         print("chainer version>=2.0.0 is required.")
         sys.exit()
@@ -107,15 +121,22 @@ def main():
     parser.add_argument('--dropout', type=float, default=0)
     parser.add_argument('--gradclip', '-c', type=float, default=5,)
     parser.add_argument('--format', '-f', help='Format of input data')
+    parser.add_argument('--lowercase',  action='store_true')
+    parser.add_argument('--normalize_digits',  action='store_true')
     parser.add_argument('--subpos_depth', '-s', type=int, default=-1)
     parser.add_argument('--dir_path', '-p', help='Directory path of input data (train, valid and test)')
+    parser.add_argument('--trained_data', default='')
     parser.add_argument('--train_data', '-t', help='Filename of training data')
     parser.add_argument('--validation_data', '-v', help='Filename of validation data')
     parser.add_argument('--test_data', help='Filename of test data')
     parser.add_argument('--tag_schema', default='BIES')
+    parser.add_argument('--dump_train_data', action='store_true')
     parser.set_defaults(use_cudnn=False)
     parser.set_defaults(crf=False)
     parser.set_defaults(rnn_bidirection=False)
+    parser.set_defaults(lowercase=False)
+    parser.set_defaults(normalize_digits=False)
+    parser.set_defaults(pickle_dump_train_data=False)
     args = parser.parse_args()
 
     # print('# bproplen: {}'.format(args.bproplen))
@@ -133,7 +154,7 @@ def main():
     print('# linear_activation: {}'.format(args.linear_activation))
     print('# rnn_layer: {}'.format(args.rnn_layer))
     print('# embedding dimension: {}'.format(args.embed_dim))
-    print('# rnn hiddlen unit: {}'.format(args.rnn_hidden_unit))
+    print('# rnn hidden unit: {}'.format(args.rnn_hidden_unit))
     print('# pre-trained embedding model: {}'.format(args.embed_path))
     print('# left context size: {}'.format(args.lc))
     print('# right context size: {}'.format(args.rc))
@@ -152,12 +173,15 @@ def main():
     print('# wieght decay: {}'.format(args.weightdecay))
     print('# dropout ratio: {}'.format(args.dropout))
     print('# gradient norm threshold to clip: {}'.format(args.gradclip))
+    print('# lowercase: {}'.format(args.lowercase))
+    print('# normalize digits: {}'.format(args.normalize_digits))
     print('# subpos depth: {}'.format(args.subpos_depth))
     print('# resume: {}'.format(args.resume))
     print('# epoch to resume: {}'.format(args.resume_epoch))
     print('# tag schema: {}'.format(args.tag_schema))
     print(args)
     print('')
+
 
     # Prepare logger
 
@@ -166,56 +190,6 @@ def main():
     if not args.nolog:
         logger = open('log/' + time0 + '.log', 'a')
         logger.write(str(args)+'\n')
-
-    # Load word embedding model
-
-    embed_model = emb.read_model(args.embed_path) if args.embed_path else None
-
-    # Load dataset
-
-    train_path = args.dir_path + args.train_data
-    val_path = args.dir_path + args.validation_data
-    test_path = args.dir_path + (args.test_data if args.test_data else '')
-    refer_vocab = embed_model.wv if args.embed_path else set()
-
-    limit = args.limit if args.limit > 0 else -1
-
-    train, train_t, token2id, label2id = util.read_data(
-        args.format, train_path, subpos_depth=args.subpos_depth,
-        schema=args.tag_schema, limit=limit)
-
-    val, val_t, token2id, label2id = util.read_data(
-        args.format, val_path, token2id=token2id, label2id=label2id, subpos_depth=args.subpos_depth,
-        schema=args.tag_schema, limit=limit)
-
-    if args.test_data:
-        test, test_t, token2id, label2id = util.read_data(
-            args.format, test_path, token2id=token2id, label2id=label2id, update_token=False,
-            refer_vocab=refer_vocab, schema=args.tag_schema, limit=limit)
-    else:
-        test = []
-
-    n_train = len(train)
-    n_val = len(val)
-    n_test = len(test)
-    n_vocab = len(token2id)
-    n_labels = len(label2id)
-
-    t2i_tmp = list(token2id.items())
-    id2token = {v:k for k,v in token2id.items()}
-    id2label = {v:k for k,v in label2id.items()}
-    print('vocab =', n_vocab)
-    print('data length: train=%d val=%d test=%d' % (n_train, n_val, n_test))
-    print()
-    print('train:', train[:3], '...', train[n_train-3:])
-    print('train_t:', train_t[:3], '...', train[n_train-3:])
-    print()
-    print('token2id:', t2i_tmp[:3], '...', t2i_tmp[len(t2i_tmp)-3:])
-    print('label2id:', label2id)
-    print()
-    if not args.nolog:
-        logger.write('INFO: vocab = %d\n' % n_vocab)
-        logger.write('INFO: data length: train=%d val=%d\n' % (n_train, n_val))
 
     # gpu settings
 
@@ -228,26 +202,138 @@ def main():
         
     chainer.config.cudnn_deterministic = args.use_cudnn
 
+    # Load word embedding model
+
+    embed_model = emb.read_model(args.embed_path) if args.embed_path else None
+
+    # Load dataset
+
+    trained_path = args.dir_path + args.trained_data
+    train_path = args.dir_path + args.train_data
+    val_path = args.dir_path + (args.validation_data if args.validation_data else '')
+    test_path = args.dir_path + (args.test_data if args.test_data else '')
+    refer_vocab = embed_model.wv if args.embed_path else set()
+    params = {}
+    token2id = {}
+    label2id = {}
+    token2id_org = {}
+
+    limit = args.limit if args.limit > 0 else -1
+
+    if args.trained_data:
+        if args.trained_data.endswith('pickle'):
+            name, ext = os.path.splitext(args.dir_path + args.trained_data)
+            trained, trained_t, token2id, label2id, params = util.load_pickled_data(name)
+            if not args.nolog:
+                logger.write('INFO: params read from pickle:'+str(params))
+        else:
+            trained, trained_t, token2id, label2id = util.read_data(
+                args.format, trained_path, subpos_depth=args.subpos_depth, schema=args.tag_schema, 
+                limit=limit, lowercase=args.lowercase, normalize_digits=args.normalize_digits)
+        token2id_org = token2id.copy()
+        print('vocab size:', len(token2id))
+    else:
+        trained = []
+
+    if args.train_data.endswith('pickle'):
+        name, ext = os.path.splitext(args.dir_path + args.train_data)
+        if len(trained) == 0:
+            #TODO label2id が update されるとエラーになるが、未対応
+            train, train_t, token2id, label2id, params = util.load_pickled_data(name)
+        else:
+            train, train_t, _, _, _ = util.load_pickled_data(
+                name, load_token2id=False, load_label2id=False, load_params=False)
+
+        if not args.nolog:
+            logger.write('INFO: params read from pickle:'+str(params))
+    else:
+        train, train_t, token2id, label2id = util.read_data(
+            args.format, train_path, token2id=token2id, label2id=label2id,
+            subpos_depth=args.subpos_depth, schema=args.tag_schema, 
+            limit=limit, lowercase=args.lowercase, normalize_digits=args.normalize_digits)
+    print('vocab size:', len(token2id))
+    if not token2id_org:
+        token2id_org = token2id
+
+    if args.validation_data:
+        if args.validation_data.endswith('pickle'):
+            name, ext = os.path.splitext(args.dir_path + args.validation_data)
+            val, val_t, _, _, _ = util.load_pickled_data(
+                name, load_token2id=False, load_label2id=False, load_params=False)
+        else:
+            val, val_t, token2id, label2id = util.read_data(
+                args.format, val_path, token2id=token2id, label2id=label2id, update_token=False, 
+                refer_vocab=refer_vocab, subpos_depth=args.subpos_depth, schema=args.tag_schema, limit=limit, 
+                lowercase=args.lowercase, normalize_digits=args.normalize_digits)
+        print('vocab size:', len(token2id))        
+    else:
+        val = []
+
+    if args.test_data:
+        if args.test_data.endswith('pickle'):
+            name, ext = os.path.splitext(args.dir_path + args.test_data)
+            test, test_t, _, _, _ = util.load_pickled_data(
+                name, load_token2id=False, load_label2id=False, load_params=False)
+        else:
+            test, test_t, token2id, label2id = util.read_data(
+                args.format, test_path, token2id=token2id, label2id=label2id, update_token=False,
+                refer_vocab=refer_vocab, schema=args.tag_schema, limit=limit, 
+                lowercase=args.lowercase, normalize_digits=args.normalize_digits)
+        print('vocab size:', len(token2id))
+    else:
+        test = []
+
+    n_trained = len(trained)
+    n_train = len(train)
+    n_val = len(val)
+    n_test = len(test)
+    n_vocab = len(token2id)
+    n_labels = len(label2id)
+
+    t2i_tmp = list(token2id.items())
+    id2token = {v:k for k,v in token2id.items()}
+    id2label = {v:k for k,v in label2id.items()}
+    print('vocab =', n_vocab)
+    print('data length: trained=%d train=%d val=%d test=%d' % (n_trained, n_train, n_val, n_test))
+    print()
+    print('train:', train[:3], '...', train[n_train-3:])
+    print('train_t:', train_t[:3], '...', train[n_train-3:])
+    print()
+    print('token2id:', t2i_tmp[:3], '...', t2i_tmp[len(t2i_tmp)-3:])
+    print('label2id:', label2id)
+    print()
+    if not args.nolog:
+        logger.write('INFO: vocab = %d\n' % n_vocab)
+        logger.write('INFO: data length: train=%d val=%d\n' % (n_train, n_val))
+
     # Set parameters to dictionary
 
-    params = {'embed_dim' : args.embed_dim,
-              'rnn_layer' : args.rnn_layer,
-              'rnn_hidden_unit' : args.rnn_hidden_unit,
-              'rnn_bidirection' : args.rnn_bidirection,
-              'crf' : args.crf,
-              'linear_activation' : args.linear_activation,
-              'left_contexts' : args.lc,
-              'right_contexts' : args.rc,
-              'dropout' : args.dropout,
-              'tag_schema' : args.tag_schema
-    }
-    if args.embed_path:
-        params.update({'embed_path' : args.embed_path})
-              
+    if not params:
+        params = {'embed_dim' : args.embed_dim,
+                  'rnn_layer' : args.rnn_layer,
+                  'rnn_hidden_unit' : args.rnn_hidden_unit,
+                  'rnn_bidirection' : args.rnn_bidirection,
+                  'crf' : args.crf,
+                  'linear_activation' : args.linear_activation,
+                  'left_contexts' : args.lc,
+                  'right_contexts' : args.rc,
+                  'dropout' : args.dropout,
+                  'tag_schema' : args.tag_schema
+        }
+        if args.embed_path:
+            params.update({'embed_path' : args.embed_path})
+
     # Prepare model
 
-    model = util.load_model_from_params(params, model_path=args.resume, token2id=token2id, 
-                                        embed_model=embed_model, label2id=label2id, gpu=args.gpu)
+    if args.eval or len(token2id) == len(token2id_org):
+        t2i_for_model = token2id
+        t2iu_for_model = None
+    else:
+        t2i_for_model = token2id_org
+        t2iu_for_model = token2id
+    model = util.load_model_from_params(
+        params, model_path=args.resume, token2id=t2i_for_model, token2id_updated=t2iu_for_model,
+        embed_model=embed_model, label2id=label2id, gpu=args.gpu)
     model.compute_fscore = True
 
     # Set up optimizer
@@ -267,6 +353,13 @@ def main():
     if args.weightdecay > 0:
         optimizer.add_hook(chainer.optimizer.WeightDecay(args.weightdecay))
 
+    # Dump objects generated from input data
+
+    if args.dump_train_data and not args.train_data.endswith('pickle'):
+        name, ext = os.path.splitext(args.dir_path + args.train_data)
+        util.dump_pickled_data(name, train, train_t, token2id, label2id, params)
+        print('pickled training data')
+
     # Write parameter file
 
     if not args.nolog:
@@ -276,6 +369,8 @@ def main():
             'model_date': time0
         })
         util.write_param_file(params, 'nn_model/param_' + time0 + '.txt')
+        util.write_dictionary(token2id, params['token2id_path'])
+        util.write_dictionary(label2id, params['label2id_path'])
 
     # Run
 
@@ -324,6 +419,7 @@ def main():
             total_ecounts = conlleval.merge_counts(total_ecounts, ecounts)
             i_max = min(i + args.batchsize, n_train)
             print('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
+            #print('* batch %d-%d' % ((i+1), i_max))
             i = i_max
             n_iter += 1
 
@@ -359,15 +455,16 @@ def main():
                         logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
                     logger.write('train\t%d\t%s\t%s\n' % (n_iter, now_e, t_res))
 
-                print('<validation result>')
-                v_stat, v_res = evaluate(model, val, val_t, args.batchsize, xp=xp)
-                print()
+                if args.validation_data:
+                    print('<validation result>')
+                    v_stat, v_res = evaluate(model, val, val_t, args.batchsize, xp=xp)
+                    print()
 
-                if not args.nolog:
-                    logger.write('INFO: valid - %s\n' % v_stat)
-                    if n_iter == 1:
-                        logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
-                    logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
+                    if not args.nolog:
+                        logger.write('INFO: valid - %s\n' % v_stat)
+                        if n_iter == 1:
+                            logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                        logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
 
                 # Save the model
                 #mdl_path = 'model/rnn_%s_i%.2fk.mdl' % (time0, (1.0 * n_iter / 1000))
