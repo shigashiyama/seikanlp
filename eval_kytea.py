@@ -141,13 +141,13 @@ if __name__=='__main__':
     print(args, '\n')
 
     # preprocess data
-    exts = ['_train.tsv', '_val.tsv']
+    exts = ['_train.tsv', '_val.tsv', '_test.tsv']
 
     if args.preprocess:
         for ext in exts:
             input = args.org_data_dir + args.fileid + ext
             output = args.data_dir + args.fileid + ext
-            util.process_data_for_kytea(input, output)
+            util.process_bccwj_data_for_kytea(input, output)
 
     train_gold = args.data_dir + args.fileid + '_train.tsv'
     val_gold = args.data_dir + args.fileid + '_val.tsv'
@@ -161,9 +161,13 @@ if __name__=='__main__':
     if args.eval > 0:
         train_pred = args.pred_dir + args.fileid + '_train.pred' if args.pred_dir else ''
         val_pred = args.pred_dir + args.fileid + '_val.pred' if args.pred_dir else ''
+        test_pred = args.pred_dir + args.fileid + '_test.pred' if args.pred_dir else ''
 
         # print('<training result>')
         # eval_kytea(gold_path=train_gold, pred_path=train_pred, model_path=model_path)
         # print()
         print('<validation result>')
         eval_kytea(gold_path=val_gold, pred_path=val_pred, model_path=model_path)
+
+        print('<test result>')
+        eval_kytea(gold_path=test_gold, pred_path=test_pred, model_path=model_path)
