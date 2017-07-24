@@ -8,6 +8,8 @@ import numpy as np
 import models
 import read_embedding as emb
 
+import chainer
+
 UNK_SYMBOL = '<UNK>'
 NUM_SYMBOL = '<NUM>'
 Schema = enum.Enum("Schema", "BI BIES")
@@ -23,7 +25,7 @@ Schema = enum.Enum("Schema", "BI BIES")
 #
 def read_wsj_data(path, token2id={}, label2id={}, update_token=True, 
                   update_label=True, refer_vocab=set(), limit=-1,
-                  lowercase=True, replace_digits=True):
+                  lowercase=True, normalize_digits=True):
     # id2token = {}
     # id2label = {}
 
@@ -70,7 +72,7 @@ def read_wsj_data(path, token2id={}, label2id={}, update_token=True,
             if lowercase:
                 word = word.lower()
 
-            if replace_digits:
+            if normalize_digits and not word in refer_vocab:
                 word = re.sub(r'[0-9]+', NUM_SYMBOL, word)
 
             update_this_token = update_token or word in refer_vocab
@@ -104,8 +106,7 @@ def read_wsj_data(path, token2id={}, label2id={}, update_token=True,
 #
 def read_conll2003_data(path, token2id={}, label2id={}, update_token=True, 
                         update_label=True, refer_vocab=set(), schema='BI', limit=-1,
-                        lowercase=True, replace_digits=True):
-
+                        lowercase=True, normalize_digits=True):
     if schema == 'BI':
         sch = Schema.BI
     else:
@@ -163,7 +164,8 @@ def read_conll2003_data(path, token2id={}, label2id={}, update_token=True,
             if lowercase:
                 word = word.lower()
 
-            if replace_digits:
+            if normalize_digits:
+            # if normalize_digits and not word in refer_vocab:
                 word = re.sub(r'[0-9]+', NUM_SYMBOL, word)
 
             update_this_token = update_token or word in refer_vocab
@@ -318,11 +320,84 @@ def read_bccwj_data_for_postag(path, token2id={}, label2id={}, cate_row=-1, subp
 # 文字単位で BI or BIES フォーマットに変換
 #
 # example of input data:
-# B       最後    名詞-普通名詞-一般$
+# B       最後    名詞-普通名詞-一般
 # I       の      助詞-格助詞$
-# I       会話    名詞-普通名詞-サ変可能$
+# I       会話    名詞-普通名詞-サ変可能
 #
 def read_bccwj_data_for_wordseg(path, token2id={}, label2id={}, cate_row=-1, 
+                                update_token=True, update_label=True, schema='BI', limit=-1):
+    if schema == 'BI':
+        sch = Schema.BI
+    else:
+        sch = Schema.BIES
+
+    instances = []
+    labels = []
+    if len(token2id) == 0:
+        token2id = {UNK_SYMBOL: np.int32(0)}
+    if len(label2id) == 0:
+        label2id = {}
+
+    print("Read file:", path)
+    ins_cnt = 0
+    word_cnt = 0
+    token_cnt = 0
+
+    with open(path) as f:
+        bof = True
+        ins = []
+        lab = []
+        for line in f:
+            if len(line) < 2:
+                continue
+
+            line = line.rstrip('\n').split('\t')
+            bos = line[2]
+            word = line[5]
+            cate = None if cate_row < 1 else pair[cate_row]
+
+            if not bof and bos == 'B':
+                instances.append(ins)
+                labels.append(lab)
+                ins = []
+                lab = []
+                ins_cnt += 1
+                if ins_cnt % 100000 == 0:
+                    print('read', ins_cnt, 'instances')
+
+
+            if limit > 0 and ins_cnt >= limit:
+                break
+
+            wlen = len(word)
+            ins.extend(
+                [get_id(word[i], token2id, update_token) for i in range(wlen)]
+                )
+
+            if sch == Schema.BI:
+                lab.extend(
+                    [get_id(get_label_BI(i, cate=cate), label2id, update_label) for i in range(wlen)]
+                )
+            else:
+                lab.extend(
+                    [get_id(get_label_BIES(i, wlen-1, cate=cate), label2id, update_label) for i in range(wlen)]
+                )
+
+            bof = False
+            word_cnt += 1
+            token_cnt += len(word)
+
+        if limit <= 0:
+            instances.append(ins)
+            labels.append(lab)
+            ins_cnt += 1
+                
+    #print(ins_cnt, word_cnt, token_cnt)
+    return instances, labels, token2id, label2id
+
+
+
+def read_bccwj_data_for_wordseg2(path, token2id={}, label2id={}, cate_row=-1, 
                                 update_token=True, update_label=True, schema='BI', limit=-1):
     if schema == 'BI':
         sch = Schema.BI
@@ -489,7 +564,7 @@ def process_bccwj_data_for_kytea(input, output, subpos_depth=1):
             line = line.rstrip('\n').split('\t')
             bos = line[2]
             word = line[5]
-            pos = line[3].rstrip('$')
+            pos = line[3]
             if subpos_depth == 1:
                 pos = pos.split('-')[0]
             elif subpos_depth > 1:
@@ -514,6 +589,7 @@ def write_for_kytea(f, ins):
     
     f.write('%s' % ins[0])
     for i in range(1, len(ins)):
+        #print(' %s' % ins[i])
         f.write(' %s' % ins[i])
     f.write('\n')
 
@@ -552,7 +628,8 @@ def get_id(string, string2id, update=True):
 
 
 def read_data(data_format, path, token2id={}, label2id={}, subpos_depth=-1, update_token=True, 
-              update_label=True, refer_vocab=set(), schema='BIES', limit=-1, lowercase=True, replace_digits=True):
+              update_label=True, refer_vocab=set(), schema='BIES', limit=-1, 
+              lowercase=False, normalize_digits=False):
 
     if data_format == 'bccwj_ws' or data_format == 'cws':
         read_data = read_bccwj_data_for_wordseg if data_format == 'bccwj_ws' else read_cws_data
@@ -574,7 +651,7 @@ def read_data(data_format, path, token2id={}, label2id={}, subpos_depth=-1, upda
         instances, labels, token2id, label2id = read_data(
             path, token2id=token2id, label2id=label2id, update_token=update_token, update_label=update_label, 
             refer_vocab=refer_vocab, limit=limit,
-            lowercase=lowercase, replace_digits=replace_digits)
+            lowercase=lowercase, normalize_digits=normalize_digits)
 
     elif data_format == 'conll2003':
         read_data = read_conll2003_data
@@ -582,11 +659,73 @@ def read_data(data_format, path, token2id={}, label2id={}, subpos_depth=-1, upda
         instances, labels, token2id, label2id = read_data(
             path, token2id=token2id, label2id=label2id, update_token=update_token, update_label=update_label, 
             refer_vocab=refer_vocab, schema=schema, limit=limit, 
-            lowercase=lowercase, replace_digits=replace_digits)
+            lowercase=lowercase, normalize_digits=normalize_digits)
     else:
         return
 
     return instances, labels, token2id, label2id
+
+
+def load_pickled_data(filename_wo_ext, load_token2id=True, load_label2id=True, load_params=True):
+    ins_dump_path = filename_wo_ext + '.pickle'
+    lab_dump_path = filename_wo_ext + '.pickle'        
+    token2id_dump_path = filename_wo_ext + '.t2i.pickle'
+    label2id_dump_path = filename_wo_ext + '.l2i.pickle'
+    params_dump_path = filename_wo_ext + '.param.pickle'
+
+    with open(ins_dump_path, 'rb') as f:
+        instances = pickle.load(f)
+        print('load pickled data:', ins_dump_path)
+
+    with open(lab_dump_path, 'rb') as f:
+        labels = pickle.load(f)
+
+    if load_token2id:
+        with open(token2id_dump_path, 'rb') as f:
+            token2id = pickle.load(f)
+    else:
+        token2id = None
+
+    if load_label2id:
+        with open(label2id_dump_path, 'rb') as f:
+            label2id = pickle.load(f)
+    else:
+        label2id = None
+
+    if load_params:
+        with open(params_dump_path, 'rb') as f:
+            params = pickle.load(f)
+    else:
+        params = None
+
+    return instances, labels, token2id, label2id, params
+
+
+def dump_pickled_data(filename_wo_ext, instances, labels, token2id=None, label2id=None, params=None):
+    ins_dump_path = filename_wo_ext + '.pickle'
+    lab_dump_path = filename_wo_ext + '.pickle'        
+    token2id_dump_path = filename_wo_ext + '.t2i.pickle'
+    label2id_dump_path = filename_wo_ext + '.l2i.pickle'
+    params_dump_path = filename_wo_ext + '.param.pickle'
+
+    with open(ins_dump_path, 'wb') as f:
+        pickle.dump(instances, f)
+        print('dump pickled data:', ins_dump_path)
+
+    with open(lab_dump_path, 'wb') as f:
+        pickle.dump(labels, f)
+
+    if token2id:
+        with open(token2id_dump_path, 'wb') as f:
+            pickle.dump(token2id, f)
+
+    if label2id:
+        with open(label2id_dump_path, 'wb') as f:
+            pickle.dump(label2id, f)
+
+    if params:
+        with open(params_dump_path, 'wb') as f:
+            pickle.dump(params, f)
 
 
 def read_dictionary(path):
@@ -630,7 +769,8 @@ def read_param_file(path):
     return params
 
 
-def load_model_from_params(params, model_path='', token2id=None, label2id=None, embed_model=None, gpu=-1):
+def load_model_from_params(params, model_path='', token2id=None, token2id_updated=None, 
+                           label2id=None, embed_model=None, gpu=-1):
     if not 'embed_dim' in params:
         params['embed_dim'] = 300
     else:
@@ -641,7 +781,7 @@ def load_model_from_params(params, model_path='', token2id=None, label2id=None, 
     else:
         params['rnn_layer'] = int(params['rnn_layer'])
 
-    if not 'rnn_hiddlen_unit' in params:
+    if not 'rnn_hidden_unit' in params:
         params['rnn_hidden_unit'] = 500
     else:
         params['rnn_hidden_unit'] = int(params['rnn_hidden_unit'])
@@ -680,7 +820,8 @@ def load_model_from_params(params, model_path='', token2id=None, label2id=None, 
     if not 'tag_schema' in params:
         params['tag_schema'] = 'BIES'
     
-    if not embed_model and not 'embed_path' in params:
+    if not embed_model and 'embed_path' in params:
+        #TODO token2id_update != None の場合の pre-trained embedding の拡張は未対応
         id2token = {v:k for k,v in token2id.items()}
         embed_model = emb.read_model(params['embed_path'])
         embed = emb.construct_lookup_table(id2token, embed_model, gpu=gpu)
@@ -712,6 +853,10 @@ def load_model_from_params(params, model_path='', token2id=None, label2id=None, 
     model = models.SequenceTagger(rnn, id2label)
     if model_path:
         chainer.serializers.load_npz(model_path, model)
+
+    if token2id_updated:
+        model.grow_lookup_table(token2id_updated, gpu=gpu)
+
     if gpu >= 0:
         model.to_gpu()
 
@@ -768,9 +913,9 @@ if __name__ == '__main__':
     print('instances:', instances[:3], '...', instances[len(instances)-3:])
     print('labels:', labels[:3], '...', labels[len(labels)-3:])
     print()
-    print('token2id:', t2i_tmp[:3], '...', t2i_tmp[len(t2i_tmp)-3:])
+    print('token2id:', t2i_tmp[:10], '...', t2i_tmp[len(t2i_tmp)-10:])
     print('label2id:', label2id)
 
     if args.output_filename:
-        write_dictionary(token2id, args.output_filename + '_t2i.' + args.output_format)
-        write_dictionary(label2id, args.output_filename + '_l2i.' + args.output_format)
+        write_dictionary(token2id, args.output_filename + '.t2i.' + args.output_format)
+        write_dictionary(label2id, args.output_filename + '.l2i.' + args.output_format)
