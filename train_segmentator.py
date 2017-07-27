@@ -296,9 +296,6 @@ class Trainer(object):
             # Make the specified GPU current
             cuda.get_device_from_id(self.args.gpu).use()
             chainer.config.cudnn_deterministic = self.args.use_cudnn
-            return True
-        else:
-            return False
 
 
     def set_loaded_data(self, train, train_t, val, val_t, test, test_t, token2id, label2id):
@@ -518,6 +515,7 @@ if __name__ == '__main__':
 
     args = parse_arguments()
     trainer = Trainer(args)
+    trainer.prepare_gpu()
 
     # Load word embedding model, dataset
 
