@@ -10,7 +10,7 @@ import read_embedding as emb
 
 import chainer
 
-UNK_SYMBOL = '<UNK>'
+UNK_SYMBOL = '<UNK>'            # lattice.py に移動
 NUM_SYMBOL = '<NUM>'
 Schema = enum.Enum("Schema", "BI BIES")
 
@@ -728,7 +728,7 @@ def dump_pickled_data(filename_wo_ext, instances, labels, token2id=None, label2i
             pickle.dump(params, f)
 
 
-def read_dictionary(path):
+def read_map(path):
     if path.endswith('bin'):
         with open(path, 'rb') as f:
             dic = pickle.load(f)
@@ -745,7 +745,7 @@ def read_dictionary(path):
     return dic
 
 
-def write_dictionary(dic, path):
+def write_map(dic, path):
     if path.endswith('bin'):
         with open(path, 'wb') as f:
             pickle.dump(dic, f)
@@ -830,9 +830,9 @@ def load_model_from_params(params, model_path='', token2id=None, token2id_update
         embed = None
 
     if not token2id:
-        token2id = read_dictionary(token2id_path)
+        token2id = read_map(token2id_path)
     if not label2id:
-        label2id = read_dictionary(label2id_path)
+        label2id = read_map(label2id_path)
     id2label = {v:k for k,v in label2id.items()}
 
     if params['crf']:
@@ -917,5 +917,5 @@ if __name__ == '__main__':
     print('label2id:', label2id)
 
     if args.output_filename:
-        write_dictionary(token2id, args.output_filename + '.t2i.' + args.output_format)
-        write_dictionary(label2id, args.output_filename + '.l2i.' + args.output_format)
+        write_map(token2id, args.output_filename + '.t2i.' + args.output_format)
+        write_map(label2id, args.output_filename + '.l2i.' + args.output_format)

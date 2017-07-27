@@ -83,13 +83,7 @@ def print_results(total_loss, ave_loss, count, c, acc, overall):
           (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore))
 
 
-def main():
-    if chainer.__version__[0] != '2':
-        print("chainer version>=2.0.0 is required.")
-        sys.exit()
-
-    # get arguments
-
+def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--nolog', action='store_true')
     parser.add_argument('--gpu', '-g', type=int, default=-1,
@@ -138,6 +132,14 @@ def main():
     parser.set_defaults(normalize_digits=False)
     parser.set_defaults(pickle_dump_train_data=False)
     args = parser.parse_args()
+    if args.lrdecay:
+        parser.ad_argument('lrdecay_start')
+        parser.ad_argument('lrdecay_width')
+        parser.ad_argument('lrdecay_rate')
+        array = args.lrdecay.split(':')
+        args.lrdecay_start = int(array[0])
+        args.lrdecay_width = int(array[1])
+        args.lrdecay_rate = float(array[2])
 
     # print('# bproplen: {}'.format(args.bproplen))
     print('# No log: {}'.format(args.nolog))
@@ -162,10 +164,6 @@ def main():
     print('# learning rate: {}'.format(args.lr))
     print('# learning rate decay: {}'.format(args.lrdecay))
     if args.lrdecay:
-        array = args.lrdecay.split(':')
-        lrdecay_start = int(array[0])
-        lrdecay_width = int(array[1])
-        lrdecay_rate = float(array[2])
         print('# learning rate decay start:', lrdecay_start)
         print('# learning rate decay width:', lrdecay_width)
         print('# learning rate decay rate:',  lrdecay_rate)
@@ -182,32 +180,10 @@ def main():
     print(args)
     print('')
 
+    return args
 
-    # Prepare logger
 
-    time0 = datetime.now().strftime('%Y%m%d_%H%M')
-    print('INFO: start: %s\n' % time0)
-    if not args.nolog:
-        logger = open('log/' + time0 + '.log', 'a')
-        logger.write(str(args)+'\n')
-
-    # gpu settings
-
-    if args.gpu >= 0:
-        # Make the specified GPU current
-        cuda.get_device_from_id(args.gpu).use()
-        xp = cuda.cupy
-    else:
-        xp = np
-        
-    chainer.config.cudnn_deterministic = args.use_cudnn
-
-    # Load word embedding model
-
-    embed_model = emb.read_model(args.embed_path) if args.embed_path else None
-
-    # Load dataset
-
+def load_sequence_labeling_data(args, trainer):
     trained_path = args.dir_path + args.trained_data
     train_path = args.dir_path + args.train_data
     val_path = args.dir_path + (args.validation_data if args.validation_data else '')
@@ -224,8 +200,7 @@ def main():
         if args.trained_data.endswith('pickle'):
             name, ext = os.path.splitext(args.dir_path + args.trained_data)
             trained, trained_t, token2id, label2id, params = util.load_pickled_data(name)
-            if not args.nolog:
-                logger.write('INFO: params read from pickle:'+str(params))
+            trainer.log('INFO: params read from pickle: {}'.format(params))
         else:
             trained, trained_t, token2id, label2id = util.read_data(
                 args.format, trained_path, subpos_depth=args.subpos_depth, schema=args.tag_schema, 
@@ -234,6 +209,7 @@ def main():
         print('vocab size:', len(token2id))
     else:
         trained = []
+        trained_t = []
 
     if args.train_data.endswith('pickle'):
         name, ext = os.path.splitext(args.dir_path + args.train_data)
@@ -243,9 +219,6 @@ def main():
         else:
             train, train_t, _, _, _ = util.load_pickled_data(
                 name, load_token2id=False, load_label2id=False, load_params=False)
-
-        if not args.nolog:
-            logger.write('INFO: params read from pickle:'+str(params))
     else:
         train, train_t, token2id, label2id = util.read_data(
             args.format, train_path, token2id=token2id, label2id=label2id,
@@ -283,18 +256,12 @@ def main():
     else:
         test = []
 
-    n_trained = len(trained)
     n_train = len(train)
-    n_val = len(val)
-    n_test = len(test)
-    n_vocab = len(token2id)
-    n_labels = len(label2id)
-
     t2i_tmp = list(token2id.items())
-    id2token = {v:k for k,v in token2id.items()}
-    id2label = {v:k for k,v in label2id.items()}
-    print('vocab =', n_vocab)
-    print('data length: trained=%d train=%d val=%d test=%d' % (n_trained, n_train, n_val, n_test))
+    # id2token = {v:k for k,v in token2id.items()}
+    # id2label = {v:k for k,v in label2id.items()}
+    print('vocab =', len(token2id))
+    print('data length: trained=%d train=%d val=%d test=%d' % (len(trained), n_train, len(val), len(test)))
     print()
     print('train:', train[:3], '...', train[n_train-3:])
     print('train_t:', train_t[:3], '...', train[n_train-3:])
@@ -302,192 +269,276 @@ def main():
     print('token2id:', t2i_tmp[:3], '...', t2i_tmp[len(t2i_tmp)-3:])
     print('label2id:', label2id)
     print()
-    if not args.nolog:
-        logger.write('INFO: vocab = %d\n' % n_vocab)
-        logger.write('INFO: data length: train=%d val=%d\n' % (n_train, n_val))
+    trainer.log('INFO: vocab = %d\n' % len(token2id))
+    trainer.log('INFO: data length: train=%d val=%d\n' % (n_train, len(val)))
 
-    # Set parameters to dictionary
+    return trained, trained_t, train, train_t, val, val_t, test, test_t, token2id, label2id, token2id_org, params
 
-    if not params:
-        params = {'embed_dim' : args.embed_dim,
-                  'rnn_layer' : args.rnn_layer,
-                  'rnn_hidden_unit' : args.rnn_hidden_unit,
-                  'rnn_bidirection' : args.rnn_bidirection,
-                  'crf' : args.crf,
-                  'linear_activation' : args.linear_activation,
-                  'left_contexts' : args.lc,
-                  'right_contexts' : args.rc,
-                  'dropout' : args.dropout,
-                  'tag_schema' : args.tag_schema
-        }
-        if args.embed_path:
-            params.update({'embed_path' : args.embed_path})
 
-    # Prepare model
+class Trainer(object):
+    def __init__(self, args):
+        self.args = args
+        self.start_time = datetime.now().strftime('%Y%m%d_%H%M')
+        self.logger = None
 
-    if args.eval or len(token2id) == len(token2id_org):
-        t2i_for_model = token2id
-        t2iu_for_model = None
-    else:
-        t2i_for_model = token2id_org
-        t2iu_for_model = token2id
-    model = util.load_model_from_params(
-        params, model_path=args.resume, token2id=t2i_for_model, token2id_updated=t2iu_for_model,
-        embed_model=embed_model, label2id=label2id, gpu=args.gpu)
-    model.compute_fscore = True
+        print('INFO: start: {}\n'.format(self.start_time))
+        if not self.args.nolog:
+            self.logger = open('log/{}.log'.format(self.start_time), 'a')
+            self.logger.write('{}\n'.format(args))
+        
+    def log(self, message):
+        if not self.args.nolog:
+            self.logger.write(message)
 
-    # Set up optimizer
 
-    if args.optimizer == 'sgd':
-        if args.momentum <= 0:
-            optimizer = chainer.optimizers.SGD(lr=args.lr)
+    def prepare_gpu(self):
+        if self.args.gpu >= 0:
+            # Make the specified GPU current
+            cuda.get_device_from_id(self.args.gpu).use()
+            chainer.config.cudnn_deterministic = self.args.use_cudnn
+            return True
         else:
-            optimizer = chainer.optimizers.MomentumSGD(lr=args.lr, momentum=args.momentum)
-    elif args.optimizer == 'adam':
-        optimizer = chainer.optimizers.Adam()
-    elif args.optimizer == 'adagrad':
-        optimizer = chainer.optimizers.AdaGrad(lr=args.lr)
+            return False
 
-    optimizer.setup(model)
-    optimizer.add_hook(chainer.optimizer.GradientClipping(args.gradclip))
-    if args.weightdecay > 0:
-        optimizer.add_hook(chainer.optimizer.WeightDecay(args.weightdecay))
 
-    # Dump objects generated from input data
+    def set_loaded_data(self, train, train_t, val, val_t, test, test_t, token2id, label2id):
+        self.train = train
+        self.train_t = train_t
+        self.val = val
+        self.val_t = val_t
+        self.test = test
+        self.test_t = test_t
+        self.token2id = token2id
+        self.label2id = label2id
 
-    if args.dump_train_data and not args.train_data.endswith('pickle'):
-        name, ext = os.path.splitext(args.dir_path + args.train_data)
-        util.dump_pickled_data(name, train, train_t, token2id, label2id, params)
-        print('pickled training data')
 
-    # Write parameter file
+    def prepare_model_and_parameters(self, embed_model=None, token2id_org=None, params={}):
+        # parameter
+        if not params:
+            params = {'embed_dim' : self.args.embed_dim,
+                      'rnn_layer' : self.args.rnn_layer,
+                      'rnn_hidden_unit' : self.args.rnn_hidden_unit,
+                      'rnn_bidirection' : self.args.rnn_bidirection,
+                      'crf' : self.args.crf,
+                      'linear_activation' : self.args.linear_activation,
+                      'left_contexts' : self.args.lc,
+                      'right_contexts' : self.args.rc,
+                      'dropout' : self.args.dropout,
+                      'tag_schema' : self.args.tag_schema
+            }
+        if self.args.embed_path:
+            params.update({'embed_path' : self.args.embed_path})
 
-    if not args.nolog:
-        params.update({
-            'token2id_path' : 'nn_model/vocab_' + time0 + '.t2i.txt',
-            'label2id_path' : 'nn_model/vocab_' + time0 + '.l2i.txt',
-            'model_date': time0
-        })
-        util.write_param_file(params, 'nn_model/param_' + time0 + '.txt')
-        util.write_dictionary(token2id, params['token2id_path'])
-        util.write_dictionary(label2id, params['label2id_path'])
+        # model
+        if self.args.eval or len(token2id) == len(token2id_org):
+            t2i_for_model = token2id
+            t2iu_for_model = None
+        else:
+            t2i_for_model = token2id_org
+            t2iu_for_model = token2id
 
-    # Run
+        model = util.load_model_from_params(
+            params, model_path=self.args.resume, token2id=t2i_for_model, token2id_updated=t2iu_for_model,
+            embed_model=embed_model, label2id=label2id, gpu=self.args.gpu)
+        model.compute_fscore = True
 
-    if args.eval:
+        self.params = params
+        self.model = model
+
+        return self.model
+
+
+    def setup_optimizer(self):
+        if self.args.optimizer == 'sgd':
+            if self.args.momentum <= 0:
+                optimizer = chainer.optimizers.SGD(lr=self.args.lr)
+            else:
+                optimizer = chainer.optimizers.MomentumSGD(lr=self.args.lr, momentum=self.args.momentum)
+        elif self.args.optimizer == 'adam':
+            optimizer = chainer.optimizers.Adam()
+        elif self.args.optimizer == 'adagrad':
+            optimizer = chainer.optimizers.AdaGrad(lr=self.args.lr)
+
+        optimizer.setup(self.model)
+        optimizer.add_hook(chainer.optimizer.GradientClipping(self.args.gradclip))
+        if self.args.weightdecay > 0:
+            optimizer.add_hook(chainer.optimizer.WeightDecay(self.args.weightdecay))
+
+        self.optimizer = optimizer
+
+        return self.optimizer
+
+
+    def write_params_and_indices(self):
+        if not self.args.nolog:
+            self.params.update({
+                'token2id_path' : 'nn_model/vocab_' + self.start_time + '.t2i.txt',
+                'label2id_path' : 'nn_model/vocab_' + self.start_time + '.l2i.txt',
+                'model_date': self.start_time
+            })
+            util.write_param_file(self.params, 'nn_model/param_' + self.start_time + '.txt')
+            util.write_map(self.token2id, self.params['token2id_path'])
+            util.write_map(self.label2id, self.params['label2id_path'])
+
+
+    def dump_train_data_and_params(self):
+        if self.args.dump_train_data and not self.args.train_data.endswith('pickle'):
+            name, ext = os.path.splitext(self.args.dir_path + self.args.train_data)
+            util.dump_pickled_data(name, self.train, self.train_t, self.token2id, self.label2id, self.params)
+            print('pickled training data')
+    
+
+    def run(self):
+        if self.args.eval:
+            self.run_evaluation()
+        else:
+            self.run_training()
+
+
+    def run_evaluation(self):
+        #    if args.eval:
         print('<test result>')
-        te_stat, te_res = evaluate(model, test, test_t, args.batchsize, xp=xp)
+        xp = cuda.cupy if args.gpu >= 0 else np
+        te_stat, te_res = evaluate(self.model, self.test, self.test_t, self.args.batchsize, xp=xp)
         print()
 
         time = datetime.now().strftime('%Y%m%d_%H%M')
-        if not args.nolog:
-            logger.write('finish: %s\n' % time)
-            logger.close()
+        self.log('finish: %s\n' % time)
         print('finish: %s\n' % time)
-        sys.exit()
 
-    
-    n_iter_report = args.iter_to_report
-    n_iter = 0
-    for e in range(max(1, args.resume_epoch), args.epoch+1):
-        time = datetime.now().strftime('%Y%m%d_%H%M')
-        if not args.nolog:
-            logger.write('INFO: start epoch %d at %s\n' % (e, time))
-        print('start epoch %d: %s' % (e, time))
 
-        # learning rate decay
+    def run_training(self):
+        n_train = len(self.train)
 
-        if args.lrdecay and args.optimizer == 'sgd':
-            if (e - lrdecay_start) % lrdecay_width == 0:
-                lr_tmp = optimizer.lr
-                optimizer.lr = optimizer.lr * lrdecay_rate
-                if not args.nolog:
-                    logger.write('learning decay: %f -> %f' % (lr_tmp, optimizer.lr))
-                print('learning decay: %f -> %f' % (lr_tmp, optimizer.lr))
+        n_iter_report = self.args.iter_to_report
+        n_iter = 0
+        for e in range(max(1, self.args.resume_epoch), self.args.epoch+1):
+            time = datetime.now().strftime('%Y%m%d_%H%M')
+            self.log('INFO: start epoch %d at %s\n' % (e, time))
+            print('start epoch %d: %s' % (e, time))
 
-        count = 0
-        total_loss = 0
-        num_tokens = 0
-        total_ecounts = conlleval.EvalCounts()
+            # learning rate decay
 
-        i = 0
-        for xs, ts in batch_generator(train, train_t, args.batchsize, shuffle=True, xp=xp):
-            loss, ecounts = model(xs, ts, train=True)
-            num_tokens += sum([len(x) for x in xs])
-            count += len(xs)
-            total_loss += loss.data
-            total_ecounts = conlleval.merge_counts(total_ecounts, ecounts)
-            i_max = min(i + args.batchsize, n_train)
-            print('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
-            #print('* batch %d-%d' % ((i+1), i_max))
-            i = i_max
-            n_iter += 1
+            if self.args.lrdecay and self.args.optimizer == 'sgd':
+                if (e - lrdecay_start) % lrdecay_width == 0:
+                    lr_tmp = optimizer.lr
+                    optimizer.lr = optimizer.lr * lrdecay_rate
+                    if not self.args.nolog:
+                        logger.write('learning decay: %f -> %f' % (lr_tmp, optimizer.lr))
+                    print('learning decay: %f -> %f' % (lr_tmp, optimizer.lr))
 
-            optimizer.target.cleargrads() # Clear the parameter gradients
-            loss.backward()               # Backprop
-            loss.unchain_backward()       # Truncate the graph
-            optimizer.update()            # Update the parameters
+            count = 0
+            total_loss = 0
+            num_tokens = 0
+            total_ecounts = conlleval.EvalCounts()
 
-            # Evaluation
-            if (n_iter * args.batchsize) % n_iter_report == 0: # or i == n_train:
+            i = 0
+            xp = cuda.cupy if args.gpu >= 0 else np
+            for xs, ts in batch_generator(train, train_t, self.args.batchsize, shuffle=True, xp=xp):
+                loss, ecounts = self.model(xs, ts, train=True)
+                num_tokens += sum([len(x) for x in xs])
+                count += len(xs)
+                total_loss += loss.data
+                total_ecounts = conlleval.merge_counts(total_ecounts, ecounts)
+                i_max = min(i + self.args.batchsize, n_train)
+                print('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
+                i = i_max
+                n_iter += 1
 
-                now_e = '%.2f' % (n_iter * args.batchsize / n_train)
-                time = datetime.now().strftime('%Y%m%d_%H%M')
-                print()
-                print('### iteration %s (epoch %s)' % ((n_iter * args.batchsize), now_e))
-                print('<training result for previous iterations>')
+                optimizer.target.cleargrads() # Clear the parameter gradients
+                loss.backward()               # Backprop
+                loss.unchain_backward()       # Truncate the graph
+                optimizer.update()            # Update the parameters
 
-                ave_loss = total_loss / num_tokens
-                c = total_ecounts
-                acc = conlleval.calculate_accuracy(c.correct_tags, c.token_counter)
-                overall = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
-                print_results(total_loss, ave_loss, count, c, acc, overall)
-                print()
+                # Evaluation
+                if (n_iter * self.args.batchsize) % n_iter_report == 0: # or i == n_train:
 
-                if not args.nolog:
-                    t_stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
-                        count, c.token_counter, c.found_correct, c.found_guessed)
-                    t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
-                        (100.*acc), (100.*overall.prec), (100.*overall.rec), (100.*overall.fscore), 
-                        overall.tp, overall.fp, overall.fn, total_loss, ave_loss)
-                    logger.write('INFO: train - %s\n' % t_stat)
-                    if n_iter == 1:
-                        logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
-                    logger.write('train\t%d\t%s\t%s\n' % (n_iter, now_e, t_res))
+                    now_e = '%.2f' % (n_iter * self.args.batchsize / n_train)
+                    time = datetime.now().strftime('%Y%m%d_%H%M')
+                    print()
+                    print('### iteration %s (epoch %s)' % ((n_iter * self.args.batchsize), now_e))
+                    print('<training result for previous iterations>')
 
-                if args.validation_data:
-                    print('<validation result>')
-                    v_stat, v_res = evaluate(model, val, val_t, args.batchsize, xp=xp)
+                    ave_loss = total_loss / num_tokens
+                    c = total_ecounts
+                    acc = conlleval.calculate_accuracy(c.correct_tags, c.token_counter)
+                    overall = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
+                    print_results(total_loss, ave_loss, count, c, acc, overall)
                     print()
 
-                    if not args.nolog:
-                        logger.write('INFO: valid - %s\n' % v_stat)
+                    if not self.args.nolog:
+                        t_stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
+                            count, c.token_counter, c.found_correct, c.found_guessed)
+                        t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
+                            (100.*acc), (100.*overall.prec), (100.*overall.rec), (100.*overall.fscore), 
+                            overall.tp, overall.fp, overall.fn, total_loss, ave_loss)
+                        logger.write('INFO: train - %s\n' % t_stat)
                         if n_iter == 1:
-                            logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
-                        logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
+                            self.logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                        self.logger.write('train\t%d\t%s\t%s\n' % (n_iter, now_e, t_res))
 
-                # Save the model
-                #mdl_path = 'model/rnn_%s_i%.2fk.mdl' % (time0, (1.0 * n_iter / 1000))
-                mdl_path = 'nn_model/rnn_%s_i%s.mdl' % (time0, now_e)
-                print('save the model: %s\n' % mdl_path)
-                if not args.nolog:
-                    logger.write('INFO: save the model: %s\n' % mdl_path)
-                    serializers.save_npz(mdl_path, model)
+                    if self.args.validation_data:
+                        print('<validation result>')
+                        v_stat, v_res = evaluate(self.model, val, val_t, self.args.batchsize, xp=xp)
+                        print()
+
+                        if not self.args.nolog:
+                            self.logger.write('INFO: valid - %s\n' % v_stat)
+                            if n_iter == 1:
+                                self.logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                            self.logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
+
+                    # Save the model
+                    mdl_path = 'nn_model/rnn_%s_i%s.mdl' % (self.start_time, now_e)
+                    print('save the model: %s\n' % mdl_path)
+                    if not self.args.nolog:
+                        self.logger.write('INFO: save the model: %s\n' % mdl_path)
+                        serializers.save_npz(mdl_path, self.model)
         
-                # Reset counters
-                count = 0
-                total_loss = 0
-                num_tokens = 0
-                total_ecounts = conlleval.EvalCounts()
+                    # Reset counters
+                    count = 0
+                    total_loss = 0
+                    num_tokens = 0
+                    total_ecounts = conlleval.EvalCounts()
 
-                if not args.nolog:
-                    logger.close()
-                    logger = open('log/' + time0 + '.log', 'a')
+                    if not self.args.nolog:
+                        self.logger.close() # 一度保存しておく
+                        self.logger = open('log/' + self.start_time + '.log', 'a')
 
-    time = datetime.now().strftime('%Y%m%d_%H%M')
-    if not args.nolog:
-        logger.write('finish: %s\n' % time)
-        logger.close()
-   
+        time = datetime.now().strftime('%Y%m%d_%H%M')
+        log('finish: %s\n' % time)
+
+
 if __name__ == '__main__':
-    main()
+    if chainer.__version__[0] != '2':
+        print("chainer version>=2.0.0 is required.")
+        sys.exit()
+
+    # get arguments and set up trainer
+
+    args = parse_arguments()
+    trainer = Trainer(args)
+
+    # Load word embedding model, dataset
+
+    embed_model = emb.read_model(args.embed_path) if args.embed_path else None
+
+    trained, trained_t, train, train_t, val, val_t, test, test_t, token2id, label2id, token2id_org, params = load_sequence_labeling_data(trainer.args, trainer)
+    trainer.set_loaded_data(train, train_t, val, val_t, test, test_t, token2id, label2id)
+
+    # Set up model and optimizer
+
+    model = trainer.prepare_model_and_parameters(
+        embed_model=embed_model, token2id_org=token2id_org, params=params)
+
+    optimizer = trainer.setup_optimizer()
+
+    # Dump objects
+
+    trainer.write_params_and_indices()
+    trainer.dump_train_data_and_params()
+
+    # Run
+
+    trainer.run()
+    trainer.logger.close()
