@@ -13,6 +13,7 @@ from chainer import serializers
 from chainer import cuda
 
 import util
+import lattice.lattice as lattice
 import read_embedding as emb
 from conlleval import conlleval
 
@@ -123,7 +124,7 @@ def parse_arguments():
     parser.add_argument('--train_data', '-t', help='Filename of training data')
     parser.add_argument('--validation_data', '-v', help='Filename of validation data')
     parser.add_argument('--test_data', help='Filename of test data')
-    parser.add_argument('--tag_schema', default='BIES')
+    parser.add_argument('--dict_path', default='')
     parser.add_argument('--dump_train_data', action='store_true')
     parser.set_defaults(use_cudnn=False)
     parser.set_defaults(crf=False)
@@ -176,103 +177,10 @@ def parse_arguments():
     print('# subpos depth: {}'.format(args.subpos_depth))
     print('# resume: {}'.format(args.resume))
     print('# epoch to resume: {}'.format(args.resume_epoch))
-    print('# tag schema: {}'.format(args.tag_schema))
     print(args)
     print('')
 
     return args
-
-
-def load_sequence_labeling_data(args, trainer):
-    trained_path = args.dir_path + args.trained_data
-    train_path = args.dir_path + args.train_data
-    val_path = args.dir_path + (args.validation_data if args.validation_data else '')
-    test_path = args.dir_path + (args.test_data if args.test_data else '')
-    refer_vocab = embed_model.wv if args.embed_path else set()
-    params = {}
-    token2id = {}
-    label2id = {}
-    token2id_org = {}
-
-    limit = args.limit if args.limit > 0 else -1
-
-    if args.trained_data:
-        if args.trained_data.endswith('pickle'):
-            name, ext = os.path.splitext(args.dir_path + args.trained_data)
-            trained, trained_t, token2id, label2id, params = util.load_pickled_data(name)
-            trainer.log('INFO: params read from pickle: {}'.format(params))
-        else:
-            trained, trained_t, token2id, label2id = util.read_data(
-                args.format, trained_path, subpos_depth=args.subpos_depth, schema=args.tag_schema, 
-                limit=limit, lowercase=args.lowercase, normalize_digits=args.normalize_digits)
-        token2id_org = token2id.copy()
-        print('vocab size:', len(token2id))
-    else:
-        trained = []
-        trained_t = []
-
-    if args.train_data.endswith('pickle'):
-        name, ext = os.path.splitext(args.dir_path + args.train_data)
-        if len(trained) == 0:
-            #TODO label2id が update されるとエラーになるが、未対応
-            train, train_t, token2id, label2id, params = util.load_pickled_data(name)
-        else:
-            train, train_t, _, _, _ = util.load_pickled_data(
-                name, load_token2id=False, load_label2id=False, load_params=False)
-    else:
-        train, train_t, token2id, label2id = util.read_data(
-            args.format, train_path, token2id=token2id, label2id=label2id,
-            subpos_depth=args.subpos_depth, schema=args.tag_schema, 
-            limit=limit, lowercase=args.lowercase, normalize_digits=args.normalize_digits)
-    print('vocab size:', len(token2id))
-    if not token2id_org:
-        token2id_org = token2id
-
-    if args.validation_data:
-        if args.validation_data.endswith('pickle'):
-            name, ext = os.path.splitext(args.dir_path + args.validation_data)
-            val, val_t, _, _, _ = util.load_pickled_data(
-                name, load_token2id=False, load_label2id=False, load_params=False)
-        else:
-            val, val_t, token2id, label2id = util.read_data(
-                args.format, val_path, token2id=token2id, label2id=label2id, update_token=False, 
-                refer_vocab=refer_vocab, subpos_depth=args.subpos_depth, schema=args.tag_schema, limit=limit, 
-                lowercase=args.lowercase, normalize_digits=args.normalize_digits)
-        print('vocab size:', len(token2id))        
-    else:
-        val = []
-
-    if args.test_data:
-        if args.test_data.endswith('pickle'):
-            name, ext = os.path.splitext(args.dir_path + args.test_data)
-            test, test_t, _, _, _ = util.load_pickled_data(
-                name, load_token2id=False, load_label2id=False, load_params=False)
-        else:
-            test, test_t, token2id, label2id = util.read_data(
-                args.format, test_path, token2id=token2id, label2id=label2id, update_token=False,
-                refer_vocab=refer_vocab, schema=args.tag_schema, limit=limit, 
-                lowercase=args.lowercase, normalize_digits=args.normalize_digits)
-        print('vocab size:', len(token2id))
-    else:
-        test = []
-
-    n_train = len(train)
-    t2i_tmp = list(token2id.items())
-    # id2token = {v:k for k,v in token2id.items()}
-    # id2label = {v:k for k,v in label2id.items()}
-    print('vocab =', len(token2id))
-    print('data length: trained=%d train=%d val=%d test=%d' % (len(trained), n_train, len(val), len(test)))
-    print()
-    print('train:', train[:3], '...', train[n_train-3:])
-    print('train_t:', train_t[:3], '...', train[n_train-3:])
-    print()
-    print('token2id:', t2i_tmp[:3], '...', t2i_tmp[len(t2i_tmp)-3:])
-    print('label2id:', label2id)
-    print()
-    trainer.log('INFO: vocab = %d\n' % len(token2id))
-    trainer.log('INFO: data length: train=%d val=%d\n' % (n_train, len(val)))
-
-    return trained, trained_t, train, train_t, val, val_t, test, test_t, token2id, label2id, token2id_org, params
 
 
 class Trainer(object):
@@ -280,6 +188,23 @@ class Trainer(object):
         self.args = args
         self.start_time = datetime.now().strftime('%Y%m%d_%H%M')
         self.logger = None
+        self.trained = None
+        self.trained_t = None
+        self.trained_p = None
+        self.train = None
+        self.train_t = None
+        self.train_p = None
+        self.val = None
+        self.val_t = None
+        self.val_p = None
+        self.test = None
+        self.test_t = None
+        self.test_p = None
+        self.dic = None
+        self.params = None
+        self.token_indices_org = None
+        self.model = None
+        self.optimizer = None
 
         print('INFO: start: {}\n'.format(self.start_time))
         if not self.args.nolog:
@@ -298,21 +223,124 @@ class Trainer(object):
             chainer.config.cudnn_deterministic = self.args.use_cudnn
 
 
-    def set_loaded_data(self, train, train_t, val, val_t, test, test_t, token2id, label2id):
+    def load_data(self, dic=None, embed_model=None):
+        args = self.args
+
+        trained_path = args.dir_path + args.trained_data
+        train_path = args.dir_path + args.train_data
+        val_path = args.dir_path + (args.validation_data if args.validation_data else '')
+        test_path = args.dir_path + (args.test_data if args.test_data else '')
+        refer_vocab = embed_model.wv if embed_model else set()
+        params = {}
+
+        token_indices_org = None
+
+        limit = args.limit if args.limit > 0 else -1
+
+        if args.trained_data:
+            if args.trained_data.endswith('pickle'):
+                name, ext = os.path.splitext(args.dir_path + args.trained_data)
+                params = {}         # TODO
+                pass
+
+            trained, trained_t, trained_p, dic = util.load_data(
+                args.format, trained_path, subpos_depth=args.subpos_depth, 
+                lowercase=args.lowercase, normalize_digits=args.normalize_digits,
+                dic=dic, refer_vocab=refer_vocab, limit=limit)
+            token_indices_org = dic.token_indices.copy()
+            print('vocab size:', len(dic.token_indices))
+        else:
+            trained = []
+            trained_t = []
+            trained_p = []
+            #TODO params <- args
+
+        if args.train_data.endswith('pickle'):
+            name, ext = os.path.splitext(args.dir_path + args.train_data)
+            pass
+        else:
+            train, train_t, train_p, dic = util.load_data(
+                args.format, train_path, subpos_depth=args.subpos_depth, 
+                lowercase=args.lowercase, normalize_digits=args.normalize_digits,
+                dic=dic, refer_vocab=refer_vocab, limit=limit)
+
+        print('vocab size:', len(dic.token_indices))
+        if not token_indices_org:
+            token_indices_org = dic.token_indices
+
+        if args.validation_data:
+            if args.validation_data.endswith('pickle'):
+                name, ext = os.path.splitext(args.dir_path + args.validation_data)
+                pass
+            else:
+                val, val_t, val_p, dic = util.load_data(
+                    args.format, val_path, update_token=False, update_label=False, 
+                    subpos_depth=args.subpos_depth, 
+                    lowercase=args.lowercase, normalize_digits=args.normalize_digits,
+                    dic=dic, refer_vocab=refer_vocab, limit=limit)
+
+            print('vocab size:', len(dic.token_indices))        
+        else:
+            val = []
+            val_t = []
+            val_p = []
+            
+        if args.test_data:
+            if args.test_data.endswith('pickle'):
+                name, ext = os.path.splitext(args.dir_path + args.test_data)
+                pass
+            else:
+                test, test_t, test_p, dic = util.load_data(
+                    args.format, test_path, update_token=False, update_label=False,
+                    subpos_depth=args.subpos_depth, 
+                    lowercase=args.lowercase, normalize_digits=args.normalize_digits,
+                    dic=dic, refer_vocab=refer_vocab, limit=limit)
+            print('vocab size:', len(dic.token_indices))
+        else:
+            test = []
+            test_t = []
+            test_p = []
+
+        n_train = len(train)
+        t2i_tmp = list(dic.token_indices.token2id.items())
+        id2label = {v:k for k,v in dic.label_indices.token2id.items()}
+        #id2pos = {v:k for k,v in dic.pos_indices.token2id.items()}
+
+        print('vocab =', len(dic.token_indices))
+        print('data length:', len(train))
+        print()
+        print('train:', train[:3], '...', train[n_train-3:])
+        print('labels:', train_t[:3], '...', train_t[n_train-3:])
+        # print('pos labels:', train_p[:3], '...', train_p[n_train-3:])
+        print()
+        print('token2id:', t2i_tmp[:10], '...', t2i_tmp[len(t2i_tmp)-10:])
+        print('labels:', id2label)
+        # print('poss:', id2pos)
+        
+        self.log('INFO: vocab = %d\n' % len(dic.token_indices))
+        self.log('INFO: data length: train=%d val=%d\n' % (len(train), len(val)))
+
+        self.trained = trained
+        self.trained_t = trained_t
+        self.trained_p = trained_p
         self.train = train
         self.train_t = train_t
+        self.train_p = train_p
         self.val = val
         self.val_t = val_t
+        self.val_p = val_p
         self.test = test
         self.test_t = test_t
-        self.token2id = token2id
-        self.label2id = label2id
+        self.test_p = test_p
+        self.dic = dic
+        self.params = params
+        self.token_indices_org = token_indices_org
 
 
-    def prepare_model_and_parameters(self, embed_model=None, token2id_org=None, params={}):
+    def prepare_model_and_parameters(self, embed_model=None):
         # parameter
-        if not params:
-            params = {'embed_dim' : self.args.embed_dim,
+        if not self.params:
+            self.params = {'embed_dim' : self.args.embed_dim,
                       'rnn_layer' : self.args.rnn_layer,
                       'rnn_hidden_unit' : self.args.rnn_hidden_unit,
                       'rnn_bidirection' : self.args.rnn_bidirection,
@@ -321,25 +349,26 @@ class Trainer(object):
                       'left_contexts' : self.args.lc,
                       'right_contexts' : self.args.rc,
                       'dropout' : self.args.dropout,
-                      'tag_schema' : self.args.tag_schema
             }
         if self.args.embed_path:
-            params.update({'embed_path' : self.args.embed_path})
+            self.params.update({'embed_path' : self.args.embed_path})
 
         # model
-        if self.args.eval or len(token2id) == len(token2id_org):
-            t2i_for_model = token2id
-            t2iu_for_model = None
+        grow_lookup = not self.args.eval and len(self.dic.token_indices) > len(self.token_indices_org)
+        if grow_lookup:
+            ti_updated=self.dic.token_indices
+            self.dic_token_indices = self.token_indices_org
         else:
-            t2i_for_model = token2id_org
-            t2iu_for_model = token2id
+            ti_updated=None
 
         model = util.load_model_from_params(
-            params, model_path=self.args.resume, token2id=t2i_for_model, token2id_updated=t2iu_for_model,
-            embed_model=embed_model, label2id=label2id, gpu=self.args.gpu)
+            self.params, model_path=self.args.resume, dic=self.dic, token_indices_updated=ti_updated,
+            embed_model=embed_model, gpu=self.args.gpu)
         model.compute_fscore = True
 
-        self.params = params
+        if grow_lookup:
+            self.dic.token_indices = ti_updated
+
         self.model = model
 
         return self.model
@@ -374,14 +403,14 @@ class Trainer(object):
                 'model_date': self.start_time
             })
             util.write_param_file(self.params, 'nn_model/param_' + self.start_time + '.txt')
-            util.write_map(self.token2id, self.params['token2id_path'])
-            util.write_map(self.label2id, self.params['label2id_path'])
+            util.write_map(self.dic.token_indices.token2id, self.params['token2id_path'])
+            util.write_map(self.dic.label_indices.token2id, self.params['label2id_path'])
 
 
     def dump_train_data_and_params(self):
         if self.args.dump_train_data and not self.args.train_data.endswith('pickle'):
             name, ext = os.path.splitext(self.args.dir_path + self.args.train_data)
-            util.dump_pickled_data(name, self.train, self.train_t, self.token2id, self.label2id, self.params)
+            util.dump_pickled_data(name, self.train, self.train_t, self.dic, self.params)
             print('pickled training data')
     
 
@@ -431,7 +460,7 @@ class Trainer(object):
 
             i = 0
             xp = cuda.cupy if args.gpu >= 0 else np
-            for xs, ts in batch_generator(train, train_t, self.args.batchsize, shuffle=True, xp=xp):
+            for xs, ts in batch_generator(self.train, self.train_t, self.args.batchsize, shuffle=True, xp=xp):
                 loss, ecounts = self.model(xs, ts, train=True)
                 num_tokens += sum([len(x) for x in xs])
                 count += len(xs)
@@ -476,7 +505,7 @@ class Trainer(object):
 
                     if self.args.validation_data:
                         print('<validation result>')
-                        v_stat, v_res = evaluate(self.model, val, val_t, self.args.batchsize, xp=xp)
+                        v_stat, v_res = evaluate(self.model, self.val, self.val_t, self.args.batchsize, xp=xp)
                         print()
 
                         if not self.args.nolog:
@@ -503,7 +532,20 @@ class Trainer(object):
                         self.logger = open('log/' + self.start_time + '.log', 'a')
 
         time = datetime.now().strftime('%Y%m%d_%H%M')
-        log('finish: %s\n' % time)
+        self.log('finish: %s\n' % time)
+
+
+class Trainer4JointMA(Trainer):
+    def __init__(self, args):
+        super(Trainer4JointMA, self).__init__(args)
+
+
+    def run_training(self):
+        pass
+
+
+    def run_evaluation(self):
+        pass
 
 
 if __name__ == '__main__':
@@ -514,21 +556,26 @@ if __name__ == '__main__':
     # get arguments and set up trainer
 
     args = parse_arguments()
-    trainer = Trainer(args)
+    #trainer = Trainer(args)
+    trainer = Trainer2(args)
     trainer.prepare_gpu()
 
-    # Load word embedding model, dataset
+    # Load word embedding model, dictionary and dataset
 
     embed_model = emb.read_model(args.embed_path) if args.embed_path else None
 
-    trained, trained_t, train, train_t, val, val_t, test, test_t, token2id, label2id, token2id_org, params = load_sequence_labeling_data(trainer.args, trainer)
-    trainer.set_loaded_data(train, train_t, val, val_t, test, test_t, token2id, label2id)
+    if args.dict_path:
+        dic = lattice.load_dictionary(args.dict_path, read_pos=True)
+        print('load dic:', args.dict_path)
+        print('vocab size:', len(dic.token_indices))
+    else:
+        dic = None
+
+    trainer.load_data(dic, embed_model)
 
     # Set up model and optimizer
 
-    model = trainer.prepare_model_and_parameters(
-        embed_model=embed_model, token2id_org=token2id_org, params=params)
-
+    model = trainer.prepare_model_and_parameters(embed_model=embed_model)
     optimizer = trainer.setup_optimizer()
 
     # Dump objects
