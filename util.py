@@ -99,9 +99,8 @@ def load_bccwj_data_for_wordseg(path, update_token=True, update_label=True, subp
 
 
 
-#TODO update_pos 未使用
-def load_bccwj_data_for_joint_ma(path, update_token=True, update_pos=True, subpos_depth=-1, 
-                                 dic=None, limit=-1):
+def load_bccwj_data_for_lattice_ma(
+        path, read_pos=True, update_token=True, subpos_depth=-1, dic=None, limit=-1):
     if not dic:
         dic = lattice.MorphologicalDictitionary()
         
@@ -124,16 +123,20 @@ def load_bccwj_data_for_joint_ma(path, update_token=True, update_pos=True, subpo
             line = line.rstrip('\n').split('\t')
             bos = line[2]
             word = line[5]
-            pos = line[3]
-            if subpos_depth == 1:
-                pos = pos.split('-')[0]
-            elif subpos_depth > 1:
-                pos = '_'.join(pos.split('-')[0:subpos_depth])
+            if read_pos:
+                pos = line[3]
+                if subpos_depth == 1:
+                    pos = pos.split('-')[0]
+                elif subpos_depth > 1:
+                    pos = '_'.join(pos.split('-')[0:subpos_depth])
+            else:
+                pos = lattice.DUMMY_POS
 
             if not bof and bos == 'B':
                 instances.append(ins)
                 slab_seqs.append(slabs)
-                plab_seqs.append(plabs)
+                if subpos_depth != 0:
+                    plab_seqs.append(plabs)
                 ins = []
                 slabs = []
                 plabs = []
@@ -147,7 +150,7 @@ def load_bccwj_data_for_joint_ma(path, update_token=True, update_pos=True, subpo
             char_ids, word_id, pos_id = dic.get_entries(word, pos, update=update_token)
             ins.extend(char_ids)
             slabs.extend([dic.get_label_id(get_label_BIES(i, wlen-1)) for i in range(wlen)])
-            #plabs.update({first_char_index : pos_id})
+            #if not read_pos:
             plabs.append((first_char_index, first_char_index + wlen, pos_id))
 
             bof = False
@@ -155,6 +158,7 @@ def load_bccwj_data_for_joint_ma(path, update_token=True, update_pos=True, subpo
         if limit <= 0:
             instances.append(ins)
             slab_seqs.append(slabs)
+            #if not read_pos:
             plab_seqs.append(plabs)
             ins_cnt += 1
 
@@ -235,7 +239,7 @@ def load_wsj_data(path, update_token=True, update_label=True, lowercase=True, no
                   dic=None, refer_vocab=set(), limit=-1):
 
     if not dic:
-        label_ind = lattice.TokenIndices(use_unknown=True) # '#' が val で出てくる
+        label_ind = lattice.TokenIndices(unk_symbol=lattice.DUMMY_POS) # '#' が val で出てくる
         dic = lattice.IndicesPair(label_indices=label_ind)
 
     token_ind = dic.token_indices
@@ -494,59 +498,13 @@ def get_label_BIES(index, last, cate=None):
     return '{}{}'.format(prefix, suffix)
 
 
-# def read_data(data_format, path, token2id={}, label2id={}, subpos_depth=-1, update_token=True, 
-#               update_label=True, refer_vocab=set(), schema='BIES', limit=-1, 
-#               lowercase=False, normalize_digits=False):
-
-#     if data_format == 'bccwj_ws':
-#         read_data = read_bccwj_data_for_wordseg
-
-#         instances, labels, token2id, label2id = read_data(
-#             path, token2id=token2id, label2id=label2id, update_token=update_token, 
-#             update_label=update_label, schema=schema, limit=limit)
-
-#     elif data_format == 'cws':
-#         read_data = read_cws_data
-
-#         instances, labels, token2id, label2id = read_data(
-#             path, token2id=token2id, label2id=label2id, update_token=update_token, 
-#             update_label=update_label, schema=schema, limit=limit)
-
-#     elif data_format == 'bccwj_pos':
-#         read_data = read_bccwj_data_for_postag
-        
-#         instances, labels, token2id, label2id = read_data(
-#             path, token2id=token2id, label2id=label2id, update_token=update_token, 
-#             update_label=update_label, subpos_depth=subpos_depth, refer_vocab=refer_vocab, limit=limit)
-
-#     elif data_format == 'wsj':
-#         read_data = read_wsj_data
-
-#         instances, labels, token2id, label2id = read_data(
-#             path, token2id=token2id, label2id=label2id, update_token=update_token, update_label=update_label, 
-#             refer_vocab=refer_vocab, limit=limit,
-#             lowercase=lowercase, normalize_digits=normalize_digits)
-
-#     elif data_format == 'conll2003':
-#         read_data = read_conll2003_data
-
-#         instances, labels, token2id, label2id = read_data(
-#             path, token2id=token2id, label2id=label2id, update_token=update_token, update_label=update_label, 
-#             refer_vocab=refer_vocab, schema=schema, limit=limit, 
-#             lowercase=lowercase, normalize_digits=normalize_digits)
-#     else:
-#         return
-
-#     return instances, labels, token2id, label2id
-
-
-def load_data(data_format, path, update_token=True, update_label=True, subpos_depth=-1,
+def load_data(data_format, path, read_pos=True, update_token=True, update_label=True, subpos_depth=-1,
                lowercase=False, normalize_digits=False, dic=None, refer_vocab=set(), limit=-1):
     pos_seqs = []
 
-    if data_format == 'bccwj_ws_joint':
-        instances, label_seqs, pos_seqs, dic = load_bccwj_data_for_joint_ma(
-            path, update_token=update_token, update_pos=update_label, subpos_depth=subpos_depth, 
+    if data_format == 'bccwj_ws_lattice':
+        instances, label_seqs, pos_seqs, dic = load_bccwj_data_for_lattice_ma(
+            path, read_pos, update_token=update_token, subpos_depth=subpos_depth, 
             dic=dic, limit=limit)
 
     elif data_format == 'bccwj_ws' or data_format == 'bccwj_pos':
@@ -679,6 +637,11 @@ def read_param_file(path):
 
 def load_model_from_params(params, model_path='', dic=None, token_indices_updated=None, 
                            embed_model=None, gpu=-1):
+    if not 'joint' in params:
+        params['joint'] = False
+    else:
+        params['joint'] = str(params['joint']).lower() == 'true'
+
     if not 'embed_dim' in params:
         params['embed_dim'] = 300
     else:
@@ -754,7 +717,6 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
             n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
             init_embed=embed, gpu=gpu)
-        model = models.JointMorphologicalAnalyzer(rnn, dic.id2label)
 
     elif params['crf']:
         rnn = models.RNN_CRF(
@@ -763,7 +725,6 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
             n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
             init_embed=embed, gpu=gpu)
-        model = models.SequenceTagger(rnn, dic.id2label)
 
     else:
         rnn = models.RNN(
@@ -772,6 +733,11 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
             # n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
             init_embed=embed, gpu=gpu)
+
+    if params['lattice'] or params['joint']:
+        model = models.JointMorphologicalAnalyzer(rnn, dic.id2label)
+        #TODO Joint_RNN の実装
+    else:
         model = models.SequenceTagger(rnn, dic.id2label)
 
     if model_path:
@@ -824,7 +790,7 @@ if __name__ == '__main__':
 
     
     dic_path = 'unidic/lex4kytea_zen.txt'
-    dic = lattice.load_dictionary(dic_path, read_pos=True)
+    dic = lattice.load_dictionary(dic_path, read_pos=args.joint)
     dic_pic_path = 'unidic/lex4kytea_zen_li.pickle'
     with open(dic_pic_path, 'wb') as f:
         pickle.dump(dic, f)

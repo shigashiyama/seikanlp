@@ -97,7 +97,7 @@ def print_results(total_loss, ave_loss, count, c, acc, overall, acc2=None):
           (count, c.token_counter, c.found_correct, c.found_guessed))
     print('TP, FP, FN: %d %d %d' % (overall.tp, overall.fp, overall.fn))
     if acc2:
-        print('A, P, R, F | A:%6.2f %6.2f %6.2f %6.2f | %6.2f' % 
+        print('A, P, R, F | A:%6.2f %6.2f %6.2f %6.2f |%6.2f' % 
               (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore, 100.*acc2))
     else:
         print('A, P, R, F:%6.2f %6.2f %6.2f %6.2f' % 
@@ -270,7 +270,7 @@ class Trainer(object):
                 pass
 
             trained, trained_t, trained_p, dic = util.load_data(
-                args.format, trained_path, subpos_depth=args.subpos_depth, 
+                args.format, trained_path, read_pos=args.joint, subpos_depth=args.subpos_depth, 
                 lowercase=args.lowercase, normalize_digits=args.normalize_digits,
                 dic=dic, refer_vocab=refer_vocab, limit=limit)
             token_indices_org = dic.token_indices.copy()
@@ -286,7 +286,7 @@ class Trainer(object):
             pass
         else:
             train, train_t, train_p, dic = util.load_data(
-                args.format, train_path, subpos_depth=args.subpos_depth, 
+                args.format, train_path, read_pos=args.joint, subpos_depth=args.subpos_depth, 
                 lowercase=args.lowercase, normalize_digits=args.normalize_digits,
                 dic=dic, refer_vocab=refer_vocab, limit=limit)
 
@@ -300,7 +300,7 @@ class Trainer(object):
                 pass
             else:
                 val, val_t, val_p, dic = util.load_data(
-                    args.format, val_path, update_token=False, update_label=False, 
+                    args.format, val_path, read_pos=args.joint, update_token=False, update_label=False, 
                     subpos_depth=args.subpos_depth, 
                     lowercase=args.lowercase, normalize_digits=args.normalize_digits,
                     dic=dic, refer_vocab=refer_vocab, limit=limit)
@@ -317,7 +317,7 @@ class Trainer(object):
                 pass
             else:
                 test, test_t, test_p, dic = util.load_data(
-                    args.format, test_path, update_token=False, update_label=False,
+                    args.format, test_path, read_pos=args.joint, update_token=False, update_label=False,
                     subpos_depth=args.subpos_depth, 
                     lowercase=args.lowercase, normalize_digits=args.normalize_digits,
                     dic=dic, refer_vocab=refer_vocab, limit=limit)
@@ -369,7 +369,8 @@ class Trainer(object):
     def prepare_model_and_parameters(self, embed_model=None):
         # parameter
         if not self.params:
-            self.params = {'embed_dim' : self.args.embed_dim,
+            self.params = {'joint' : self.args.joint,
+                           'embed_dim' : self.args.embed_dim,
                            'rnn_layer' : self.args.rnn_layer,
                            'rnn_hidden_unit' : self.args.rnn_hidden_unit,
                            'rnn_bidirection' : self.args.rnn_bidirection,
@@ -493,7 +494,11 @@ class Trainer(object):
             i = 0
             for xs, ts in batch_generator(self.train, self.train_t, label_seqs2=None, 
                                           batchsize=self.args.batchsize, shuffle=True, xp=xp):
+
+                t0 = datetime.now()
                 loss, ecounts = self.model(xs, ts, train=True)
+                t1 = datetime.now()
+
                 num_tokens += sum([len(x) for x in xs])
                 count += len(xs)
                 total_loss += loss.data
@@ -503,10 +508,15 @@ class Trainer(object):
                 i = i_max
                 n_iter += 1
 
+                t2 = datetime.now()
                 optimizer.target.cleargrads() # Clear the parameter gradients
                 loss.backward()               # Backprop
                 loss.unchain_backward()       # Truncate the graph
                 optimizer.update()            # Update the parameters
+                t3 = datetime.now()
+                print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
+                print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
+                print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
 
                 # Evaluation
                 if (n_iter * self.args.batchsize) % n_iter_report == 0: # or i == n_train:
@@ -548,8 +558,8 @@ class Trainer(object):
 
                     # Save the model
                     mdl_path = 'nn_model/rnn_%s_i%s.mdl' % (self.start_time, now_e)
-                    print('save the model: %s\n' % mdl_path)
                     if not self.args.nolog:
+                        print('save the model: %s\n' % mdl_path)
                         self.logger.write('INFO: save the model: %s\n' % mdl_path)
                         serializers.save_npz(mdl_path, self.model)
         
@@ -610,29 +620,31 @@ class Trainer4JointMA(Trainer):
             for xs, ts_seg, ts_pos in batch_generator(
                     self.train, self.train_t, self.train_p, self.args.batchsize, shuffle=False, xp=xp):
 
-                i_max = min(i + self.args.batchsize, n_train)
-                if i < 215:
-                    print('* skip %d-%d' % ((i+1), i_max))
-                    i = i_max
-                    continue
                 #self.model.predictor.lattice_crf.debug = True
 
+                t0 = datetime.now()
                 loss, ecounts_seg, ecounts_pos = self.model(xs, ts_seg, ts_pos, train=True)
+                t1 = datetime.now()
 
                 num_tokens += sum([len(x) for x in xs])
                 count += len(xs)
                 total_loss += loss.data
                 total_ecounts_seg = conlleval.merge_counts(total_ecounts_seg, ecounts_seg)
                 total_ecounts_pos += ecounts_pos
-                #i_max = min(i + self.args.batchsize, n_train)
+                i_max = min(i + self.args.batchsize, n_train)
                 print('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
                 i = i_max
                 n_iter += 1
 
+                t2 = datetime.now()
                 optimizer.target.cleargrads() # Clear the parameter gradients
                 loss.backward()               # Backprop
                 loss.unchain_backward()       # Truncate the graph
                 optimizer.update()            # Update the parameters
+                t3 = datetime.now()
+                print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
+                print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
+                print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
 
                 # Evaluation
                 if (n_iter * self.args.batchsize) % n_iter_report == 0:
@@ -679,8 +691,8 @@ class Trainer4JointMA(Trainer):
 
                     # Save the model
                     mdl_path = 'nn_model/rnn_%s_i%s.mdl' % (self.start_time, now_e)
-                    print('save the model: %s\n' % mdl_path)
                     if not self.args.nolog:
+                        print('save the model: %s\n' % mdl_path)
                         self.logger.write('INFO: save the model: %s\n' % mdl_path)
                         serializers.save_npz(mdl_path, self.model)
         
@@ -706,7 +718,7 @@ if __name__ == '__main__':
     # get arguments and set up trainer
 
     args = parse_arguments()
-    if args.joint:
+    if args.lattice or args.joint:
         trainer = Trainer4JointMA(args)
     else:
         trainer = Trainer(args)
@@ -717,7 +729,7 @@ if __name__ == '__main__':
     embed_model = emb.read_model(args.embed_path) if args.embed_path else None
 
     if args.dict_path:
-        dic = lattice.load_dictionary(args.dict_path, read_pos=True)
+        dic = lattice.load_dictionary(args.dict_path, read_pos=args.joint)
         print('load dic:', args.dict_path)
         print('vocab size:', len(dic.token_indices))
 

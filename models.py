@@ -9,6 +9,7 @@
 import copy
 import enum
 from collections import Counter
+from datetime import datetime
 
 import numpy as np
 
@@ -27,62 +28,12 @@ from eval.conlleval import conlleval
 import lattice.lattice as lattice
 
 
-class RNN(chainer.Chain):
-    def __init__(self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity'):
-        super(RNN, self).__init__()
-        with self.init_scope():
-            self.act = get_activation(linear_activation)
-            if not self.act:
-                print('unsupported activation function.')
-                sys.exit()
-
-            self.embed = L.EmbedID(n_vocab, embed_dim)
-
-            self.rnn_unit_type = rnn_unit_type
-            if rnn_unit_type == 'lstm':
-                if rnn_bidirection:
-                    self.rnn_unit = L.NStepBiLSTM(n_rnn_layers, rnn_in, n_rnn_units, dropout)
-                else:
-                    self.rnn_unit = L.NStepLSTM(n_rnn_layers, embed_dim, n_rnn_units, dropout)
-            elif rnn_unit_type == 'gru':
-                if rnn_bidirection:
-                    self.rnn_unit = L.NStepBiGRU(n_rnn_layers, rnn_in, n_rnn_units, dropout) 
-                else:
-                    self.rnn_unit = L.NStepGRU(n_rnn_layers, embed_dim, n_rnn_units, dropout)
-            else:
-                if rnn_bidirection:
-                    self.rnn_unit = L.NStepBiRNNTanh(n_rnn_layers, rnn_in, n_rnn_units, dropout) 
-                else:
-                    self.rnn_unit = L.NStepRNNTanh(n_rnn_layers, embed_dim, n_rnn_units, dropout)
-
-            self.linear = L.Linear(n_rnn_units * (2 if rnn_bidirection else 1), n_labels)
-            self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
-        
-
-    def __call__(self, xs, ts, train=True):
-        xs = [self.embed(x) for x in xs]
-        with chainer.using_config('train', train):
-            if self.rnn_unit_type == 'lstm':
-                hy, cy, hs = self.rnn_unit(None, None, xs)
-            else:
-                hy, hs = self.rnn_unit(None, xs)
-            ys = [self.act(self.linear(h)) for h in hs]
-
-        loss = None
-        ps = []
-        for y, t in zip(ys, ts):
-            if loss is not None:
-                loss += self.loss_fun(y, t)
-            else:
-                loss = self.loss_fun(y, t)
-                ps.append([np.argmax(yi.data) for yi in y])
-
-        return loss, ps
-
-
-class RNN_CRF(chainer.Chain):
-    def __init__(self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
-        super(RNN_CRF, self).__init__()
+class RNNBase(chainer.Chain):
+    def __init__(
+            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
+            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
+            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
+        super(RNNBase, self).__init__()
 
         with self.init_scope():
             self.act = get_activation(linear_activation)
@@ -126,16 +77,6 @@ class RNN_CRF(chainer.Chain):
                     self.rnn_unit = L.NStepRNNTanh(n_rnn_layers, embed_dim, n_rnn_units, dropout)
 
             self.linear = L.Linear(n_rnn_units * (2 if rnn_bidirection else 1), n_labels)
-            self.crf = L.CRF1d(n_labels)
-
-            # tmp
-            self.vocab_size = vocab_size
-            self.n_rnn_layers = n_rnn_layers
-            self.rnn_unit_in = rnn_in
-            self.n_rnn_units = n_rnn_units
-            self.dropout = dropout
-            self.rnn_bidirection = rnn_bidirection
-            self.n_labels = n_labels
 
             print('## parameters')
             print('# lookup:', self.lookup.W.shape)
@@ -154,8 +95,15 @@ class RNN_CRF(chainer.Chain):
             #     i += 1
             print('# linear:', self.linear.W.shape, '+', self.linear.b.shape)
             print('# linear_activation:', self.act)
-            print('# crf:', self.crf.cost.shape)
-            print()
+
+            # tmp
+            self.vocab_size = vocab_size
+            self.n_rnn_layers = n_rnn_layers
+            self.rnn_unit_in = rnn_in
+            self.n_rnn_units = n_rnn_units
+            self.dropout = dropout
+            self.rnn_bidirection = rnn_bidirection
+            self.n_labels = n_labels
 
 
     # create input embeded vector considering context window
@@ -181,6 +129,68 @@ class RNN_CRF(chainer.Chain):
         return xs
 
 
+    def get_id_array(self, start, width, gpu=-1):
+        ids = np.array([], dtype=np.int32)
+        for i in range(start, start + width):
+            ids = np.append(ids, np.int32(i))
+        return cuda.to_gpu(ids) if gpu >= 0 else ids
+
+
+class RNN(RNNBase):
+    def __init__(
+            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
+            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
+            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
+        super(RNN, self).__init__(
+            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
+            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
+            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1)
+
+        self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
+
+        print()
+        
+
+    def __call__(self, xs, ts, train=True):
+        #xs = [self.embed(x) for x in xs]
+        xs = self.embed(xs)
+
+        with chainer.using_config('train', train):
+            if self.rnn_unit_type == 'lstm':
+                hy, cy, hs = self.rnn_unit(None, None, xs)
+            else:
+                hy, hs = self.rnn_unit(None, xs)
+            ys = [self.act(self.linear(h)) for h in hs]
+
+        loss = None
+        ps = []
+        for y, t in zip(ys, ts):
+            if loss is not None:
+                loss += self.loss_fun(y, t)
+            else:
+                loss = self.loss_fun(y, t)
+                ps.append([np.argmax(yi.data) for yi in y])
+
+        return loss, ps
+
+
+class RNN_CRF(RNNBase):
+    def __init__(
+            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
+            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
+            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
+        super(RNN_CRF, self).__init__(
+            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
+            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
+            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1)
+
+        with self.init_scope():
+            self.crf = L.CRF1d(n_labels)
+
+            print('# crf cost:', self.crf.cost.shape)
+            print()
+
+
     def __call__(self, xs, ts, train=True):
         xs = self.embed(xs)
 
@@ -192,7 +202,6 @@ class RNN_CRF(chainer.Chain):
                 hy, hs = self.rnn_unit(None, xs)
 
             # linear layer
-            
             if not self.act or self.act == 'identity':
                 hs = [self.linear(h) for h in hs]                
             else:
@@ -210,13 +219,6 @@ class RNN_CRF(chainer.Chain):
         return loss, ys
 
 
-    def get_id_array(self, start, width, gpu=-1):
-        ids = np.array([], dtype=np.int32)
-        for i in range(start, start + width):
-            ids = np.append(ids, np.int32(i))
-        return cuda.to_gpu(ids) if gpu >= 0 else ids
-
-
     # temporaly code for memory checking
     # def reset(self):
     #     print('reset')
@@ -232,29 +234,9 @@ class RNN_CRF(chainer.Chain):
     #     self.rnn_unit = self.rnn_unit.to_gpu()
     #     self.linear = self.linear.to_gpu()
     #     self.crf = self.crf.to_gpu()
-
-        # print('## parameters')
-        # print('# lookup:', self.lookup.W.shape)
-        # print('# lstm:')
-        # i = 0
-        # for c in self.rnn_unit._children:
-        #     print('#   param', i)
-        #     print('#      0 -', c.w0.shape, '+', c.b0.shape)
-        #     print('#      1 -', c.w1.shape, '+', c.b1.shape)
-        #     print('#      2 -', c.w2.shape, '+', c.b2.shape)
-        #     print('#      3 -', c.w3.shape, '+', c.b3.shape)
-        #     print('#      4 -', c.w4.shape, '+', c.b4.shape)
-        #     print('#      5 -', c.w5.shape, '+', c.b5.shape)
-        #     print('#      6 -', c.w6.shape, '+', c.b6.shape)
-        #     print('#      7 -', c.w7.shape, '+', c.b7.shape)
-        #     i += 1
-        # print('# linear:', self.linear.W.shape, '+', self.linear.b.shape)
-        # print('# linear_activation:', self.act)
-        # print('# crf:', self.crf.cost.shape)
-        # print()
         
 
-class RNN_LatticeCRF(RNN_CRF):
+class RNN_LatticeCRF(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, morph_dic, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
@@ -262,11 +244,12 @@ class RNN_LatticeCRF(RNN_CRF):
         super(RNN_LatticeCRF, self).__init__(
             n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
             rnn_bidirection, linear_activation, n_left_contexts, n_right_contexts, init_embed, gpu)
+
         with self.init_scope():
             self.lattice_crf = LatticeCRF(morph_dic, gpu)
 
-    
     def __call__(self, xs, ts_seg, ts_pos, train=True):
+        # ts_seg: unused
         embed_xs = self.embed(xs)
 
         with chainer.using_config('train', train):
@@ -277,18 +260,16 @@ class RNN_LatticeCRF(RNN_CRF):
                 hy, hs = self.rnn_unit(None, embed_xs)
 
             # linear layer
-            
             if not self.act or self.act == 'identity':
                 hs = [self.linear(h) for h in hs]
             else:
                 hs = [self.act(self.linear(h)) for h in hs]
 
             # lattice crf layer
-            
+            loss, ys_seg, ys_pos = self.lattice_crf(xs, hs, ts_pos)
             #print(len(xs), xs[0].shape, xs[0])
             #print(len(embed_xs), xs[0].shape)
             #print(len(hs), hs[0].shape)
-            loss, ys_seg, ys_pos = self.lattice_crf(xs, hs, ts_pos)
 
         return loss, ys_seg, ys_pos
 
@@ -298,10 +279,22 @@ class LatticeCRF(chainer.link.Link):
         super(LatticeCRF, self).__init__()
         self.gpu = gpu
         self.morph_dic = morph_dic
-        tag_schema='BIES'
-        n_label = len(tag_schema)        
+        n_label = len(self.morph_dic.label_indices)
+        n_pos = len(self.morph_dic.pos_indices)
+        self.predict_pos = n_pos > 1
+
         with self.init_scope():
-            self.cost = chainer.variable.Parameter(0, (n_label, n_label)) # prev_tag -> next_tag
+            # prev_tag -> next_tag
+            self.cost_seg = chainer.variable.Parameter(0, (n_label, n_label))
+            if self.predict_pos:
+                # prev_pos -> next_pos
+                self.cost_pos = chainer.variable.Parameter(0, (n_pos, n_pos))
+            else:
+                self.cost_pos = None
+
+        print('# crf cost_seg:', self.cost_seg.shape)
+        print('# crf cost_pos:', self.cost_pos.shape if self.predict_pos else None)
+        print()
 
         self.debug=False
 
@@ -314,11 +307,21 @@ class LatticeCRF(chainer.link.Link):
         loss = chainer.Variable(xp.array(0, dtype=np.float32))
 
         i = 0
+
         for x, h, t_pos in zip(xs, hs, ts_pos):
+            t0 = datetime.now()
             lat = lattice.Lattice(x, self.morph_dic, self.debug)
+            t1 = datetime.now()
             lat.prepare_forward(xp)
+            t2 = datetime.now()
             loss += self.forward(lat, h, t_pos)
+            t3 = datetime.now()
             y_seg, y_pos, words = self.argmax(lat)
+            t4 = datetime.now()
+            # print('  create lattice: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6))
+            # print('  prepare fw    : {}'.format((t2-t1).seconds+(t2-t1).microseconds/10**6))
+            # print('  forward       : {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6))
+            # print('  argmax        : {}'.format((t4-t3).seconds+(t4-t3).microseconds/10**6))
 
             # print("\ninstance", i)
             # i += 1
@@ -341,24 +344,6 @@ class LatticeCRF(chainer.link.Link):
 
         gold_score = chainer.Variable(xp.array(0, dtype=np.float32))
         gold_nodes = t_pos
-        # for k in range(len(t_seg)):
-        #     if t_seg[k] == self.morph_dic.get_label_id('S'):
-        #         begin = k
-        #         end = k + 1
-        #         label = t_pos[k]
-        #     else:
-        #         if t_seg[k] == self.morph_dic.get_label_id('B'):
-        #             begin = k
-        #             label = t_pos[k]
-        #             continue
-        #         elif t_seg[k] == self.morph_dic.get_label_id('I'):
-        #             continue
-        #         else:
-        #             end = k + 1
-        #     node = lat.get_node(begin, end, label)
-        #     gold_nodes.append(node)
-        # print(gold_nodes)
-                
 
         if self.debug:
             print('\nnew instance:', lat.sen)
@@ -379,7 +364,8 @@ class LatticeCRF(chainer.link.Link):
                 if is_gold_node:
                     gold_score += node_score
                     if self.debug:
-                        print("\n@ gold node {} score {} -> {}".format(node, node_score.data, gold_score.data))
+                        print("\n@ gold node {} score {} -> {}".format(
+                            node, node_score.data, gold_score.data))
 
                 #lat.deltas[t] += node_scores_b # incorrect!
                 lat.deltas[t] += node_scores_1
@@ -399,12 +385,14 @@ class LatticeCRF(chainer.link.Link):
                             if prev_nodes[j] in gold_nodes:
                                 gold_score += edge_scores[j]
                                 if self.debug:
-                                    print("  @ gold prev node {} score {} -> {}".format(prev_nodes[j], edge_scores[j].data, gold_score.data))
+                                    print("  @ gold prev node {} score {} -> {}".format(
+                                        prev_nodes[j], edge_scores[j].data, gold_score.data))
                                 break
 
                     lse_prev_score = logsumexp(lat.deltas[s] + edge_scores)
                     if self.debug:
-                        print("  escores {} | delta[{}] {} | lse=> {}".format(edge_scores.data, s, lat.deltas[s].data, lse_prev_score.data))
+                        print("  escores {} | delta[{}] {} | lse=> {}".format(
+                            edge_scores.data, s, lat.deltas[s].data, lse_prev_score.data))
 
                     lse_prev_scores_1 = expand_variable(lse_prev_score, i, len_nodes, xp=xp)
                     lat.deltas[t] += lse_prev_scores_1
@@ -484,7 +472,8 @@ class LatticeCRF(chainer.link.Link):
             tag = 3 #self.morph_dic.get_label_id('S')
             score = hidden_vecs[node[0]][tag]
             if self.debug:
-                print('* N1 score for {}-th elem of {}, {}: {} -> {}'.format(0, node, tag, hidden_vecs[node[0]][tag].data, score.data))
+                print('* N1 score for {}-th elem of {}, {}: {} -> {}'.format(
+                    0, node, tag, hidden_vecs[node[0]][tag].data, score.data))
 
         else:
             score = None
@@ -499,13 +488,15 @@ class LatticeCRF(chainer.link.Link):
 
                 score = (hidden_vecs[i][tag] + score) if score is not None else hidden_vecs[i][tag]
                 if self.debug:
-                    print('* N2 score for {}-th elem of {}, {}: {} -> {}'.format(i, node, tag, hidden_vecs[i][tag].data, score.data))
+                    print('* N2 score for {}-th elem of {}, {}: {} -> {}'.format(
+                        i, node, tag, hidden_vecs[i][tag].data, score.data))
                 
                 if i > node[0]:
-                    cost = self.cost[prev_tag][tag]
+                    cost = self.cost_seg[prev_tag][tag]
                     score += cost
                     if self.debug:
-                        print('* NE score ({}) to ({}): {} -> {}'.format(prev_tag, tag, cost.data, score.data))
+                        print('* NE score ({}) to ({}): {} -> {}'.format(
+                            prev_tag, tag, cost.data, score.data))
 
                 prev_tag = tag
 
@@ -523,10 +514,16 @@ class LatticeCRF(chainer.link.Link):
             next_first_tag = 3 #self.morph_dic.get_label_id('S')
         else:
             next_first_tag = 0 #self.morph_dic.get_label_id('B')
+        score = self.cost_seg[prev_last_tag][next_first_tag]
 
-        score = self.cost[prev_last_tag][next_first_tag]
+        if self.predict_pos:
+            score += self.cost_pos[prev_node[2]][next_node[2]]
+
         if self.debug:
-            print('* E score for {} ({}) and {} ({}): {}'.format(prev_node, prev_last_tag, next_node, next_first_tag, score.data))
+            print('* E score for {} ({}) and {} ({}): {}'.format(
+                prev_node, prev_last_tag, next_node, next_first_tag, score.data))
+            if self.predict_pos:
+                print('* E score for {} and {}: {}'.format(prev_node, next_node, score.data))
         return score
 
 
