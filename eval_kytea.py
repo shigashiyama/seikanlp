@@ -4,7 +4,7 @@ from subprocess import PIPE
 
 import util
 import sys
-from conlleval import conlleval
+from eval.conlleval import conlleval
 
 
 def train_kytea(train_path, model_path, dict_path):

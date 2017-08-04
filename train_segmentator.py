@@ -1,4 +1,3 @@
-from datetime import datetime
 import sys
 import logging
 import argparse
@@ -6,7 +5,9 @@ import copy
 import numpy as np
 import os
 import pickle
-import gc
+#import gc
+from datetime import datetime
+from collections import Counter
 
 import chainer
 from chainer import serializers
@@ -15,36 +16,28 @@ from chainer import cuda
 import util
 import lattice.lattice as lattice
 import read_embedding as emb
-from conlleval import conlleval
+from eval.conlleval import conlleval
 
 
-def batch_generator(instances, labels, batchsize, shuffle=True, xp=np):
-
+def batch_generator(instances, label_seqs, label_seqs2=None, batchsize=100, shuffle=True, xp=np):
     len_data = len(instances)
     perm = np.random.permutation(len_data) if shuffle else range(0, len_data)
 
     for i in range(0, len_data, batchsize):
         i_max = min(i + batchsize, len_data)
         xs = [xp.asarray(instances[perm[i]], dtype=np.int32) for i in range(i, i_max)]
-        ts = [xp.asarray(labels[perm[i]], dtype=np.int32) for i in range(i, i_max)]
+        ts = [xp.asarray(label_seqs[perm[i]], dtype=np.int32) for i in range(i, i_max)]
 
-        # if not shuffle:        
-        #     print(i,i_max)
-        #     if i == 2000:
-        #         for i in range(len(xs)):
-        #             x = xs[i]
-        #             t = ts[i]
-        #             if len(x) != len(t):
-        #                 print('*WARN*')
-        #             print(i)
-        #             print('x', len(x), x)
-        #             print('t', len(t), t)
+        if label_seqs2:
+            ts2 = [label_seqs2[perm[i]] for i in range(i, i_max)]
+            yield xs, ts, ts2
+        else:
+            yield xs, ts
 
-        yield xs, ts
     raise StopIteration
 
 
-def evaluate(model, instances, labels, batchsize, xp=np):
+def evaluate(model, instances, slab_seqs, plab_seqs=None, batchsize=100, xp=np):
     evaluator = model.copy()          # to use different state
     evaluator.predictor.train = False # dropout does nothing
     evaluator.compute_fscore = True
@@ -54,34 +47,61 @@ def evaluate(model, instances, labels, batchsize, xp=np):
     total_loss = 0
     total_ecounts = conlleval.EvalCounts()
 
-    for xs, ts in batch_generator(instances, labels, batchsize, shuffle=False, xp=xp):
+    for batch in batch_generator(instances, slab_seqs, plab_seqs, batchsize=batchsize, shuffle=False, xp=xp):
+        xs = batch[0]
+        ts_seg = batch[1]
+        ts_pos = bathc[2] if len(batch) == 3 else None
         with chainer.no_backprop_mode():
-            loss, ecounts = evaluator(xs, ts, train=False)
+            if ts_pos:
+                loss, ecounts_seg, ecounts_pos = evaluator(xs, ts_seg, ts_pos, train=True)
+            else:
+                loss, ecounts_seg = evaluator(xs, ts_seg, train=False)
+                ecounts_pos = None
 
         num_tokens += sum([len(x) for x in xs])
         count += len(xs)
         total_loss += loss.data
         ave_loss = total_loss / num_tokens
-        total_ecounts = conlleval.merge_counts(total_ecounts, ecounts)
-        c = total_ecounts
-        acc = conlleval.calculate_accuracy(c.correct_tags, c.token_counter)
-        overall = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
-           
-    print_results(total_loss, ave_loss, count, c, acc, overall)
-    stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (count, c.token_counter, c.found_correct, c.found_guessed)
-    res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.5f' % ((100.*acc), (100.*overall.prec), (100.*overall.rec), (100.*overall.fscore), overall.tp, overall.fp, overall.fn, total_loss, ave_loss)
-            
+        total_ecounts_seg = conlleval.merge_counts(total_ecounts, ecounts_seg)
+        seg_c = total_ecounts_seg
+        seg_acc = conlleval.calculate_accuracy(seg_c.correct_tags, seg_c.token_counter)
+        seg_overall = conlleval.calculate_metrics(
+            seg_c.correct_chunk, seg_c.found_guessed, seg_c.found_correct)
+        if ts_pos:
+            pos_c = total_ecounts_pos
+            pos_acc = pos_c['correct'] / pos_c['all'] 
+        else:
+            pos_acc = None
+
+    print_results(total_loss, ave_loss, count, seg_c, seg_acc, seg_overall, pos_acc)
+    stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
+        count, seg_c.token_counter, seg_c.found_correct, seg_c.found_guessed)
+    if ts_pos:
+        res = '%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
+            (100.*pos_acc), (100.*seg_acc), 
+            (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore), 
+            seg_overall.tp, seg_overall.fp, seg_overall.fn, total_loss, ave_loss)
+    else:
+        res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
+            (100.*seg_acc), 
+            (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore), 
+            seg_overall.tp, seg_overall.fp, seg_overall.fn, total_loss, ave_loss)
+        
     return stat, res
 
 
-def print_results(total_loss, ave_loss, count, c, acc, overall):
+def print_results(total_loss, ave_loss, count, c, acc, overall, acc2=None):
     print('total loss: %.4f' % total_loss)
     print('ave loss: %.5f'% ave_loss)
     print('#sen, #token, #chunk, #chunk_pred: %d %d %d %d' %
           (count, c.token_counter, c.found_correct, c.found_guessed))
     print('TP, FP, FN: %d %d %d' % (overall.tp, overall.fp, overall.fn))
-    print('A, P, R, F:%6.2f %6.2f %6.2f %6.2f' % 
-          (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore))
+    if acc2:
+        print('A, P, R, F | A:%6.2f %6.2f %6.2f %6.2f | %6.2f' % 
+              (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore, 100.*acc2))
+    else:
+        print('A, P, R, F:%6.2f %6.2f %6.2f %6.2f' % 
+              (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore))
 
 
 def parse_arguments():
@@ -90,6 +110,7 @@ def parse_arguments():
     parser.add_argument('--gpu', '-g', type=int, default=-1,
                         help='GPU ID (negative value indicates CPU)')
     parser.add_argument('--cudnn', dest='use_cudnn', action='store_true')
+    parser.add_argument('--joint', '-j', action='store_true')
     parser.add_argument('--eval', action='store_true', help='Evaluate on given model using input date without training')
     parser.add_argument('--limit', type=int, default=-1, help='Limit the number of samples for quick tests')
     parser.add_argument('--batchsize', '-b', type=int, default=20)
@@ -102,6 +123,7 @@ def parse_arguments():
     parser.add_argument('--rnn_unit_type', default='lstm')
     parser.add_argument('--rnn_bidirection', action='store_true')
     parser.add_argument('--crf', action='store_true')
+    parser.add_argument('--lattice', action='store_true')
     parser.add_argument('--linear_activation', '-a', default='')
     parser.add_argument('--rnn_hidden_unit', '-u', type=int, default=800)
     parser.add_argument('--embed_dim', '-d', type=int, default=300)
@@ -126,8 +148,10 @@ def parse_arguments():
     parser.add_argument('--test_data', help='Filename of test data')
     parser.add_argument('--dict_path', default='')
     parser.add_argument('--dump_train_data', action='store_true')
+    parser.set_defaults(joint=False)
     parser.set_defaults(use_cudnn=False)
     parser.set_defaults(crf=False)
+    parser.set_defaults(lattice=False)    
     parser.set_defaults(rnn_bidirection=False)
     parser.set_defaults(lowercase=False)
     parser.set_defaults(normalize_digits=False)
@@ -146,6 +170,7 @@ def parse_arguments():
     print('# No log: {}'.format(args.nolog))
     print('# GPU: {}'.format(args.gpu))
     print('# cudnn: {}'.format(args.use_cudnn))
+    print('# joint: {}'.format(args.joint))
     print('# eval: {}'.format(args.eval))
     print('# limit: {}'.format(args.limit))
     print('# minibatch-size: {}'.format(args.batchsize))
@@ -154,6 +179,7 @@ def parse_arguments():
     print('# rnn unit type: {}'.format(args.rnn_unit_type))
     print('# rnn bidirection: {}'.format(args.rnn_bidirection))
     print('# crf: {}'.format(args.crf))
+    print('# lattice: {}'.format(args.lattice))
     print('# linear_activation: {}'.format(args.linear_activation))
     print('# rnn_layer: {}'.format(args.rnn_layer))
     print('# embedding dimension: {}'.format(args.embed_dim))
@@ -304,18 +330,21 @@ class Trainer(object):
         n_train = len(train)
         t2i_tmp = list(dic.token_indices.token2id.items())
         id2label = {v:k for k,v in dic.label_indices.token2id.items()}
-        #id2pos = {v:k for k,v in dic.pos_indices.token2id.items()}
+        if train_p:
+            id2pos = {v:k for k,v in dic.pos_indices.token2id.items()}
 
         print('vocab =', len(dic.token_indices))
         print('data length:', len(train))
         print()
         print('train:', train[:3], '...', train[n_train-3:])
         print('labels:', train_t[:3], '...', train_t[n_train-3:])
-        # print('pos labels:', train_p[:3], '...', train_p[n_train-3:])
+        if train_p:
+            print('pos labels:', train_p[:3], '...', train_p[n_train-3:])
         print()
         print('token2id:', t2i_tmp[:10], '...', t2i_tmp[len(t2i_tmp)-10:])
         print('labels:', id2label)
-        # print('poss:', id2pos)
+        if train_p:
+            print('poss:', id2pos)
         
         self.log('INFO: vocab = %d\n' % len(dic.token_indices))
         self.log('INFO: data length: train=%d val=%d\n' % (len(train), len(val)))
@@ -341,14 +370,15 @@ class Trainer(object):
         # parameter
         if not self.params:
             self.params = {'embed_dim' : self.args.embed_dim,
-                      'rnn_layer' : self.args.rnn_layer,
-                      'rnn_hidden_unit' : self.args.rnn_hidden_unit,
-                      'rnn_bidirection' : self.args.rnn_bidirection,
-                      'crf' : self.args.crf,
-                      'linear_activation' : self.args.linear_activation,
-                      'left_contexts' : self.args.lc,
-                      'right_contexts' : self.args.rc,
-                      'dropout' : self.args.dropout,
+                           'rnn_layer' : self.args.rnn_layer,
+                           'rnn_hidden_unit' : self.args.rnn_hidden_unit,
+                           'rnn_bidirection' : self.args.rnn_bidirection,
+                           'crf' : self.args.crf,
+                           'lattice' : self.args.lattice,
+                           'linear_activation' : self.args.linear_activation,
+                           'left_contexts' : self.args.lc,
+                           'right_contexts' : self.args.rc,
+                           'dropout' : self.args.dropout,
             }
         if self.args.embed_path:
             self.params.update({'embed_path' : self.args.embed_path})
@@ -422,10 +452,10 @@ class Trainer(object):
 
 
     def run_evaluation(self):
-        #    if args.eval:
-        print('<test result>')
         xp = cuda.cupy if args.gpu >= 0 else np
-        te_stat, te_res = evaluate(self.model, self.test, self.test_t, self.args.batchsize, xp=xp)
+
+        print('<test result>')
+        te_stat, te_res = evaluate(self.model, self.test, self.test_t, self.test_p, self.args.batchsize, xp=xp)
         print()
 
         time = datetime.now().strftime('%Y%m%d_%H%M')
@@ -434,10 +464,12 @@ class Trainer(object):
 
 
     def run_training(self):
-        n_train = len(self.train)
+        xp = cuda.cupy if args.gpu >= 0 else np
 
+        n_train = len(self.train)
         n_iter_report = self.args.iter_to_report
         n_iter = 0
+
         for e in range(max(1, self.args.resume_epoch), self.args.epoch+1):
             time = datetime.now().strftime('%Y%m%d_%H%M')
             self.log('INFO: start epoch %d at %s\n' % (e, time))
@@ -454,13 +486,13 @@ class Trainer(object):
                     print('learning decay: %f -> %f' % (lr_tmp, optimizer.lr))
 
             count = 0
-            total_loss = 0
             num_tokens = 0
+            total_loss = 0
             total_ecounts = conlleval.EvalCounts()
 
             i = 0
-            xp = cuda.cupy if args.gpu >= 0 else np
-            for xs, ts in batch_generator(self.train, self.train_t, self.args.batchsize, shuffle=True, xp=xp):
+            for xs, ts in batch_generator(self.train, self.train_t, label_seqs2=None, 
+                                          batchsize=self.args.batchsize, shuffle=True, xp=xp):
                 loss, ecounts = self.model(xs, ts, train=True)
                 num_tokens += sum([len(x) for x in xs])
                 count += len(xs)
@@ -481,8 +513,7 @@ class Trainer(object):
 
                     now_e = '%.2f' % (n_iter * self.args.batchsize / n_train)
                     time = datetime.now().strftime('%Y%m%d_%H%M')
-                    print()
-                    print('### iteration %s (epoch %s)' % ((n_iter * self.args.batchsize), now_e))
+                    print('\n### iteration %s (epoch %s)' % ((n_iter * self.args.batchsize), now_e))
                     print('<training result for previous iterations>')
 
                     ave_loss = total_loss / num_tokens
@@ -505,7 +536,139 @@ class Trainer(object):
 
                     if self.args.validation_data:
                         print('<validation result>')
-                        v_stat, v_res = evaluate(self.model, self.val, self.val_t, self.args.batchsize, xp=xp)
+                        v_stat, v_res = evaluate(
+                            self.model, self.val, self.val_t, batchsize=self.args.batchsize, xp=xp)
+                        print()
+
+                        if not self.args.nolog:
+                            self.logger.write('INFO: valid - %s\n' % v_stat)
+                            if n_iter == 1:
+                                self.logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                            self.logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
+
+                    # Save the model
+                    mdl_path = 'nn_model/rnn_%s_i%s.mdl' % (self.start_time, now_e)
+                    print('save the model: %s\n' % mdl_path)
+                    if not self.args.nolog:
+                        self.logger.write('INFO: save the model: %s\n' % mdl_path)
+                        serializers.save_npz(mdl_path, self.model)
+        
+                    # Reset counters
+                    count = 0
+                    num_tokens = 0
+                    total_loss = 0
+                    total_ecounts = conlleval.EvalCounts()
+
+                    if not self.args.nolog:
+                        self.logger.close() # 一度保存しておく
+                        self.logger = open('log/' + self.start_time + '.log', 'a')
+
+        time = datetime.now().strftime('%Y%m%d_%H%M')
+        self.log('finish: %s\n' % time)
+
+
+class Trainer4JointMA(Trainer):
+    def __init__(self, args):
+        super(Trainer4JointMA, self).__init__(args)
+
+
+    # def run(self):
+    #     if self.args.eval:
+    #         self.run_evaluation()
+    #     else:
+    #         self.run_training()
+
+
+    def run_training(self):
+        xp = cuda.cupy if args.gpu >= 0 else np
+
+        n_train = len(self.train)
+        n_iter_report = self.args.iter_to_report
+        n_iter = 0
+
+        # for ti in range(6980, 6995):
+        #     token = self.dic.get_token(ti)
+        #     ci = self.dic.get_chunk_id(token)
+        #     poss = [self.dic.get_pos(pi) for pi in self.dic.get_pos_ids(ci)]
+        #     print(ti, ci, self.dic.get_token(ti), poss)
+        # return
+
+        for e in range(max(1, self.args.resume_epoch), self.args.epoch+1):
+            time = datetime.now().strftime('%Y%m%d_%H%M')
+            self.log('INFO: start epoch %d at %s\n' % (e, time))
+            print('start epoch %d: %s' % (e, time))
+
+            # learning rate decay: not implemented
+
+            count = 0
+            num_tokens = 0
+            total_loss = 0
+            total_ecounts_seg = conlleval.EvalCounts()
+            total_ecounts_pos = Counter()
+
+            i = 0
+            for xs, ts_seg, ts_pos in batch_generator(
+                    self.train, self.train_t, self.train_p, self.args.batchsize, shuffle=False, xp=xp):
+
+                i_max = min(i + self.args.batchsize, n_train)
+                if i < 215:
+                    print('* skip %d-%d' % ((i+1), i_max))
+                    i = i_max
+                    continue
+                #self.model.predictor.lattice_crf.debug = True
+
+                loss, ecounts_seg, ecounts_pos = self.model(xs, ts_seg, ts_pos, train=True)
+
+                num_tokens += sum([len(x) for x in xs])
+                count += len(xs)
+                total_loss += loss.data
+                total_ecounts_seg = conlleval.merge_counts(total_ecounts_seg, ecounts_seg)
+                total_ecounts_pos += ecounts_pos
+                #i_max = min(i + self.args.batchsize, n_train)
+                print('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
+                i = i_max
+                n_iter += 1
+
+                optimizer.target.cleargrads() # Clear the parameter gradients
+                loss.backward()               # Backprop
+                loss.unchain_backward()       # Truncate the graph
+                optimizer.update()            # Update the parameters
+
+                # Evaluation
+                if (n_iter * self.args.batchsize) % n_iter_report == 0:
+
+                    now_e = '%.2f' % (n_iter * self.args.batchsize / n_train)
+                    time = datetime.now().strftime('%Y%m%d_%H%M')
+                    print('\n### iteration %s (epoch %s)' % ((n_iter * self.args.batchsize), now_e))
+                    print('<training result for previous iterations>')
+
+                    ave_loss = total_loss / num_tokens
+                    seg_c = total_ecounts_seg
+                    seg_acc = conlleval.calculate_accuracy(seg_c.correct_tags, seg_c.token_counter)
+                    seg_overall = conlleval.calculate_metrics(
+                        seg_c.correct_chunk, seg_c.found_guessed, seg_c.found_correct)
+                    pos_c = total_ecounts_pos
+                    pos_acc = pos_c['correct'] / pos_c['all'] 
+                    print_results(total_loss, ave_loss, count, seg_c, seg_acc, seg_overall, pos_acc)
+                    print()
+
+                    if not self.args.nolog:
+                        t_stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
+                            count, c.token_counter, c.found_correct, c.found_guessed)
+                        t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
+                            (100.*pos_acc), (100.*seg_acc), 
+                            (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore), 
+                            seg_overall.tp, seg_overall.fp, seg_overall.fn, total_loss, ave_loss)
+                        logger.write('INFO: train - %s\n' % t_stat)
+                        if n_iter == 1:
+                            self.logger.write(
+                                'data\titer\ep\tpos-acc\tseg-acc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                        self.logger.write('train\t%d\t%s\t%s\n' % (n_iter, now_e, t_res))
+
+                    if self.args.validation_data:
+                        print('<validation result>')
+                        v_stat, v_res = evaluate(
+                            self.model, self.val, self.val_t, self.val_p, self.args.batchsize, xp=xp)
                         print()
 
                         if not self.args.nolog:
@@ -535,19 +698,6 @@ class Trainer(object):
         self.log('finish: %s\n' % time)
 
 
-class Trainer4JointMA(Trainer):
-    def __init__(self, args):
-        super(Trainer4JointMA, self).__init__(args)
-
-
-    def run_training(self):
-        pass
-
-
-    def run_evaluation(self):
-        pass
-
-
 if __name__ == '__main__':
     if chainer.__version__[0] != '2':
         print("chainer version>=2.0.0 is required.")
@@ -556,8 +706,10 @@ if __name__ == '__main__':
     # get arguments and set up trainer
 
     args = parse_arguments()
-    #trainer = Trainer(args)
-    trainer = Trainer2(args)
+    if args.joint:
+        trainer = Trainer4JointMA(args)
+    else:
+        trainer = Trainer(args)
     trainer.prepare_gpu()
 
     # Load word embedding model, dictionary and dataset
@@ -568,6 +720,12 @@ if __name__ == '__main__':
         dic = lattice.load_dictionary(args.dict_path, read_pos=True)
         print('load dic:', args.dict_path)
         print('vocab size:', len(dic.token_indices))
+
+        # tmp
+        if not args.dict_path.endswith('pickle'):
+            dic_pic_path = 'unidic/lex4kytea_zen.pickle'
+            with open(dic_pic_path, 'wb') as f:
+                pickle.dump(dic, f)
     else:
         dic = None
 
@@ -580,10 +738,11 @@ if __name__ == '__main__':
 
     # Dump objects
 
-    trainer.write_params_and_indices()
-    trainer.dump_train_data_and_params()
+    # trainer.write_params_and_indices()
+    # trainer.dump_train_data_and_params()
 
     # Run
 
     trainer.run()
-    trainer.logger.close()
+    if not args.nolog:
+        trainer.logger.close()

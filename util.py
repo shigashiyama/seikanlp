@@ -99,38 +99,24 @@ def load_bccwj_data_for_wordseg(path, update_token=True, update_label=True, subp
 
 
 
+#TODO update_pos 未使用
 def load_bccwj_data_for_joint_ma(path, update_token=True, update_pos=True, subpos_depth=-1, 
                                  dic=None, limit=-1):
-    sch = Schema.BIES
-
-    if dic:
-        if type(dic) == lattice.MorphologyDictionary:
-            word_ind = dic.chunk_indices
-        else:
-            word_ind = None
-    else:
-        dic = lattice.IndicesTriplet()
-        dic.init_label_indices('BIES')
-        word_ind = None
-    
-    char_ind = dic.token_indices
-    slab_ind = dic.label_indices
-    plab_ind = dic.pos_indices
+    if not dic:
+        dic = lattice.MorphologicalDictitionary()
         
     instances = []
     slab_seqs = []              # list of segmentation labels (B, I, E, S)
     plab_seqs = []              # list of pos labels
 
     ins_cnt = 0
-    # token_cnt = 0
-    # word_cnt = 0
 
     print("Read file:", path)
     with open(path) as f:
         bof = True
         ins = []
         slabs = []
-        plabs = {}
+        plabs = []
         for line in f:
             if len(line) < 2:
                 continue
@@ -150,7 +136,7 @@ def load_bccwj_data_for_joint_ma(path, update_token=True, update_pos=True, subpo
                 plab_seqs.append(plabs)
                 ins = []
                 slabs = []
-                plabs = {}
+                plabs = []
                 ins_cnt += 1
 
             if limit > 0 and ins_cnt >= limit:
@@ -158,21 +144,23 @@ def load_bccwj_data_for_joint_ma(path, update_token=True, update_pos=True, subpo
 
             wlen = len(word)
             first_char_index = len(ins)
-            ins.extend([char_ind.get_id(word[i], update_token) for i in range(wlen)])
-            slabs.extend([slab_ind.get_id(get_label_BIES(i, wlen-1)) for i in range(wlen)])
-            plabs.update({first_char_index:plab_ind.get_id(pos, update_pos)})
-            if word_ind:
-                word_ind.get_id(word, update_token)
+            char_ids, word_id, pos_id = dic.get_entries(word, pos, update=update_token)
+            ins.extend(char_ids)
+            slabs.extend([dic.get_label_id(get_label_BIES(i, wlen-1)) for i in range(wlen)])
+            #plabs.update({first_char_index : pos_id})
+            plabs.append((first_char_index, first_char_index + wlen, pos_id))
 
             bof = False
-            # word_cnt += 1
-            # token_cnt += len(word)
 
         if limit <= 0:
             instances.append(ins)
             slab_seqs.append(slabs)
             plab_seqs.append(plabs)
             ins_cnt += 1
+
+    if update_token:
+        dic.create_id2token()
+        dic.create_id2pos()
 
     return instances, slab_seqs, plab_seqs, dic
 
@@ -714,6 +702,11 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
     else:
         params['rnn_bidirection'] = str(params['rnn_bidirection']).lower() == 'true'
 
+    if not 'lattice' in params:
+        params['lattice'] = False
+    else:
+        params['lattice'] = str(params['lattice']).lower() == 'true'
+
     if not 'crf' in params:
         params['crf'] = False
     else:
@@ -754,13 +747,24 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             lattice.TokenIndices(label2id))
     dic.create_id2label()
 
-    if params['crf']:
+    if params['lattice']:
+        rnn = models.RNN_LatticeCRF(
+            params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
+            len(dic.label_indices), dic, dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
+            rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
+            n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
+            init_embed=embed, gpu=gpu)
+        model = models.JointMorphologicalAnalyzer(rnn, dic.id2label)
+
+    elif params['crf']:
         rnn = models.RNN_CRF(
             params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
             len(dic.label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
             rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
             n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
             init_embed=embed, gpu=gpu)
+        model = models.SequenceTagger(rnn, dic.id2label)
+
     else:
         rnn = models.RNN(
             params['rnn_layer'], len(token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
@@ -768,8 +772,8 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
             # n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
             init_embed=embed, gpu=gpu)
+        model = models.SequenceTagger(rnn, dic.id2label)
 
-    model = models.SequenceTagger(rnn, dic.id2label)
     if model_path:
         chainer.serializers.load_npz(model_path, model)
 
