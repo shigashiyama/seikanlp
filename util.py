@@ -29,7 +29,7 @@ def load_bccwj_data_for_wordseg(path, update_token=True, update_label=True, subp
     if not dic:
         dic = lattice.IndicesPair()
         if subpos_depth == 0:
-            dic.init_label_indices(schema)
+            dic.init_label_indices('BIES')
 
     token_ind = dic.token_indices
     label_ind = dic.label_indices
@@ -135,8 +135,7 @@ def load_bccwj_data_for_lattice_ma(
             if not bof and bos == 'B':
                 instances.append(ins)
                 slab_seqs.append(slabs)
-                if subpos_depth != 0:
-                    plab_seqs.append(plabs)
+                plab_seqs.append(plabs)
                 ins = []
                 slabs = []
                 plabs = []

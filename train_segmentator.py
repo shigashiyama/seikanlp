@@ -5,7 +5,6 @@ import copy
 import numpy as np
 import os
 import pickle
-#import gc
 from datetime import datetime
 from collections import Counter
 
@@ -38,6 +37,8 @@ def batch_generator(instances, label_seqs, label_seqs2=None, batchsize=100, shuf
 
 
 def evaluate(model, instances, slab_seqs, plab_seqs=None, batchsize=100, xp=np):
+    eval_pos = plab_seqs != None
+
     evaluator = model.copy()          # to use different state
     evaluator.predictor.train = False # dropout does nothing
     evaluator.compute_fscore = True
@@ -45,14 +46,15 @@ def evaluate(model, instances, slab_seqs, plab_seqs=None, batchsize=100, xp=np):
     count = 0
     num_tokens = 0
     total_loss = 0
-    total_ecounts = conlleval.EvalCounts()
+    total_ecounts_seg = conlleval.EvalCounts()
+    total_ecounts_pos = Counter()
 
     for batch in batch_generator(instances, slab_seqs, plab_seqs, batchsize=batchsize, shuffle=False, xp=xp):
         xs = batch[0]
         ts_seg = batch[1]
-        ts_pos = bathc[2] if len(batch) == 3 else None
+        ts_pos = batch[2] if len(batch) == 3 else None
         with chainer.no_backprop_mode():
-            if ts_pos:
+            if eval_pos:
                 loss, ecounts_seg, ecounts_pos = evaluator(xs, ts_seg, ts_pos, train=True)
             else:
                 loss, ecounts_seg = evaluator(xs, ts_seg, train=False)
@@ -62,12 +64,14 @@ def evaluate(model, instances, slab_seqs, plab_seqs=None, batchsize=100, xp=np):
         count += len(xs)
         total_loss += loss.data
         ave_loss = total_loss / num_tokens
-        total_ecounts_seg = conlleval.merge_counts(total_ecounts, ecounts_seg)
+        total_ecounts_seg = conlleval.merge_counts(total_ecounts_seg, ecounts_seg)
+        if eval_pos:
+            total_ecounts_pos += ecounts_pos
         seg_c = total_ecounts_seg
         seg_acc = conlleval.calculate_accuracy(seg_c.correct_tags, seg_c.token_counter)
         seg_overall = conlleval.calculate_metrics(
             seg_c.correct_chunk, seg_c.found_guessed, seg_c.found_correct)
-        if ts_pos:
+        if eval_pos:
             pos_c = total_ecounts_pos
             pos_acc = pos_c['correct'] / pos_c['all'] 
         else:
@@ -76,7 +80,7 @@ def evaluate(model, instances, slab_seqs, plab_seqs=None, batchsize=100, xp=np):
     print_results(total_loss, ave_loss, count, seg_c, seg_acc, seg_overall, pos_acc)
     stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
         count, seg_c.token_counter, seg_c.found_correct, seg_c.found_guessed)
-    if ts_pos:
+    if eval_pos:
         res = '%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
             (100.*pos_acc), (100.*seg_acc), 
             (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore), 
@@ -483,7 +487,7 @@ class Trainer(object):
                     lr_tmp = optimizer.lr
                     optimizer.lr = optimizer.lr * lrdecay_rate
                     if not self.args.nolog:
-                        logger.write('learning decay: %f -> %f' % (lr_tmp, optimizer.lr))
+                        self.logger.write('learning decay: %f -> %f' % (lr_tmp, optimizer.lr))
                     print('learning decay: %f -> %f' % (lr_tmp, optimizer.lr))
 
             count = 0
@@ -495,9 +499,9 @@ class Trainer(object):
             for xs, ts in batch_generator(self.train, self.train_t, label_seqs2=None, 
                                           batchsize=self.args.batchsize, shuffle=True, xp=xp):
 
-                t0 = datetime.now()
+                # t0 = datetime.now()
                 loss, ecounts = self.model(xs, ts, train=True)
-                t1 = datetime.now()
+                # t1 = datetime.now()
 
                 num_tokens += sum([len(x) for x in xs])
                 count += len(xs)
@@ -508,15 +512,15 @@ class Trainer(object):
                 i = i_max
                 n_iter += 1
 
-                t2 = datetime.now()
+                # t2 = datetime.now()
                 optimizer.target.cleargrads() # Clear the parameter gradients
                 loss.backward()               # Backprop
                 loss.unchain_backward()       # Truncate the graph
                 optimizer.update()            # Update the parameters
-                t3 = datetime.now()
-                print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
-                print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
-                print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
+                # t3 = datetime.now()
+                # print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
+                # print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
+                # print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
 
                 # Evaluation
                 if (n_iter * self.args.batchsize) % n_iter_report == 0: # or i == n_train:
@@ -539,9 +543,10 @@ class Trainer(object):
                         t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
                             (100.*acc), (100.*overall.prec), (100.*overall.rec), (100.*overall.fscore), 
                             overall.tp, overall.fp, overall.fn, total_loss, ave_loss)
-                        logger.write('INFO: train - %s\n' % t_stat)
+                        self.logger.write('INFO: train - %s\n' % t_stat)
                         if n_iter == 1:
-                            self.logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                            self.logger.write(
+                                'data\titer\tep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
                         self.logger.write('train\t%d\t%s\t%s\n' % (n_iter, now_e, t_res))
 
                     if self.args.validation_data:
@@ -553,7 +558,8 @@ class Trainer(object):
                         if not self.args.nolog:
                             self.logger.write('INFO: valid - %s\n' % v_stat)
                             if n_iter == 1:
-                                self.logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                                self.logger.write(
+                                    'data\titer\tep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
                             self.logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
 
                     # Save the model
@@ -580,7 +586,6 @@ class Trainer(object):
 class Trainer4JointMA(Trainer):
     def __init__(self, args):
         super(Trainer4JointMA, self).__init__(args)
-
 
     # def run(self):
     #     if self.args.eval:
@@ -622,9 +627,9 @@ class Trainer4JointMA(Trainer):
 
                 #self.model.predictor.lattice_crf.debug = True
 
-                t0 = datetime.now()
+                # t0 = datetime.now()
                 loss, ecounts_seg, ecounts_pos = self.model(xs, ts_seg, ts_pos, train=True)
-                t1 = datetime.now()
+                # t1 = datetime.now()
 
                 num_tokens += sum([len(x) for x in xs])
                 count += len(xs)
@@ -636,15 +641,15 @@ class Trainer4JointMA(Trainer):
                 i = i_max
                 n_iter += 1
 
-                t2 = datetime.now()
+                # t2 = datetime.now()
                 optimizer.target.cleargrads() # Clear the parameter gradients
                 loss.backward()               # Backprop
                 loss.unchain_backward()       # Truncate the graph
                 optimizer.update()            # Update the parameters
-                t3 = datetime.now()
-                print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
-                print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
-                print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
+                # t3 = datetime.now()
+                # print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
+                # print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
+                # print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
 
                 # Evaluation
                 if (n_iter * self.args.batchsize) % n_iter_report == 0:
@@ -666,15 +671,15 @@ class Trainer4JointMA(Trainer):
 
                     if not self.args.nolog:
                         t_stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
-                            count, c.token_counter, c.found_correct, c.found_guessed)
-                        t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
+                            count, seg_c.token_counter, seg_c.found_correct, seg_c.found_guessed)
+                        t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
                             (100.*pos_acc), (100.*seg_acc), 
                             (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore), 
                             seg_overall.tp, seg_overall.fp, seg_overall.fn, total_loss, ave_loss)
-                        logger.write('INFO: train - %s\n' % t_stat)
+                        self.logger.write('INFO: train - %s\n' % t_stat)
                         if n_iter == 1:
                             self.logger.write(
-                                'data\titer\ep\tpos-acc\tseg-acc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                                'data\titer\tep\tpos-acc\tseg-acc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
                         self.logger.write('train\t%d\t%s\t%s\n' % (n_iter, now_e, t_res))
 
                     if self.args.validation_data:
@@ -686,7 +691,8 @@ class Trainer4JointMA(Trainer):
                         if not self.args.nolog:
                             self.logger.write('INFO: valid - %s\n' % v_stat)
                             if n_iter == 1:
-                                self.logger.write('data\titer\ep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                                self.logger.write(
+                                    'data\titer\tep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
                             self.logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
 
                     # Save the model
@@ -735,7 +741,7 @@ if __name__ == '__main__':
 
         # tmp
         if not args.dict_path.endswith('pickle'):
-            dic_pic_path = 'unidic/lex4kytea_zen.pickle'
+            dic_pic_path = args.dict_path.split('.')[0]+'.pickle'
             with open(dic_pic_path, 'wb') as f:
                 pickle.dump(dic, f)
     else:

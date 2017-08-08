@@ -180,9 +180,8 @@ class RNN_CRF(RNNBase):
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
             n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
         super(RNN_CRF, self).__init__(
-            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
-            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1)
+            n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
+            rnn_bidirection, linear_activation, n_left_contexts, n_right_contexts, init_embed, gpu)
 
         with self.init_scope():
             self.crf = L.CRF1d(n_labels)
