@@ -626,20 +626,23 @@ class Trainer4JointMA(Trainer):
                     self.train, self.train_t, self.train_p, self.args.batchsize, shuffle=False, xp=xp):
 
                 #self.model.predictor.lattice_crf.debug = True
+                #self.dic.chunk_trie.debug = True
 
                 # t0 = datetime.now()
                 loss, ecounts_seg, ecounts_pos = self.model(xs, ts_seg, ts_pos, train=True)
                 # t1 = datetime.now()
 
-                num_tokens += sum([len(x) for x in xs])
-                count += len(xs)
-                total_loss += loss.data
-                total_ecounts_seg = conlleval.merge_counts(total_ecounts_seg, ecounts_seg)
-                total_ecounts_pos += ecounts_pos
+                # num_tokens += sum([len(x) for x in xs])
+                # count += len(xs)
+                # total_loss += loss.data
+                # total_ecounts_seg = conlleval.merge_counts(total_ecounts_seg, ecounts_seg)
+                # total_ecounts_pos += ecounts_pos
                 i_max = min(i + self.args.batchsize, n_train)
                 print('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
                 i = i_max
                 n_iter += 1
+                if True:
+                    continue
 
                 # t2 = datetime.now()
                 optimizer.target.cleargrads() # Clear the parameter gradients
@@ -739,7 +742,6 @@ if __name__ == '__main__':
         print('load dic:', args.dict_path)
         print('vocab size:', len(dic.token_indices))
 
-        # tmp
         if not args.dict_path.endswith('pickle'):
             dic_pic_path = args.dict_path.split('.')[0]+'.pickle'
             with open(dic_pic_path, 'wb') as f:

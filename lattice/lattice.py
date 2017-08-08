@@ -3,14 +3,82 @@ import pickle
 
 import numpy as np
 import chainer
+from chainer.cuda import cupy
 
 
-UNK_TOKEN = '<UNK>'
+UNK_TOKEN = '<UNK>'             # common among word and char
+UNK_TOKEN_ID = 0                # common among word and char
 DUMMY_POS = '*'
-
+DUMMY_POS_ID = 0
 
 ValueType = enum.Enum("ValueType", "Set List")
 
+
+class MapTrie(object):
+    def __init__(self):
+        self.tree = TrieNode(-1)
+        self.next_id = 1        # 0 is used for <UNK>
+        # self.debug = False
+
+
+    def get_word_id(self, word, update=False):
+        len_word = len(word) 
+        node = self.tree
+
+        for i, char in enumerate(word):
+            child = node.get_child(char)
+            # if self.debug:
+            #     print(i, char, child.id if child else None)
+
+            if not child:
+                if not update or char == UNK_TOKEN_ID:
+                    return UNK_TOKEN_ID
+                child = TrieNode()
+                node.set_child(char, child)
+
+            if i == len_word - 1:
+                if child.id == UNK_TOKEN_ID and update:
+                    child.id = self.next_id
+                    self.next_id += 1
+                return child.id
+
+            node = child
+
+
+    def common_prefix_search(self, word, begin_index=0):
+        res = []
+        node = self.tree
+
+        append = res.append
+        for i, char in enumerate(word):
+            child = node.get_child(char)
+            if not child:
+                # if i == 0:
+                #     res = [(1, 0)] 
+                break
+
+            if child.id != UNK_TOKEN_ID:
+                word_id = child.id
+                append((begin_index + i + 1, child.id))
+            node = child
+
+        return res
+
+
+class TrieNode(object):
+    def __init__(self, id=UNK_TOKEN_ID):
+        self.id = id
+        self.children = {}
+
+
+    def get_child(self, char):
+        char = int(char)
+        return self.children[char] if char in self.children else None
+
+
+    def set_child(self, char, child_node):
+        self.children[char] = child_node
+        
 
 class Key2Values(object):
     def __init__(self, val_type='set'):
@@ -129,26 +197,16 @@ class IndicesTriplet(IndicesPair):
         super(IndicesTriplet, self).__init__(token_indices, label_indices)
         self.pos_indices = pos_indices if pos_indices else TokenIndices(unk_symbol=DUMMY_POS)
 
-
 class MorphologyDictionary(IndicesTriplet):
-    #def __init__(self, token_indices=None, pos_indices=None, chunk_indices=None, read_pos=True):
-    def __init__(self, token_indices=None, pos_indices=None, chunk_indices=None):
-        if pos_indices:
-            self.pos_indices = pos_indices
-        #elif read_pos:
-        else:
-            self.pos_indices = TokenIndices(unk_symbol=DUMMY_POS)
-            self.dummy_pos_id = self.pos_indices.unk_id
-
+    def __init__(self):
+        self.pos_indices = TokenIndices(unk_symbol=DUMMY_POS)
+        self.dummy_pos_id = self.pos_indices.unk_id
         self.init_label_indices('BIES')
-        super(MorphologyDictionary, self).__init__(token_indices, self.label_indices, self.pos_indices)
-        self.chunk_indices = chunk_indices if chunk_indices else TokenIndices(unk_symbol=UNK_TOKEN)
-        self.ti2maxlen = {}           #TODO 数値の trie にする?
-
-        self.ci2lis = Key2Values()    #TODO 文字の trie にする?
+        super(MorphologyDictionary, self).__init__(None, self.label_indices, self.pos_indices)
+        self.chunk_trie = MapTrie()
+        self.id2chunk = {UNK_TOKEN_ID : UNK_TOKEN}
+        self.ci2lis = Key2Values()
         self.ci2lis.add(self.token_indices.unk_id, self.dummy_pos_id)
-
-        #self.trie = Trie(chunk_indices.token2id.keys())
 
 
     def create_id2pos(self):
@@ -158,49 +216,25 @@ class MorphologyDictionary(IndicesTriplet):
     def get_entries(self, chunk, pos, update=False):
         tis = [self.token_indices.get_id(token, update=update) for token in chunk]
 
-        first_token_id = tis[0]
-        if update and (
-                not first_token_id in self.ti2maxlen or len(chunk) > self.ti2maxlen[first_token_id]):
-            self.ti2maxlen[first_token_id] = len(chunk)
-
+        # 全ての文字を単語として登録
         if update:
-            for token in chunk:
-                ci_of_token = self.chunk_indices.get_id(token, update=update)
+            for i, ti in enumerate(tis):
+                ci_of_token = self.chunk_trie.get_word_id([ti], True)
+                self.id2chunk[ci_of_token] = chunk[i]
                 self.ci2lis.add(ci_of_token, self.dummy_pos_id)
 
-        ci = self.chunk_indices.get_id(chunk, update=update)
-        pi = self.pos_indices.get_id(pos, update=update) #if pos else self.dummy_pos_id
+        # 単語登録と ID 取得
+        ci = self.chunk_trie.get_word_id(tis, update)
+        pi = self.pos_indices.get_id(pos, update=update)
         if update:
+            self.id2chunk[ci] = chunk
             self.ci2lis.add(ci, pi)
-        # print('registered tis={}, ci={}, pi={} | chunk={}'.format(tis, ci, pi, chunk))
 
         return tis, ci, pi
 
-        # fti_tmp = self.token_indices.get_id(chunk[0], update=False)
-        # if fti_tmp == 0:
-        #     print('an entry with new first char:', chunk, pos, update, )
-
-        # first_token_id = self.token_indices.get_id(chunk[0], update=update)
-
-        # tis = [first_token_id]
-        # if update:
-        #     if not first_token_id in self.ti2maxlen or len(chunk) > self.ti2maxlen[first_token_id]:
-        #         self.ti2maxlen[first_token_id] = len(chunk)
-
-        # ci = self.chunk_indices.get_id(chunk, update=update)
-        # if len(chunk) > 1:
-        #     tis.extend([self.token_indices.get_id(token, update=update) for token in chunk[1:]])
-
-        # pi = self.pos_indices.get_id(pos, update=update) #if pos else self.dummy_pos_id
-        # if update:
-        #     self.ci2lis.add(ci, pi)
-
-        # if fti_tmp == 0:
-        #     fti = first_token_id
-        #     print('registered fti={}, ci={}, pi={}, lis={} | ft='.format(first_token_id, ci, pi, self.ci2lis.get(ci), self.get_token(fti)))
-
 
     def get_token(self, ti):
+        ti = int(ti)
         return self.id2token[ti] if ti in self.id2token else UNK_TOKEN
 
 
@@ -216,23 +250,16 @@ class MorphologyDictionary(IndicesTriplet):
         return self.ci2lis.get(ci)
 
 
-    # def get_chunk(self, ci):
-    #     return self.id2chunk[ci]
-
-
-    def get_chunk_id(self, chunk):
-        return self.chunk_indices.get_id(chunk)
-
-
-    # max length of chunk (word) starting with the input token (char)
-    def maxlen(self, token):
-        return self.ti2maxlen[token] if token in self.ti2maxlen else 1
+    def get_chunk(self, ci):
+        if ci in self.id2chunk:
+            return self.id2chunk[ci]
+        else:
+            return UNK_TOKEN
 
 
 class Lattice(object):
     def __init__(self, sen, dic, debug=False):
         self.sen = sen
-        # self.key2node = {}
         self.eid2nodes = Key2Values(val_type='list')
         self.debug = debug
 
@@ -240,43 +267,28 @@ class Lattice(object):
             print('\ncreate lattice')
         
         for i in range(len(sen)):
-            ti = int(sen[i])
-            chunk = '{}'.format(dic.get_token(ti))
+            sen_rest = sen[i:]
+            hit = dic.chunk_trie.common_prefix_search(sen_rest, i)
 
-            # word consisting of the present character
-            pis = dic.get_pos_ids(dic.get_chunk_id(chunk))
-            for pi in pis:
-                node = (i, i + 1, pi) # (begin index, end index, pos)
-                #self.key2node[str(node)] = node
-                self.eid2nodes.add(i + 1, node)
-                if self.debug:
-                    print('  node=({}, {}, {}) char={}/{}, pos={}'.format(
-                        i, i+1, pi, ti, dic.get_token(ti), dic.get_pos(pi)))
+            if not hit:
+                # 先頭文字を未知単語として追加
+                self.eid2nodes.add(i, i+1, dic.unk_pos_id)
 
-            # word consisting of the present and the succeeding characters
-            maxlen = dic.maxlen(ti)
-            # if self.debug:
-            #     print(i, ti, chunk, pis, maxlen)
-            for j in range(i + 1, min(i + maxlen, len(sen))):
-                chunk = '{}{}'.format(chunk, dic.get_token(int(sen[j])))
-                ci = dic.get_chunk_id(chunk)
-
-                if ci > 0:      # not unknown
-                    for pi in dic.get_pos_ids(ci):
-                        node = (i, j + 1, pi)
-                        # self.key2node[str(node)] = node
-                        self.eid2nodes.add(j + 1, node)
-                        if self.debug and self.eid2nodes.get(j + 1):
-                            print('  node=({}) word={}/{}, pos={}'.format(
-                                node, ci, chunk, dic.get_pos(pi)))
+            for entry in hit:
+                j = entry[0]
+                wi = entry[1]
+                pis = dic.get_pos_ids(wi)
+                for pi in pis:
+                    node = (i, j, pi) # (begin index, end index, pos)                    
+                    self.eid2nodes.add(i + 1, node)
+                    if self.debug:
+                        print('  node=({}, {}, {}) word={}/{}, pos={}'.format(
+                            i, j, pi, wi, dic.get_chunk(wi), dic.get_pos(pi)))
 
         if self.debug:
             print('\nconstructed lattice:')
             for k, v in self.eid2nodes.key2values.items():
                 print('  {}: {}'.format(k, v))
-
-    # def get_node(self, begin, end, label):
-    #     return self.key2node['{}:{}:{}'.format(begin, end, label)]
 
 
     def prepare_forward(self, xp=np):
@@ -296,45 +308,6 @@ class Lattice(object):
                 self.prev_pointers.append([])
 
 
-    # def forward(self):
-    #     for i in range(len(self.sen)):
-    #         for node in self.sid2nodes.get(i):
-    #             score = 0
-    #             prev_best_node = None
-
-    #             # prev node + edge score
-    #             for prev_node in self.eid2nodes.get(node.begin):
-    #                 edge_score_tmp = prev_node.score
-    #                 edge_score_tmp += calc_edge_score(prev_node, node)
-    #                 if edge_score_tmp > score:
-    #                     score = edge_score_tmp
-    #                     prev_best_node = prev_node 
-
-    #             # node score
-    #             # if score < 0:
-    #             #     score = 0
-                    
-    #             score += calc_node_score(node)
-    #             node.score = score
-    #             node.prev_best_node = prev_best_node
-    #             print(i, prev_best_node, node, score)
-
-
-    # def argmax(self):
-    #     max_score = -np.Infinity
-    #     last_node = None
-    #     for node in self.eid2nodes.get(len(self.sen)):
-    #         if node.score > max_score:
-    #             last_node = node
-    #             max_score = node.score
-
-    #     path = [last_node]
-    #     while path[0].prev_best_node:
-    #         path.insert(0, path[0].prev_best_node)
-
-    #     return path
-                        
-
 def node_len(node):
     return node[1] - node[0]
 
@@ -346,7 +319,6 @@ def load_dictionary(path, read_pos=True):
             dic.create_id2token()
         return dic
 
-    #dic = MorphologyDictionary(read_pos=read_pos)
     dic = MorphologyDictionary()
     with open(path, 'r') as f:
         for line in f:
@@ -356,7 +328,6 @@ def load_dictionary(path, read_pos=True):
                 continue
 
             chunk = arr[0]
-            #pos = arr[1] if read_pos else None
             pos = arr[1] if read_pos else DUMMY_POS
             dic.get_entries(chunk, pos, update=True)
 
@@ -383,7 +354,7 @@ if __name__ == '__main__':
     print([dic.maxlen(c) for c in sen])
     print([dic.get_pos_ids(c) for c in sen])
 
-    latticeFactory = LatticeFactory(dic)
+    latticeFactory = LatticeFactory(dic) 
     
     lat = Lattice(sen, dic)
     print(lat.sid2nodes)

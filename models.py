@@ -278,6 +278,7 @@ class LatticeCRF(chainer.link.Link):
         super(LatticeCRF, self).__init__()
         self.gpu = gpu
         self.morph_dic = morph_dic
+
         n_label = len(self.morph_dic.label_indices)
         n_pos = len(self.morph_dic.pos_indices)
         self.predict_pos = n_pos > 1
@@ -295,7 +296,7 @@ class LatticeCRF(chainer.link.Link):
         print('# crf cost_pos:', self.cost_pos.shape if self.predict_pos else None)
         print()
 
-        self.debug=False
+        self.debug = False
 
 
     def __call__(self, xs, hs, ts_pos):
@@ -319,7 +320,7 @@ class LatticeCRF(chainer.link.Link):
             t4 = datetime.now()
             # print('  create lattice: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6))
             # print('  prepare fw    : {}'.format((t2-t1).seconds+(t2-t1).microseconds/10**6))
-            # print('  forward       : {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6))
+            print('  forward       : {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6))
             # print('  argmax        : {}'.format((t4-t3).seconds+(t4-t3).microseconds/10**6))
 
             # print("\ninstance", i)
@@ -331,8 +332,8 @@ class LatticeCRF(chainer.link.Link):
             # print(y_pos)
             # print(words)
 
-            ys_seg.append(y_seg)
-            ys_pos.append(y_pos)
+            # ys_seg.append(y_seg)
+            # ys_pos.append(y_pos)
 
         return loss, ys_seg, ys_pos
 
@@ -524,6 +525,259 @@ class LatticeCRF(chainer.link.Link):
             if self.predict_pos:
                 print('* E score for {} and {}: {}'.format(prev_node, next_node, score.data))
         return score
+
+
+# class LatticeCRF2(chainer.link.Link):
+#     def __init__(self, morph_dic, gpu=-1):
+#         super(LatticeCRF, self).__init__()
+#         self.gpu = gpu
+#         self.morph_dic = morph_dic
+#         n_label = len(self.morph_dic.label_indices)
+#         n_pos = len(self.morph_dic.pos_indices)
+#         self.predict_pos = n_pos > 1
+
+#         with self.init_scope():
+#             # prev_tag -> next_tag
+#             self.cost_seg = chainer.variable.Parameter(0, (n_label, n_label))
+#             if self.predict_pos:
+#                 # prev_pos -> next_pos
+#                 self.cost_pos = chainer.variable.Parameter(0, (n_pos, n_pos))
+#             else:
+#                 self.cost_pos = None
+
+#         print('# crf cost_seg:', self.cost_seg.shape)
+#         print('# crf cost_pos:', self.cost_pos.shape if self.predict_pos else None)
+#         print()
+
+#         self.debug=False
+
+
+#     def __call__(self, xs, hs, ts_pos):
+#         xp = cuda.cupy if self.gpu >= 0 else np
+
+#         ys_seg = []
+#         ys_pos = []
+#         loss = chainer.Variable(xp.array(0, dtype=np.float32))
+
+#         i = 0
+
+#         for x, h, t_pos in zip(xs, hs, ts_pos):
+#             t0 = datetime.now()
+#             lat = lattice.Lattice(x, self.morph_dic, self.debug)
+#             t1 = datetime.now()
+#             lat.prepare_forward(xp)
+#             t2 = datetime.now()
+#             loss += self.forward(lat, h, t_pos)
+#             t3 = datetime.now()
+#             y_seg, y_pos, words = self.argmax(lat)
+#             t4 = datetime.now()
+#             # print('  create lattice: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6))
+#             # print('  prepare fw    : {}'.format((t2-t1).seconds+(t2-t1).microseconds/10**6))
+#             # print('  forward       : {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6))
+#             # print('  argmax        : {}'.format((t4-t3).seconds+(t4-t3).microseconds/10**6))
+
+#             # print("\ninstance", i)
+#             # i += 1
+#             # print('y:', decode(x, y_pos, self.morph_dic))
+#             # print('t:', decode(x, t_pos, self.morph_dic))
+#             # print([self.morph_dic.get_token(ti) for ti in x)
+#             # print(y_seg)
+#             # print(y_pos)
+#             # print(words)
+
+#             ys_seg.append(y_seg)
+#             ys_pos.append(y_pos)
+
+#         return loss, ys_seg, ys_pos
+
+
+#     def forward(self, lat, h, t_pos):
+
+#         xp = cuda.cupy if self.gpu >= 0 else np
+
+#         gold_score = chainer.Variable(xp.array(0, dtype=np.float32))
+#         gold_nodes = t_pos
+
+#         if self.debug:
+#             print('\nnew instance:', lat.sen)
+#             print('lattice:', lat.eid2nodes)
+
+#         T = len(lat.sen)
+#         for t in range(1, T + 1):
+#             nodes = lat.eid2nodes.get(t)
+#             for i in range(len(nodes)):
+#                 len_nodes = len(nodes)
+#                 node = nodes[i]
+#                 s = node[0]
+#                 prev_nodes = lat.eid2nodes.get(s)
+#                 node_score = self.calc_node_score(node, h)
+#                 #node_scores_b = F.broadcast_to(node_score, (len(nodes),))
+#                 node_scores_1 = expand_variable(node_score, i, len_nodes, xp=xp)
+#                 is_gold_node = node in gold_nodes
+#                 if is_gold_node:
+#                     gold_score += node_score
+#                     if self.debug:
+#                         print("\n@ gold node {} score {} -> {}".format(
+#                             node, node_score.data, gold_score.data))
+
+#                 #lat.deltas[t] += node_scores_b # incorrect!
+#                 lat.deltas[t] += node_scores_1
+#                 lat.scores[t] += node_scores_1
+#                 if self.debug:
+#                     print("\n[{},{}] {} <- {}".format(t, i, node, prev_nodes))
+#                     print("  nscores", node_scores_1.data)
+#                     print("  delta[{}]".format(t), lat.deltas[t].data)
+
+#                 if prev_nodes:
+#                     edge_scores = F.concat(
+#                         [F.expand_dims(self.calc_edge_score(prev_node, node), axis=0) 
+#                          for prev_node in prev_nodes], axis=0)
+                    
+#                     if is_gold_node:
+#                         for j in range(len(prev_nodes)):
+#                             if prev_nodes[j] in gold_nodes:
+#                                 gold_score += edge_scores[j]
+#                                 if self.debug:
+#                                     print("  @ gold prev node {} score {} -> {}".format(
+#                                         prev_nodes[j], edge_scores[j].data, gold_score.data))
+#                                 break
+
+#                     lse_prev_score = logsumexp(lat.deltas[s] + edge_scores)
+#                     if self.debug:
+#                         print("  escores {} | delta[{}] {} | lse=> {}".format(
+#                             edge_scores.data, s, lat.deltas[s].data, lse_prev_score.data))
+
+#                     lse_prev_scores_1 = expand_variable(lse_prev_score, i, len_nodes, xp=xp)
+#                     lat.deltas[t] += lse_prev_scores_1
+#                     if self.debug:
+#                         print("  delta[{}]".format(t), lat.deltas[t].data)
+
+#                     prev_node2part_score = lat.scores[s] + edge_scores
+#                     best_part_scores_1 = expand_variable(minmax.max(prev_node2part_score), i, len_nodes, xp=xp)
+#                     lat.prev_pointers[t][i] = minmax.argmax(prev_node2part_score).data
+#                     lat.scores[t] += best_part_scores_1
+#                 if self.debug:
+#                     print("  scores[{}]".format(t), lat.scores[t].data)
+
+#         logz = logsumexp(lat.deltas[T])
+#         loss = logz - gold_score
+#         if self.debug:
+#             print(lat.deltas[T].data, 'lse->', logz.data)
+#             print(loss.data, '=', logz.data, '-', gold_score.data)
+
+#         return loss
+
+
+#     def argmax(self, lat):
+#         xp = cuda.cupy if self.gpu >= 0 else np
+
+#         y_seg = []
+#         y_pos = []
+#         words = []
+
+#         t = len(lat.sen)
+#         prev_best = int(xp.argmax(lat.scores[t].data))
+#         if self.debug:
+#             node = lat.eid2nodes.get(t)[prev_best]
+#             print('+ {},{}: {} ... {}'.format(t, prev_best, node, lat.scores[t].data))
+#         while t > 0:
+#             i = prev_best
+#             prev_best = lat.prev_pointers[t][i]
+#             node = lat.eid2nodes.get(t)[i]
+#             if self.debug:
+#                 print('+ {},{}: {} prev-> {},{}'.format(t, i, node, node[0], prev_best))
+
+#             # update lists
+#             y_pos.insert(0, node)
+            
+#             if lattice.node_len(node) == 1:
+#                 tag = 3 #self.morph_dic.get_label_id('S')
+#                 y_seg.insert(0, tag)
+#                 ti = int(lat.sen[node[0]])
+#                 word = self.morph_dic.get_token(ti)
+#             else:
+#                 word = ''
+#                 insert_to = 0
+#                 for i in range(node[0], node[1]):
+#                     if i == node[0]:
+#                         tag = 0 #self.morph_dic.get_label_id('B')
+#                     elif i == node[1] - 1:
+#                         tag = 2 #self.morph_dic.get_label_id('E')
+#                     else:
+#                         tag = 1 #self.morph_dic.get_label_id('I')
+
+#                     y_seg.insert(insert_to, tag)
+#                     insert_to += 1
+
+#                     ti = int(lat.sen[i])
+#                     word += self.morph_dic.get_token(ti)
+
+#             words.insert(0, word)
+
+#             t = node[0]
+
+#         return y_seg, y_pos, words
+
+
+#     def calc_node_score(self, node, hidden_vecs):
+#         # BIES スキーマのみ対応
+#         if lattice.node_len(node) == 1:
+#             tag = 3 #self.morph_dic.get_label_id('S')
+#             score = hidden_vecs[node[0]][tag]
+#             if self.debug:
+#                 print('* N1 score for {}-th elem of {}, {}: {} -> {}'.format(
+#                     0, node, tag, hidden_vecs[node[0]][tag].data, score.data))
+
+#         else:
+#             score = None
+#             prev_tag = None
+#             for i in range(node[0], node[1]):
+#                 if i == node[0]:
+#                     tag = 0 #self.morph_dic.get_label_id('B')
+#                 elif i == node[1] - 1:
+#                     tag = 2 #self.morph_dic.get_label_id('E')
+#                 else:
+#                     tag = 1 #self.morph_dic.get_label_id('I')
+
+#                 score = (hidden_vecs[i][tag] + score) if score is not None else hidden_vecs[i][tag]
+#                 if self.debug:
+#                     print('* N2 score for {}-th elem of {}, {}: {} -> {}'.format(
+#                         i, node, tag, hidden_vecs[i][tag].data, score.data))
+                
+#                 if i > node[0]:
+#                     cost = self.cost_seg[prev_tag][tag]
+#                     score += cost
+#                     if self.debug:
+#                         print('* NE score ({}) to ({}): {} -> {}'.format(
+#                             prev_tag, tag, cost.data, score.data))
+
+#                 prev_tag = tag
+
+#         return score
+
+
+#     def calc_edge_score(self, prev_node, next_node):
+#         # BIES スキーマのみ対応
+#         if lattice.node_len(prev_node) == 1:
+#             prev_last_tag = 3 #self.morph_dic.get_label_id('S')
+#         else:
+#             prev_last_tag = 2 #self.morph_dic.get_label_id('E')
+
+#         if lattice.node_len(next_node) == 1:
+#             next_first_tag = 3 #self.morph_dic.get_label_id('S')
+#         else:
+#             next_first_tag = 0 #self.morph_dic.get_label_id('B')
+#         score = self.cost_seg[prev_last_tag][next_first_tag]
+
+#         if self.predict_pos:
+#             score += self.cost_pos[prev_node[2]][next_node[2]]
+
+#         if self.debug:
+#             print('* E score for {} ({}) and {} ({}): {}'.format(
+#                 prev_node, prev_last_tag, next_node, next_first_tag, score.data))
+#             if self.predict_pos:
+#                 print('* E score for {} and {}: {}'.format(prev_node, next_node, score.data))
+#         return score
 
 
 class SequenceTagger(chainer.link.Chain):
