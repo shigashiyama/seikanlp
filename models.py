@@ -154,7 +154,6 @@ class RNN(RNNBase):
         
 
     def __call__(self, xs, ts, train=True):
-        #xs = [self.embed(x) for x in xs]
         xs = self.embed(xs)
 
         with chainer.using_config('train', train):
@@ -240,23 +239,6 @@ class RNN_CRF(RNNBase):
             ################
 
         return loss, ys
-
-
-    # temporaly code for memory checking
-    # def reset(self):
-    #     print('reset')
-    #     del self.lookup, self.rnn_unit, self.linear, self.crf
-    #     gc.collect()
-
-    #     self.lookup = L.EmbedID(self.vocab_size, self.embed_dim)
-    #     self.rnn_unit = L.NStepBiLSTM(self.n_rnn_layers, self.rnn_unit_in, self.n_rnn_units, self.dropout) if self.rnn_bidirection else L.NStepLSTM(self.n_rnn_layers, self.embed_dim, self.n_rnn_units, self.dropout)
-    #     self.linear = L.Linear(self.n_rnn_units * (2 if self.rnn_bidirection else 1), self.n_labels)
-    #     self.crf = L.CRF1d(self.n_labels)
-
-    #     self.lookup = self.lookup.to_gpu()
-    #     self.rnn_unit = self.rnn_unit.to_gpu()
-    #     self.linear = self.linear.to_gpu()
-    #     self.crf = self.crf.to_gpu()
         
 
 class RNN_LatticeCRF(RNNBase):
@@ -321,6 +303,7 @@ class LatticeCRF(chainer.link.Link):
 
         print('# crf cost_seg:', self.cost_seg.shape)
         print('# crf cost_pos:', self.cost_pos.shape if self.predict_pos else None)
+        print('# crf cost_inter_pos:', self.cost_inter_pos.shape if self.predict_pos else None)
         print()
 
         self.debug = False
@@ -335,22 +318,13 @@ class LatticeCRF(chainer.link.Link):
 
         for x, h, t_pos in zip(xs, hs, ts_pos):
             t0 = datetime.now()
-            #lat = lattice.Lattice(x, self.morph_dic, self.debug)
-            #lat = lattice.Lattice2(x, self.morph_dic, self.debug)
-            #lat = lattice.Lattice3(x, self.morph_dic, self.debug)
-            lat = lattice.Lattice2(x, self.morph_dic, self.debug)
+            lat = lattice.Lattice(x, self.morph_dic, self.debug)
             t1 = datetime.now()
             lat.prepare_forward(xp)
             t2 = datetime.now()
-            #loss += self.forward(lat, h, t_pos)
-            #loss += self.forward2(lat, h, t_pos)
-            #loss += self.forward3(lat, h, t_pos)
-            loss += self.forward4(lat, h, t_pos)
+            loss += self.forward(lat, h, t_pos)
             t3 = datetime.now()
-            #y_seg, y_pos, words = self.argmax(lat)
-            #y_seg, y_pos, words = self.argmax2(lat)
-            #y_seg, y_pos, words = self.argmax3(lat)
-            y_seg, y_pos, words = self.argmax2(lat)
+            y_seg, y_pos, words = self.argmax(lat)
             t4 = datetime.now()
             # print('  create lattice : {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6))
             # print('  prepare forward: {}'.format((t2-t1).seconds+(t2-t1).microseconds/10**6))
@@ -370,7 +344,7 @@ class LatticeCRF(chainer.link.Link):
         return loss, ys_seg, ys_pos
 
 
-    def forward4(self, lat, h, t_pos):
+    def forward(self, lat, h, t_pos):
         xp = cuda.cupy if self.gpu >= 0 else np
 
         gold_score = Variable(xp.array(0, dtype=np.float32))
@@ -401,7 +375,6 @@ class LatticeCRF(chainer.link.Link):
                     print('  i={}:\n    span={}, wi={}, poss={}'.format(i, (s, t), word_id, pos_ids))
 
                 cur_nodes_begin = sum([len(entry[2]) for entry in begins[:i]])
-                #cur_nodes_end = cur_nodes_begin + len(pos_ids)
 
                 # node score
                 node_score = self.calc_node_score_for_characters(s, t, h)
@@ -529,752 +502,7 @@ class LatticeCRF(chainer.link.Link):
             print(lat.deltas[T].data, 'lse->', logz.data)
             print(loss.data, '=', logz.data, '-', gold_score.data)
 
-        # print('calc',   tca.elapsed)
-        # print('init  ', ti.elapsed)
-        # print('expand', te.elapsed)
-        # print('total', tsum.elapsed)
-        # print()
-        
-        #return gold_score
         return loss
-
-
-    # 動作未検証
-    def forward3(self, lat, h, t_pos):
-        t_refer = Timer()
-        ta = Timer()
-        te = Timer()
-        tc = Timer()
-        t_calc = Timer()
-        t_total = Timer()
-
-        t_total.start()
-
-        xp = cuda.cupy if self.gpu >= 0 else np
-
-        ta.start()
-        gold_score = chainer.Variable(xp.array(0, dtype=np.float32))
-        ta.stop()
-        gold_nodes = t_pos
-        gold_next_ind = 0
-        gold_next = gold_nodes[0]
-        gold_prev = None
-
-        if self.debug:
-            print('\nnew instance:', lat.sen)
-            print('lattice:', lat.eid2nodes)
-
-        T = len(lat.sen)
-        for t in range(1, T + 1):
-            begins = lat.end2begins.get(t)
-            num_nodes = sum([len(entry[2]) for entry in begins])
-
-            smallest_s = begins[-1][0]
-            subst_node_char = [False] * (t - smallest_s) # E(0), I(-1), ..., I(-N+1) の代入済みフラグ
-            subst_node_chartran_BE = False
-            subst_node_chartran_BI_IE = False
-            # print('t:', t, begins)
-            # print('smallest_s', smallest_s, subst_node_char)
-
-            deltas_t = lat.deltas[t]
-            scores_t = lat.scores[t]
-            pp_t = lat.prev_pointers[t]
-
-            for i, entry in enumerate(begins):
-                s = entry[0]    # begin index
-                word_id = entry[1]
-                pos_ids = entry[2]
-                word_len = t - s
-
-                begins_prev_to_i = begins[:i]
-
-                # node score for char
-                for cur_ind in range(s, t):
-                    if cur_ind == s:
-                        to_subst = True
-                        if word_len == 1:                   # back=0
-                            char_tag = 3                    # S
-                            target = (0, len(pos_ids))      # (from, to)
-                        else:                               # back>=1
-                            char_tag = 0                    # B
-                            target = (sum([len(entry[2]) for entry in begins_prev_to_i]), len(pos_ids))
-                    else:                                   # tag=I or E
-                        cur_posi = t - cur_ind - 1
-                        # print('posi', cur_posi, '|', s, cur_ind, t)
-                        if not subst_node_char[cur_posi]:
-                            to_subst = True
-                            char_tag = 2 if cur_ind == t - 1 else 1 # E / I
-                            target = (sum([len(entry[2]) for entry in begins_prev_to_i]), num_nodes)
-                            subst_node_char[cur_posi] = True
-                        else:
-                            to_subst = False
-
-                    if to_subst:
-                        t_refer.start()
-                        char_score = h[cur_ind][char_tag]
-                        t_refer.stop()
-                        for k in range(target[0], target[1]):
-                            t_calc.start()
-                            deltas_t[k] += char_score
-                            scores_t[k] += char_score
-                            t_calc.stop()
-
-                # node score for char-transition
-                if word_len >= 2:
-                    if not subst_node_chartran_BE:
-                        t_refer.start()
-                        char_trans_score = self.cost_seg[0][2] # B-E
-                        t_refer.stop()
-                        target = (sum([len(entry[2]) for entry in begins_prev_to_i]), len(pos_ids))
-                        subst_node_chartran_BE = True
-
-                        for k in range(target[0], target[1]):
-                            t_calc.start()
-                            deltas_t[k] += char_trans_score
-                            scores_t[k] += char_trans_score
-                            t_calc.stop()
-
-                    if not subst_node_chartran_BI_IE:
-                        t_refer.start()
-                        tmp1 = self.cost_seg[0][1]
-                        tmp2 = self.cost_seg[1][2]
-                        t_refer.stop()
-                        t_calc.start()
-                        char_trans_score = tmp1 + tmp2
-                        t_calc.stop()
-                        #char_trans_score = self.cost_seg[0][1] + self.cost_seg[1][2] # B-I and I-E
-                        target = (sum([len(entry[2]) for entry in begins_prev_to_i]), num_nodes)
-                        subst_node_chartran_BI_IE = True
-
-                        for k in range(target[0], target[1]):
-                            t_calc.start()
-                            deltas_t[k] += char_trans_score
-                            scores_t[k] += char_trans_score
-                            t_calc.stop()
-
-                if word_len >= 3:
-                    t_refer.start()
-                    char_trans_score = self.cost_seg[1][1] # I-I
-                    t_refer.stop()
-                    target = (sum([len(entry[2]) for entry in begins_prev_to_i]), num_nodes)
-
-                    for k in range(target[0], target[1]):
-                        t_calc.start()
-                        deltas_t[k] += char_trans_score
-                        scores_t[k] += char_trans_score
-                        t_calc.stop()
-
-                # edge score for char-transition b/w current and previous nodes
-                prev_begins = lat.end2begins.get(s)
-                if prev_begins:
-                    # print('  prev:', prev_begins)
-                    num_prev_nodes = sum([len(entry[2]) for entry in prev_begins])
-                    ta.start()
-                    edge_scores = [chainer.Variable(xp.array(0, dtype='f')) for k in range(num_prev_nodes)]
-                    ta.stop()
-
-                    first_pb = prev_begins[0]
-                    if first_pb[1] - first_pb[0] == 1:
-                        target_SX = (0, len(first_pb[2]))
-                        target_EX = (target_SX[1], num_prev_nodes)
-                    else:
-                        target_SX = (0, num_prev_nodes)
-                        target_EX = None
-
-                    cur_first_tag = 3 if word_len == 1 else 0               # X = S or B
-                    t_refer.start()
-                    char_trans_score1 = self.cost_seg[3][cur_first_tag]     # S-X
-                    t_refer.stop()
-
-                    for k in range(target_SX[0], target_SX[1]):
-                        t_calc.start()
-                        edge_scores[k] += char_trans_score1
-                        t_calc.stop()
-
-                    if target_EX:
-                        t_refer.start()
-                        char_trans_score2 = self.cost_seg[2][cur_first_tag] # E-X
-                        t_refer.stop()
-                        for k in range(target_EX[0], target_EX[1]):
-                            t_calc.start()
-                            edge_scores[k] += char_trans_score2
-                            t_calc.stop()
-
-                    t_calc.start()
-                    lse_prev_score = logsumexp(add(lat.deltas[s], edge_scores), xp=xp) # TODO
-                    t_calc.stop()
-                    t_calc.start()
-                    deltas_t[i] += lse_prev_score
-                    t_calc.stop()
-
-                    #TODO 品詞ごとの個別処理
-
-                    scores_s = lat.scores[s]
-                    t_calc.start()
-                    prev_node2part_score = add(scores_s, edge_scores)
-                    t_calc.stop()                    
-
-                    t_calc.start()
-                    _, best_part_score = argmax_max(prev_node2part_score)
-                    scores_t[i] += best_part_score
-                    t_calc.stop()
-
-                    t_calc.start()
-                    prev_best, _ = argmax_max(prev_node2part_score)
-                    t_calc.stop()
-                    from_idx = sum([len(entry[2]) for entry in begins_prev_to_i])
-                    to_idx = from_idx + len(pos_ids)
-                    for j in range(from_idx, to_idx):
-                        pp_t[j] = prev_best
-                        # print(' ({},{})->{} | {}'.format(t, j, lat.prev_pointers[t][i], prev_begins))
-
-                # gold score
-                if gold_next and gold_next[0] == s and gold_next[1] == t and gold_next[2] in pos_ids:
-                    gi = sum([len(entry[2]) for entry in begins_prev_to_i]) + pos_ids.index(gold_next[2])
-                    t_calc.start()
-                    gold_score += scores_t[gi]
-                    t_calc.stop()
-
-                    if gold_prev:
-                        prev_last_tag = 3 if gold_prev[1] - gold_prev[0] == 1 else 0 # S or B
-                        t_refer.start()
-                        tmp = self.cost_seg[prev_last_tag][cur_first_tag]
-                        t_refer.stop()
-                        t_calc.start()
-                        gold_score += tmp
-                        t_calc.stop()
-                    gold_prev = gold_next
-                    gold_next_ind += 1
-                    gold_next = gold_nodes[gold_next_ind] if gold_next_ind < len(gold_nodes) else None
-
-                    if self.debug:
-                        print("\n@ gold node {} score {} -> {}".format(
-                            gold_next, lat.scores[t][gi], gold_score.data))
-
-        t_calc.start()
-        logz = logsumexp(lat.deltas[T], xp=xp)
-        loss = logz - gold_score
-        t_calc.stop()
-        if self.debug:
-            print(lat.deltas[T].data, 'lse->', logz.data)
-            print(loss.data, '=', logz.data, '-', gold_score.data)
-            
-        t_total.stop()
-        # print('refer:', t_refer.elapsed)
-        # print('calc',   t_calc.elapsed)
-        # print('  init  ', ta.elapsed)
-        # print('  expand', te.elapsed)
-        # print('  concat', tc.elapsed)
-        # print('total', t_total.elapsed)
-        # print()
-        
-        return loss
-
-
-    # 動作未検証
-    def forward2(self, lat, h, t_pos):
-        t_refer = Timer()
-        t_alloc = Timer()
-        ta = Timer()
-        te = Timer()
-        tc = Timer()
-        t_calc = Timer()
-        t_total = Timer()
-
-        t_total.start()
-
-        xp = cuda.cupy if self.gpu >= 0 else np
-
-        t_alloc.start()
-        ta.start()
-        gold_score = chainer.Variable(xp.array(0, dtype=np.float32))
-        t_alloc.stop()
-        ta.stop()
-        gold_nodes = t_pos
-        gold_next_ind = 0
-        gold_next = gold_nodes[0]
-        gold_prev = None
-
-        if self.debug:
-            print('\nnew instance:', lat.sen)
-            print('lattice:', lat.eid2nodes)
-
-        T = len(lat.sen)
-        for t in range(1, T + 1):
-            begins = lat.end2begins.get(t)
-            num_nodes = sum([len(entry[2]) for entry in begins])
-
-            smallest_s = begins[-1][0]
-            subst_node_char = [False] * (t - smallest_s) # E(0), I(-1), ..., I(-N+1) の代入済みフラグ
-            subst_node_chartran_BE = False
-            subst_node_chartran_BI_IE = False
-            # print('t:', t, begins)
-            # print('smallest_s', smallest_s, subst_node_char)
-
-            for i, entry in enumerate(begins):
-                # print('  i:', i, entry)
-
-                s = entry[0]    # begin index
-                word_id = entry[1]
-                pos_ids = entry[2]
-                word_len = t - s
-
-                # node score for char
-                for cur_ind in range(s, t):
-                    if cur_ind == s:
-                        to_subst = True
-                        if word_len == 1:                   # back=0
-                            char_tag = 3                    # S
-                            target = (0, len(pos_ids))      # (from, to)
-                        else:                               # back>=1
-                            char_tag = 0                    # B
-                            target = (sum([len(entry[2]) for entry in begins[:i]]), len(pos_ids))
-                    else:                                   # tag=I or E
-                        cur_posi = t - cur_ind - 1
-                        # print('posi', cur_posi, '|', s, cur_ind, t)
-                        if not subst_node_char[cur_posi]:
-                            to_subst = True
-                            char_tag = 2 if cur_ind == t - 1 else 1 # E / I
-                            target = (sum([len(entry[2]) for entry in begins[:i]]), num_nodes)
-                            subst_node_char[cur_posi] = True
-                        else:
-                            to_subst = False
-
-                    if to_subst:
-                        t_refer.start()
-                        char_score = h[cur_ind][char_tag]
-                        t_refer.stop()
-                        t_alloc.start()
-                        char_scores = expand_variable(char_score, target[0], target[1], num_nodes, xp=xp, ta=ta, te=te, tc=tc)
-                        t_alloc.stop()
-                        t_calc.start()
-                        lat.deltas[t] += char_scores
-                        lat.scores[t] += char_scores
-                        t_calc.stop()
-
-                # node score for char-transition
-                if word_len >= 2:
-                    if not subst_node_chartran_BE:
-                        t_refer.start()
-                        char_trans_score = self.cost_seg[0][2] # B-E
-                        t_refer.stop()
-                        target = (sum([len(entry[2]) for entry in begins[:i]]), len(pos_ids))
-                        subst_node_chartran_BE = True
-
-                        t_alloc.start()
-                        char_trans_scores = expand_variable(
-                            char_trans_score, target[0], target[1], num_nodes, xp=xp, ta=ta, te=te, tc=tc)
-                        t_alloc.stop()
-                        t_calc.start()
-                        lat.deltas[t] += char_trans_scores
-                        lat.scores[t] += char_trans_scores
-                        t_calc.stop()
-
-                    if not subst_node_chartran_BI_IE:
-                        t_refer.start()
-                        tmp1 = self.cost_seg[0][1]
-                        tmp2 = self.cost_seg[1][2]
-                        t_refer.stop()
-                        t_calc.start()
-                        char_trans_score = tmp1 + tmp2
-                        t_calc.stop()
-                        #char_trans_score = self.cost_seg[0][1] + self.cost_seg[1][2] # B-I and I-E
-                        target = (sum([len(entry[2]) for entry in begins[:i]]), num_nodes)
-                        subst_node_chartran_BI_IE = True
-
-                        t_alloc.start()
-                        char_trans_scores = expand_variable(
-                            char_trans_score, target[0], target[1], num_nodes, xp=xp, ta=ta, te=te, tc=tc)
-                        t_alloc.stop()
-                        t_calc.start()
-                        lat.deltas[t] += char_trans_scores
-                        lat.scores[t] += char_trans_scores
-                        t_calc.stop()
-
-                if word_len >= 3:
-                    t_refer.start()
-                    char_trans_score = self.cost_seg[1][1] # I-I
-                    t_refer.stop()
-                    target = (sum([len(entry[2]) for entry in begins[:i]]), num_nodes)
-                    t_alloc.start()
-                    char_trans_scores = expand_variable(
-                        char_trans_score, target[0], target[1], num_nodes, xp=xp, ta=ta, te=te, tc=tc)
-                    t_alloc.stop()
-                    t_calc.start()
-                    lat.deltas[t] += char_trans_scores
-                    lat.scores[t] += char_trans_scores
-                    t_calc.stop()
-
-                # edge score for char-transition b/w current and previous nodes
-                prev_begins = lat.end2begins.get(s)
-                if prev_begins:
-                    # print('  prev:', prev_begins)
-                    num_prev_nodes = sum([len(entry[2]) for entry in prev_begins])
-
-                    first_pb = prev_begins[0]
-                    if first_pb[1] - first_pb[0] == 1:
-                        target_SX = (0, len(first_pb[2]))
-                        target_EX = (target_SX[1], num_prev_nodes)
-                    else:
-                        target_SX = (0, num_prev_nodes)
-                        target_EX = None
-
-                    cur_first_tag = 3 if word_len == 1 else 0               # X = S or B
-                    t_refer.start()
-                    char_trans_score1 = self.cost_seg[3][cur_first_tag]     # S-X
-                    t_refer.stop()
-                    t_alloc.start()
-                    char_trans_scores1 = expand_variable(
-                        char_trans_score1, target_SX[0], target_SX[1], num_prev_nodes, xp=xp, ta=ta, te=te, tc=tc)
-                    t_alloc.stop()
-                    if target_EX:
-                        t_refer.start()
-                        char_trans_score2 = self.cost_seg[2][cur_first_tag] # E-X
-                        t_refer.stop()
-                        t_alloc.start()
-                        char_trans_scores2 = expand_variable(
-                            char_trans_score2, target_EX[0], target_EX[1], num_prev_nodes, xp=xp, ta=ta, te=te, tc=tc)
-                        t_alloc.stop()
-                    else:
-                        t_alloc.start()
-                        char_trans_scores2 = chainer.Variable(xp.zeros(num_prev_nodes, dtype='f'))
-                        t_alloc.stop()
-
-                    t_calc.start()
-                    edge_scores = char_trans_scores1 + char_trans_scores2
-                    lse_prev_score = logsumexp(lat.deltas[s] + edge_scores)
-                    t_calc.stop()
-                    t_alloc.start()
-                    lse_prev_scores_1 = expand_variable(lse_prev_score, i, i, num_nodes, xp=xp, ta=ta, te=te, tc=tc)
-                    t_alloc.stop()
-                    t_calc.start()
-                    lat.deltas[t] += lse_prev_scores_1
-                    t_calc.stop()
-
-                    #TODO 品詞ごとの個別処理
-
-                    t_calc.start()
-                    prev_node2part_score = lat.scores[s] + edge_scores
-                    best_part_score = minmax.max(prev_node2part_score)
-                    t_calc.stop()
-                    t_alloc.start()
-                    best_part_scores_1 = expand_variable(best_part_score, i, i, num_nodes, xp=xp, ta=ta, te=te, tc=tc)
-                    t_alloc.stop()
-                    t_calc.start()
-                    lat.scores[t] += best_part_scores_1
-                    t_calc.stop()
-
-                    t_refer.start()
-                    prev_best = minmax.argmax(prev_node2part_score).data
-                    t_refer.stop()
-                    from_idx = sum([len(entry[2]) for entry in begins[:i]])
-                    to_idx = from_idx + len(pos_ids)
-                    for j in range(from_idx, to_idx):
-                        lat.prev_pointers[t][j] = prev_best
-                        # print(' ({},{})->{} | {}'.format(t, j, lat.prev_pointers[t][i], prev_begins))
-
-                # gold score
-                if gold_next and gold_next[0] == s and gold_next[1] == t and gold_next[2] in pos_ids:
-                    gi = sum([len(entry[2]) for entry in begins[:i]]) + pos_ids.index(gold_next[2])
-                    t_refer.start()
-                    tmp = lat.scores[t][gi]
-                    t_refer.stop()
-                    t_calc.start()
-                    gold_score += tmp
-                    t_calc.stop()
-
-                    if gold_prev:
-                        prev_last_tag = 3 if gold_prev[1] - gold_prev[0] == 1 else 0 # S or B
-                        t_refer.start()
-                        tmp = self.cost_seg[prev_last_tag][cur_first_tag]
-                        t_refer.stop()
-                        t_calc.start()
-                        gold_score += tmp
-                        t_calc.stop()
-                    gold_prev = gold_next
-                    gold_next_ind += 1
-                    gold_next = gold_nodes[gold_next_ind] if gold_next_ind < len(gold_nodes) else None
-
-                    if self.debug:
-                        print("\n@ gold node {} score {} -> {}".format(
-                            gold_next, lat.scores[t][gi], gold_score.data))
-
-        t_calc.start()
-        logz = logsumexp(lat.deltas[T])
-        loss = logz - gold_score
-        t_calc.stop()
-        if self.debug:
-            print(lat.deltas[T].data, 'lse->', logz.data)
-            print(loss.data, '=', logz.data, '-', gold_score.data)
-
-        t_total.stop()
-        print('refer:', t_refer.elapsed)
-        print('calc',   t_calc.elapsed)
-        print('alloc', t_alloc.elapsed)
-        print('  init  ', ta.elapsed)
-        print('  expand', te.elapsed)
-        print('  concat', tc.elapsed)
-        print('total', t_total.elapsed)
-        print()
-        
-        return loss
-    
-
-    def forward(self, lat, h, t_pos):
-        t_refer = Timer()
-        t_alloc = Timer()
-        ta = Timer()
-        te = Timer()
-        tc = Timer()
-        t_calc = Timer()
-        t_total = Timer()
-
-        t_total.start()
-
-        xp = cuda.cupy if self.gpu >= 0 else np
-
-        t_alloc.start()
-        ta.start()
-        gold_score = Variable(xp.array(0, dtype=np.float32))
-        t_alloc.stop()
-        ta.stop()
-        gold_nodes = t_pos
-
-        if self.debug:
-            print('\nnew instance:', lat.sen)
-            print('lattice:', lat.eid2nodes)
-
-        T = len(lat.sen)
-        for t in range(1, T + 1):
-            nodes = lat.eid2nodes.get(t)
-            len_nodes = len(nodes)
-            for i, node in enumerate(nodes):
-                #print('in:', t, i, node)
-
-                s = node[0]
-                prev_nodes = lat.eid2nodes.get(s)
-                node_score = self.calc_node_score(node, h, tr=t_refer, ts=t_calc)
-                t_alloc.start()
-                node_scores_1 = expand_variable(node_score, i, i+1, len_nodes, xp=xp, ta=ta, te=te, tc=tc)
-                t_alloc.stop()
-                is_gold_node = node in gold_nodes
-                if is_gold_node:
-                    t_calc.start()
-                    gold_score += node_score
-                    t_calc.stop()
-                    if self.debug:
-                        print("\n@ gold node {} score {} -> {}".format(
-                            node, node_score.data, gold_score.data))
-
-                t_calc.start()
-                lat.deltas[t] += node_scores_1
-                lat.scores[t] += node_scores_1
-                t_calc.stop()
-                if self.debug:
-                    print("\n[{},{}] {} <- {}".format(t, i, node, prev_nodes))
-                    print("  nscores", node_scores_1.data)
-                    print("  delta[{}]".format(t), lat.deltas[t].data)
-
-                if prev_nodes:
-                    edge_scores = [None] * len(prev_nodes)
-                    for j, prev_node in enumerate(prev_nodes):
-                        edge_score = self.calc_edge_score(prev_node, node, tr=t_refer, ts=t_calc)
-                        te.start()
-                        edge_scores[j] = F.expand_dims(edge_score, axis=0)
-                        te.stop()
-                    tc.start()
-                    edge_scores = F.concat(edge_scores, axis=0)
-                    tc.stop()
-
-                    # F.concat([F.expand_dims(self.calc_edge_score(prev_node, node), axis=0)
-                    #   for prev_node in prev_nodes], axis=0)
-                    
-                    if is_gold_node:
-                        for k in range(len(prev_nodes)):
-                            if prev_nodes[k] in gold_nodes:
-                                t_refer.start()
-                                tmp = edge_scores[k]
-                                t_refer.stop()
-                                t_calc.start()
-                                gold_score += tmp
-                                t_calc.stop()
-                                if self.debug:
-                                    print("  @ gold prev node {} score {} -> {}".format(
-                                        prev_nodes[k], edge_scores[k].data, gold_score.data))
-                                break
-
-                    t_calc.start()
-                    lse_prev_score = logsumexp.logsumexp(lat.deltas[s] + edge_scores)
-                    t_calc.stop()
-                    if self.debug:
-                        print("  escores {} | delta[{}] {} | lse=> {}".format(
-                            edge_scores.data, s, lat.deltas[s].data, lse_prev_score.data))
-
-                    lse_prev_scores_1 = expand_variable(lse_prev_score, i, i+1, len_nodes, xp=xp, ta=ta, te=te, tc=tc)
-                    t_calc.start()
-                    lat.deltas[t] += lse_prev_scores_1
-                    t_calc.stop()
-                    if self.debug:
-                        print("  delta[{}]".format(t), lat.deltas[t].data)
-
-                    t_calc.start()
-                    prev_node2part_score = lat.scores[s] + edge_scores
-                    t_calc.stop()
-                    best_part_scores_1 = expand_variable(
-                        minmax.max(prev_node2part_score), i, i+1, len_nodes, xp=xp, ta=ta, te=te, tc=tc)
-                    t_calc.start()
-                    #print('t={},i={},node={}'.format(t, i, node))
-                    lat.prev_pointers[t][i] = minmax.argmax(prev_node2part_score).data
-                    lat.scores[t] += best_part_scores_1
-                    t_calc.stop()
-                if self.debug:
-                    print("  scores[{}]".format(t), lat.scores[t].data)
-
-        t_calc.start()
-        logz = logsumexp.logsumexp(lat.deltas[T])
-        loss = logz - gold_score
-        t_calc.stop()
-        if self.debug:
-            print(lat.deltas[T].data, 'lse->', logz.data)
-            print(loss.data, '=', logz.data, '-', gold_score.data)
-
-        t_total.stop()
-        # print('refer:', t_refer.elapsed)
-        # print('calc',   t_calc.elapsed)
-        # print('alloc', t_alloc.elapsed)
-        # print('  init  ', ta.elapsed)
-        # print('  expand', te.elapsed)
-        # print('  concat', tc.elapsed)
-        # print('total', t_total.elapsed)
-        # print()
-
-        return loss
-
-
-    def argmax3(self, lat):
-        xp = cuda.cupy if self.gpu >= 0 else np
-
-        y_seg = []
-        y_pos = []
-        wis = []
-
-        t = len(lat.sen)
-        prev_best, _ = argmax_max(lat.scores[t])
-        # for k in range(1, t+1):
-        #     print('prev ptr', k, ':', lat.prev_pointers[k])
-
-        while t > 0:
-            begins = lat.end2begins.get(t)
-
-            i = j = prev_best
-            for begin in begins:
-                if j >= len(begin[2]):
-                    j -= len(begin[2])
-                    continue
-                else:
-                    s = begin[0]
-                    wi = begin[1]
-                    pos = begin[2][j]
-                    node = (s, t, pos)
-                    break
-
-            # print('{} {} ({}): {} | {}'.format(t, i, prev_best, node, begins))
-            prev_best = lat.prev_pointers[t][i]
-            # print('t', t, begins)
-            # print('i', i, node_info)
-
-            # s = node_info[0]
-            # wi = node_info[1]
-            # j = sum([len(entry[2]) for entry in begins[:i]])
-            # print(j, begins[:i])
-            # pos = node_info[2][i-j]
-
-            # update lists
-            y_pos.append(node)
-            wis.append(wi)
-            if t - s == 1:
-                tag = 3 # S
-                #y_seg.insert(0, tag)
-                y_seg.append(tag)
-            else:
-                insert_to = 0
-                for j in range(t-1, s-1, -1):
-                    if j == s:
-                        tag = 0 # B
-                    elif j == t - 1:
-                        tag = 2 # E
-                    else:
-                        tag = 1 # I
-                    y_seg.append(tag)
-
-            t = s
-
-        return y_seg, y_pos, wis
-
-
-    # 動作未検証
-    def argmax2(self, lat):
-        xp = cuda.cupy if self.gpu >= 0 else np
-
-        y_seg = []
-        y_pos = []
-        wis = []
-
-        t = len(lat.sen)
-        
-        prev_best = int(xp.argmax(lat.scores[t].data))
-        # for k in range(1, t+1):
-        #     print('prev ptr', k, ':', lat.prev_pointers[k])
-
-        while t > 0:
-            begins = lat.end2begins.get(t)
-
-            i = j = prev_best
-            for begin in begins:
-                if j >= len(begin[2]):
-                    j -= len(begin[2])
-                    continue
-                else:
-                    s = begin[0]
-                    wi = begin[1]
-                    pos = begin[2][j]
-                    node = (s, t, pos)
-                    break
-            # print('{} {} ({}): {} | {}'.format(t, i, prev_best, node, begins))
-            prev_best = lat.prev_pointers[t][i]
-            # print('t', t, begins)
-            # print('i', i, node_info)
-
-            # s = node_info[0]
-            # wi = node_info[1]
-            # j = sum([len(entry[2]) for entry in begins[:i]])
-            # print(j, begins[:i])
-            # pos = node_info[2][i-j]
-
-            # update lists
-            y_pos.append(node)
-            wis.append(wi)
-            if t - s == 1:
-                tag = 3 # S
-                #y_seg.insert(0, tag)
-                y_seg.append(tag)
-            else:
-                insert_to = 0
-                for j in range(t-1, s-1, -1):
-                    if j == s:
-                        tag = 0 # B
-                    elif j == t - 1:
-                        tag = 2 # E
-                    else:
-                        tag = 1 # I
-                    y_seg.append(tag)
-
-            t = s
-
-        y_pos.reverse()
-        y_seg.reverse()
-
-        return y_seg, y_pos, wis
 
 
     def argmax(self, lat):
@@ -1282,141 +510,48 @@ class LatticeCRF(chainer.link.Link):
 
         y_seg = []
         y_pos = []
-        words = []
+        wis = []
 
         t = len(lat.sen)
+        
         prev_best = int(xp.argmax(lat.scores[t].data))
-        if self.debug:
-            node = lat.eid2nodes.get(t)[prev_best]
-            print('+ {},{}: {} ... {}'.format(t, prev_best, node, lat.scores[t].data))
         while t > 0:
-            i = prev_best
+            begins = lat.end2begins.get(t)
+
+            i = j = prev_best
+            for begin in begins:
+                if j >= len(begin[2]):
+                    j -= len(begin[2])
+                    continue
+                else:
+                    s = begin[0]
+                    wi = begin[1]
+                    pos = begin[2][j]
+                    node = (s, t, pos)
+                    break
             prev_best = lat.prev_pointers[t][i]
-            node = lat.eid2nodes.get(t)[i]
-            if self.debug:
-                print('+ {},{}: {} prev-> {},{}'.format(t, i, node, node[0], prev_best))
 
             # update lists
-            y_pos.insert(0, node)
-            
-            if lattice.node_len(node) == 1:
-                tag = 3 #self.morph_dic.get_label_id('S')
-                y_seg.insert(0, tag)
-                ti = int(lat.sen[node[0]])
-                word = self.morph_dic.get_token(ti)
+            y_pos.append(node)
+            wis.append(wi)
+            if t - s == 1:
+                tag = 3 # S
+                y_seg.append(tag)
             else:
-                word = ''
-                insert_to = 0
-                for i in range(node[0], node[1]):
-                    if i == node[0]:
-                        tag = 0 #self.morph_dic.get_label_id('B')
-                    elif i == node[1] - 1:
-                        tag = 2 #self.morph_dic.get_label_id('E')
+                for j in range(t-1, s-1, -1):
+                    if j == s:
+                        tag = 0 # B
+                    elif j == t - 1:
+                        tag = 2 # E
                     else:
-                        tag = 1 #self.morph_dic.get_label_id('I')
+                        tag = 1 # I
+                    y_seg.append(tag)
+            t = s
 
-                    y_seg.insert(insert_to, tag)
-                    insert_to += 1
+        y_pos.reverse()
+        y_seg.reverse()
 
-                    ti = int(lat.sen[i])
-                    word += self.morph_dic.get_token(ti)
-
-            words.insert(0, word)
-
-            t = node[0]
-
-        return y_seg, y_pos, words
-
-
-    def calc_node_score(self, node, hidden_vecs, tr=None, ts=None):
-        # BIES スキーマのみ対応
-        if lattice.node_len(node) == 1:
-            tag = 3 #self.morph_dic.get_label_id('S')
-            if tr:
-                tr.start()
-            score = hidden_vecs[node[0]][tag]
-            if tr:
-                tr.stop()
-            if self.debug:
-                print('* N1 score for {}-th elem of {}, {}: {} -> {}'.format(
-                    0, node, tag, hidden_vecs[node[0]][tag].data, score.data))
-
-        else:
-            score = None
-            prev_tag = None
-            for i in range(node[0], node[1]):
-                if i == node[0]:
-                    tag = 0 #self.morph_dic.get_label_id('B')
-                elif i == node[1] - 1:
-                    tag = 2 #self.morph_dic.get_label_id('E')
-                else:
-                    tag = 1 #self.morph_dic.get_label_id('I')
-
-                if tr:
-                    tr.start()
-                score = (hidden_vecs[i][tag] + score) if score is not None else hidden_vecs[i][tag]
-                if tr:
-                    tr.stop()
-                if self.debug:
-                    print('* N2 score for {}-th elem of {}, {}: {} -> {}'.format(
-                        i, node, tag, hidden_vecs[i][tag].data, score.data))
-                
-                if i > node[0]:
-                    if tr:
-                        tr.start()
-                    cost = self.cost_seg[prev_tag][tag]
-                    if tr:
-                        tr.stop()
-                    if ts:
-                        ts.start()
-                    score += cost
-                    if ts:
-                        ts.stop()
-                    if self.debug:
-                        print('* NE score ({}) to ({}): {} -> {}'.format(
-                            prev_tag, tag, cost.data, score.data))
-
-                prev_tag = tag
-
-        return score
-
-
-    def calc_edge_score(self, prev_node, next_node, tr=None, ts=None):
-        # BIES スキーマのみ対応
-        if lattice.node_len(prev_node) == 1:
-            prev_last_tag = 3 #self.morph_dic.get_label_id('S')
-        else:
-            prev_last_tag = 2 #self.morph_dic.get_label_id('E')
-
-        if lattice.node_len(next_node) == 1:
-            next_first_tag = 3 #self.morph_dic.get_label_id('S')
-        else:
-            next_first_tag = 0 #self.morph_dic.get_label_id('B')
-
-        if tr:
-            tr.start()
-        score = self.cost_seg[prev_last_tag][next_first_tag]
-        if tr:
-            tr.stop()
-
-        if self.predict_pos:
-            if tr:
-                tr.start()
-            tmp = self.cost_pos[prev_node[2]][next_node[2]]
-            if tr:
-                tr.stop()
-            if ts:
-                ts.start()
-            score += tmp
-            if ts:
-                ts.stop()
-
-        if self.debug:
-            print('* E score for {} ({}) and {} ({}): {}'.format(
-                prev_node, prev_last_tag, next_node, next_first_tag, score.data))
-            if self.predict_pos:
-                print('* E score for {} and {}: {}'.format(prev_node, next_node, score.data))
-        return score
+        return y_seg, y_pos, wis
 
 
     def calc_node_score_for_characters(self, node_begin, node_end, hidden_vecs):
@@ -1475,27 +610,6 @@ class LatticeCRF(chainer.link.Link):
         #     print('* E score for {} ({}) and {} ({}): {}'.format(
         #         (prev_begin, prev_end), prev_last_tag, (next_begin, next_end), next_first_tag, score.data))
         return score
-
-
-    # def get_char_score(self, cur_ind, begin_ind, end_ind, hidden_vecs):
-    #     len_word = end_ind - begin_ind
-        
-    #     if len_word == 1:
-    #         tag = 3 #self.morph_dic.get_label_id('S')
-    #     else:
-    #         if cur_ind == begin_ind:
-    #             tag = 0 #self.morph_dic.get_label_id('B')
-    #         elif cur_ind == end_ind - 1:
-    #             tag = 2 #self.morph_dic.get_label_id('E')
-    #         else:
-    #             tag = 1 #self.morph_dic.get_label_id('I')
-
-    #     score = hidden_vecs[cur_ind][tag]
-    #     if self.debug:
-    #         print('* N1 score for {} of {}, {}: {} -> {}'.format(
-    #             cur_ind, (begin_index, end_index), tag, hidden_vecs[cur_ind][tag].data, score.data))
-
-    #     return score
 
 
 class SequenceTagger(chainer.link.Chain):
@@ -1659,50 +773,8 @@ def logsumexp_for_list(var_list, xp=np):
         ret += exponential.exp(var - m)
     return exponential.log(ret) + m
 
-    
-# def expand_variable(var, index, size, xp=np):
-#     var_ext = [F.expand_dims(var if i == index else chainer.Variable(xp.array(0, dtype=np.float32)), axis=0) for i in range(size)]
-#     var_ext = F.concat(var_ext, axis=0)
-#     return var_ext
 
-
-#def expand_variable(var, ind_from, ind_to, size, xp=np):
-def expand_variable(var, ind_from, ind_to, size, xp=np, ta=None, te=None, tc=None):
-    var_ext = [None] * size
-    for i in range(0, ind_from):
-        if ta:
-            ta.start()
-        tmp = chainer.Variable(xp.array(0, dtype=np.float32))
-        if ta:
-            ta.stop()
-        if te:
-            te.start()
-        var_ext[i] = F.expand_dims(tmp, axis=0)
-        if te:
-            te.stop()
-    for i in range(ind_from, ind_to):
-        if te:
-            te.start()
-        var_ext[i] = F.expand_dims(var, axis=0)
-        if te:
-            te.stop()
-    for i in range(ind_to, size):
-        if ta:
-            ta.start()
-        tmp = chainer.Variable(xp.array(0, dtype=np.float32))
-        if ta:
-            ta.stop()
-        if te:
-            te.start()
-        var_ext[i] = F.expand_dims(tmp, axis=0)
-        if te:
-            te.stop()
-
-    #var_ext = [F.expand_dims(var if (ind_from <= i and i < ind_to) else chainer.Variable(xp.array(0, dtype=np.float32)), axis=0) for i in range(size)]
-
-    if tc:
-        tc.start()
-    var_ext = F.concat(var_ext, axis=0)
-    if tc:
-        tc.stop()
+# unused
+def expand_variable(var, ind_from, ind_to, size, xp=np):
+    var_ext = [F.expand_dims(var if (ind_from <= i and i < ind_to) else chainer.Variable(xp.array(0, dtype=np.float32)), axis=0) for i in range(size)]
     return var_ext

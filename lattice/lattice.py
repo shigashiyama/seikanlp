@@ -261,67 +261,12 @@ class MorphologyDictionary(IndicesTriplet):
 class Lattice(object):
     def __init__(self, sen, dic, debug=False):
         self.sen = sen
-        self.eid2nodes = Key2Values(val_type='list')
-        self.debug = debug
-
-        if self.debug:
-            print('\ncreate lattice')
-        
-        for i in range(len(sen)):
-            sen_rest = sen[i:]
-            hit = dic.chunk_trie.common_prefix_search(sen_rest, i)
-
-            if not hit:
-                # 先頭文字を未知単語として追加
-                self.eid2nodes.add(i, i+1, dic.unk_pos_id)
-
-            for entry in hit:
-                j = entry[0]
-                wi = entry[1]
-                pis = dic.get_pos_ids(wi)
-                for pi in pis:
-                    node = (i, j, pi) # (begin index, end index, pos)                    
-                    self.eid2nodes.add(i + 1, node)
-                    if self.debug:
-                        print('  node=({}, {}, {}) word={}/{}, pos={}'.format(
-                            i, j, pi, wi, dic.get_chunk(wi), dic.get_pos(pi)))
-
-        if self.debug:
-            print('\nconstructed lattice:')
-            for k, v in self.eid2nodes.key2values.items():
-                print('  {}: {}'.format(k, v))
-
-
-    def prepare_forward(self, xp=np):
-        self.deltas = []
-        self.scores = []
-        self.prev_pointers = []
-        for t in range(0, len(self.sen) + 1):
-            nodes = self.eid2nodes.get(t)
-            if nodes:
-                nlen = len(nodes)
-                self.deltas.append(chainer.Variable(xp.zeros(nlen, dtype='f')))
-                self.scores.append(chainer.Variable(xp.zeros(nlen, dtype='f')))
-                self.prev_pointers.append(-np.ones(nlen).astype('i'))
-            else:
-                self.deltas.append([])
-                self.scores.append([])
-                self.prev_pointers.append([])
-
-            # print('{}-th nodes     {}:'.format(t, self.eid2nodes.get(t)))
-            # print('{}-th pointers: {}'.format(t, self.prev_pointers[t]))
-
-
-class Lattice2(object):
-    def __init__(self, sen, dic, debug=False):
-        self.sen = sen
         self.end2begins = Key2Values(val_type='set')
         self.debug = debug
 
         if self.debug:
             print('\ncreate lattice')
         
-        # print('sen', sen)
         T = len(self.sen)
         for i in range(T):
             sen_rest = sen[i:]
@@ -367,80 +312,6 @@ class Lattice2(object):
             if begins:
                 num_nodes = sum([len(entry[2]) for entry in begins])
                 self.prev_pointers[t] = -np.ones(num_nodes).astype('i')
-                #self.deltas[t] = chainer.Variable(xp.zeros(num_nodes, dtype='f'))
-                #self.scores[t] = chainer.Variable(xp.zeros(num_nodes, dtype='f'))
-                #print(type(self.deltas[t]), self.deltas[t])
-
-
-class Lattice3(object):
-    def __init__(self, sen, dic, debug=False):
-        self.sen = sen
-        self.end2begins = Key2Values(val_type='set')
-        self.debug = debug
-
-        if self.debug:
-            print('\ncreate lattice')
-        
-        # print('sen', sen)
-        T = len(self.sen)
-        for i in range(T):
-            sen_rest = sen[i:]
-            hit = dic.chunk_trie.common_prefix_search(sen_rest, i)
-            #print(i, hit)
-            
-            if not hit:
-                # 先頭文字を未知単語として追加
-                t = i + 1
-                #self.eid2posi[t] =  UNK_TOKEN_ID
-
-            for tup in hit:
-                t = tup[0]
-                wi = tup[1]
-                pis = tuple(sorted(dic.get_pos_ids(wi)))
-                entry = (i, wi, pis)
-                self.end2begins.add(t, entry)
-
-                if self.debug:
-                    for pi in pis:
-                        print('  node=({}, {}, {}) word={}/{}, pos={}'.format(
-                            i, j, pi, wi, dic.get_chunk(wi), dic.get_pos(pi)))
-
-        if self.debug:
-            print('\nconstructed lattice:')
-            for k, v in self.eid2nodes.key2values.items():
-                print('  {}: {}'.format(k, v))
-
-
-    def prepare_forward(self, xp=np):
-        self.end2begins.val_type = ValueType.List
-
-        T = len(self.sen)
-        self.deltas = [[] for i in range(T+1)]
-        self.scores = [[] for i in range(T+1)]
-        self.prev_pointers = [[] for i in range(T+1)]
-
-        for t in range(1, T + 1): # t=0 は dummy
-            
-            # convert set to sorted list
-            begins = sorted(self.end2begins.key2values[t], reverse=True)
-            self.end2begins.key2values[t] = begins
-            # print(t, begins)
-
-            if begins:
-                num_nodes = sum([len(entry[2]) for entry in begins])
-                self.deltas[t] = [chainer.Variable(xp.array(0, dtype='f')) for i in range(num_nodes)]
-                self.scores[t] = [chainer.Variable(xp.array(0, dtype='f')) for i in range(num_nodes)]
-                self.prev_pointers[t] = -np.ones(num_nodes).astype('i')
-
-
-    # def prepare_backprop(self):
-    #     for t in range(1, len(self.sen) + 1): # t=0 は dummy
-    #         self.deltas[t] = F.concat([F.expand_dims(var, axis=0) for var in self.deltas[t]], axis=0)
-    #         self.scores[t] = F.concat([F.expand_dims(var, axis=0) for var in self.scores[t]], axis=0)
-
-
-def node_len(node):
-    return node[1] - node[0]
 
 
 def load_dictionary(path, read_pos=True):
