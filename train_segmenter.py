@@ -12,7 +12,7 @@ import chainer
 from chainer import serializers
 from chainer import cuda
 
-import io
+import data
 import lattice.lattice as lattice
 import read_embedding as emb
 from eval.conlleval import conlleval
@@ -273,7 +273,7 @@ class Trainer(object):
                 params = {}         # TODO
                 pass
 
-            trained, trained_t, trained_p, dic = io.load_data(
+            trained, trained_t, trained_p, dic = data.load_data(
                 args.format, trained_path, read_pos=args.joint, subpos_depth=args.subpos_depth, 
                 lowercase=args.lowercase, normalize_digits=args.normalize_digits,
                 dic=dic, refer_vocab=refer_vocab, limit=limit)
@@ -289,7 +289,7 @@ class Trainer(object):
             name, ext = os.path.splitext(args.dir_path + args.train_data)
             pass
         else:
-            train, train_t, train_p, dic = io.load_data(
+            train, train_t, train_p, dic = data.load_data(
                 args.format, train_path, read_pos=args.joint, subpos_depth=args.subpos_depth, 
                 lowercase=args.lowercase, normalize_digits=args.normalize_digits,
                 dic=dic, refer_vocab=refer_vocab, limit=limit)
@@ -303,7 +303,7 @@ class Trainer(object):
                 name, ext = os.path.splitext(args.dir_path + args.validation_data)
                 pass
             else:
-                val, val_t, val_p, dic = io.load_data(
+                val, val_t, val_p, dic = data.load_data(
                     args.format, val_path, read_pos=args.joint, update_token=False, update_label=False, 
                     subpos_depth=args.subpos_depth, 
                     lowercase=args.lowercase, normalize_digits=args.normalize_digits,
@@ -320,7 +320,7 @@ class Trainer(object):
                 name, ext = os.path.splitext(args.dir_path + args.test_data)
                 pass
             else:
-                test, test_t, test_p, dic = io.load_data(
+                test, test_t, test_p, dic = data.load_data(
                     args.format, test_path, read_pos=args.joint, update_token=False, update_label=False,
                     subpos_depth=args.subpos_depth, 
                     lowercase=args.lowercase, normalize_digits=args.normalize_digits,
@@ -396,7 +396,7 @@ class Trainer(object):
         else:
             ti_updated=None
 
-        model = io.load_model_from_params(
+        model = data.load_model_from_params(
             self.params, model_path=self.args.resume, dic=self.dic, token_indices_updated=ti_updated,
             embed_model=embed_model, gpu=self.args.gpu)
         model.compute_fscore = True
@@ -437,15 +437,15 @@ class Trainer(object):
                 'label2id_path' : 'nn_model/vocab_' + self.start_time + '.l2i.txt',
                 'model_date': self.start_time
             })
-            io.write_param_file(self.params, 'nn_model/param_' + self.start_time + '.txt')
-            io.write_map(self.dic.token_indices.token2id, self.params['token2id_path'])
-            io.write_map(self.dic.label_indices.token2id, self.params['label2id_path'])
+            data.write_param_file(self.params, 'nn_model/param_' + self.start_time + '.txt')
+            data.write_map(self.dic.token_indices.token2id, self.params['token2id_path'])
+            data.write_map(self.dic.label_indices.token2id, self.params['label2id_path'])
 
 
     def dump_train_data_and_params(self):
         if self.args.dump_train_data and not self.args.train_data.endswith('pickle'):
             name, ext = os.path.splitext(self.args.dir_path + self.args.train_data)
-            io.dump_pickled_data(name, self.train, self.train_t, self.dic, self.params)
+            data.dump_pickled_data(name, self.train, self.train_t, self.dic, self.params)
             print('pickled training data')
     
 
@@ -499,9 +499,9 @@ class Trainer(object):
             for xs, ts in batch_generator(self.train, self.train_t, label_seqs2=None, 
                                           batchsize=self.args.batchsize, shuffle=True, xp=xp):
 
-                # t0 = datetime.now()
+                t0 = datetime.now()
                 loss, ecounts = self.model(xs, ts, train=True)
-                # t1 = datetime.now()
+                t1 = datetime.now()
 
                 num_tokens += sum([len(x) for x in xs])
                 count += len(xs)
@@ -512,15 +512,15 @@ class Trainer(object):
                 i = i_max
                 n_iter += 1
 
-                # t2 = datetime.now()
+                t2 = datetime.now()
                 optimizer.target.cleargrads() # Clear the parameter gradients
                 loss.backward()               # Backprop
                 loss.unchain_backward()       # Truncate the graph
                 optimizer.update()            # Update the parameters
-                # t3 = datetime.now()
-                # print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
-                # print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
-                # print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
+                t3 = datetime.now()
+                print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
+                print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
+                print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
 
                 # Evaluation
                 if (n_iter * self.args.batchsize) % n_iter_report == 0: # or i == n_train:
@@ -627,32 +627,30 @@ class Trainer4JointMA(Trainer):
 
                 #self.model.predictor.lattice_crf.debug = True
                 #self.dic.chunk_trie.debug = True
-
-                # t0 = datetime.now()
+                
+                t0 = datetime.now()
                 loss, ecounts_seg, ecounts_pos = self.model(xs, ts_seg, ts_pos, train=True)
-                # t1 = datetime.now()
+                t1 = datetime.now()
 
-                # num_tokens += sum([len(x) for x in xs])
-                # count += len(xs)
-                # total_loss += loss.data
-                # total_ecounts_seg = conlleval.merge_counts(total_ecounts_seg, ecounts_seg)
-                # total_ecounts_pos += ecounts_pos
+                num_tokens += sum([len(x) for x in xs])
+                count += len(xs)
+                total_loss += loss.data
+                total_ecounts_seg = conlleval.merge_counts(total_ecounts_seg, ecounts_seg)
+                total_ecounts_pos += ecounts_pos
                 i_max = min(i + self.args.batchsize, n_train)
                 print('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
                 i = i_max
                 n_iter += 1
-                if True:
-                    continue
 
-                # t2 = datetime.now()
+                t2 = datetime.now()
                 optimizer.target.cleargrads() # Clear the parameter gradients
                 loss.backward()               # Backprop
                 loss.unchain_backward()       # Truncate the graph
                 optimizer.update()            # Update the parameters
-                # t3 = datetime.now()
-                # print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
-                # print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
-                # print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
+                t3 = datetime.now()
+                print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
+                print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
+                print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
 
                 # Evaluation
                 if (n_iter * self.args.batchsize) % n_iter_report == 0:

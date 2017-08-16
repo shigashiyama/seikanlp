@@ -2,7 +2,7 @@ import argparse
 import subprocess
 from subprocess import PIPE
 
-import util
+import data
 import sys
 from eval.conlleval import conlleval
 
@@ -71,7 +71,7 @@ def parse_result(res):
         # read = feats[2]
 
         chars.extend([word[i] for i in range(len(word))])
-        bounds.extend([util.get_label_BI(i, None) for i in range(len(word))])
+        bounds.extend([data.get_label_BI(i, None) for i in range(len(word))])
         
     return chars, bounds
 
@@ -147,7 +147,7 @@ if __name__=='__main__':
         for ext in exts:
             input = args.org_data_dir + args.fileid + ext
             output = args.data_dir + args.fileid + ext
-            util.process_bccwj_data_for_kytea(input, output)
+            data.process_bccwj_data_for_kytea(input, output)
 
     train_gold = args.data_dir + args.fileid + '_train.tsv'
     val_gold = args.data_dir + args.fileid + '_val.tsv'
