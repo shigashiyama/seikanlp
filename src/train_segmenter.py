@@ -14,7 +14,7 @@ from chainer import serializers
 from chainer import cuda
 
 import data
-import dic.lattice as lattice
+import lattice
 import read_embedding as emb
 from eval.conlleval import conlleval
 

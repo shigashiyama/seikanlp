@@ -25,8 +25,8 @@ from chainer import Variable
 
 
 from eval.conlleval import conlleval
-import dic.lattice as lattice
-import dic.features as features
+import lattice
+import features
 from util import Timer
 
 

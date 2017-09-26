@@ -6,7 +6,7 @@ import copy
 import enum
 import numpy as np
 
-import dic.lattice as lattice
+import lattice
 import models
 import read_embedding as emb
 
