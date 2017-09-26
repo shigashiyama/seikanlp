@@ -6,7 +6,7 @@ import copy
 import enum
 import numpy as np
 
-import lattice.lattice as lattice
+import dic.lattice as lattice
 import models
 import read_embedding as emb
 
@@ -24,16 +24,13 @@ example of input data:
   I       の      助詞-格助詞$
   I       会話    名詞-普通名詞-サ変可能
 """
-def load_bccwj_data_for_wordseg(path, update_token=True, update_label=True, subpos_depth=-1, 
-                                dic=None, refer_vocab=set(), do_segmentation=True, limit=-1):
+def load_bccwj_data(path, update_token=True, update_label=True, subpos_depth=-1, dic=None, 
+                    refer_vocab=set(), do_segmentation=True, ws_dict_feat=False, limit=-1):
     if not dic:
         dic = lattice.IndicesPair()
         if subpos_depth == 0:
             dic.init_label_indices('BIES')
 
-    token_ind = dic.token_indices
-    label_ind = dic.label_indices
-        
     instances = []
     lab_seqs = []
 
@@ -70,30 +67,28 @@ def load_bccwj_data_for_wordseg(path, update_token=True, update_label=True, subp
                 if ins_cnt % 100000 == 0:
                     print('read', ins_cnt, 'instances')
 
-            if limit > 0 and ins_cnt >= limit:
+            if limit > 0 and ins_cnt >= limit + 1:
                 break
-
 
             if do_segmentation:
                 wlen = len(word)
-                ins.extend([token_ind.get_id(word[i], update_token) for i in range(wlen)])
-
+                ins.extend([dic.token_indices.get_id(word[i], update_token) for i in range(wlen)])
                 labs.extend(
-                    [label_ind.get_id(
+                    [dic.label_indices.get_id(
                         get_label_BIES(i, wlen-1, cate=pos), update=update_label) for i in range(wlen)])
+
+                if update_token and ws_dict_feat: # update dic
+                    ids = ins[-wlen:]
+                    dic.chunk_trie.get_word_id(ids, True)
+
             else:
                 update_this_token = update_token or word in refer_vocab
-                ins.append(token_ind.get_id(word, update=update_this_token))
-                labs.append(label_ind.get_id(pos, update=update_label))
+                ins.append(dic.token_indices.get_id(word, update=update_this_token))
+                labs.append(dic.label_indices.get_id(pos, update=update_label))
 
             bof = False
             word_cnt += 1
             token_cnt += len(word)
-
-        if limit <= 0:
-            instances.append(ins)
-            lab_seqs.append(labs)
-            ins_cnt += 1
 
     return instances, lab_seqs, dic
 
@@ -101,6 +96,7 @@ def load_bccwj_data_for_wordseg(path, update_token=True, update_label=True, subp
 
 def load_bccwj_data_for_lattice_ma(
         path, read_pos=True, update_token=True, subpos_depth=-1, dic=None, limit=-1):
+
     if not dic:
         dic = lattice.MorphologicalDictitionary()
         
@@ -509,9 +505,10 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
     elif data_format == 'bccwj_ws' or data_format == 'bccwj_pos':
         do_segmentation = True if data_format == 'bccwj_ws' else False
 
-        instances, label_seqs, dic = load_bccwj_data_for_wordseg(
+        instances, label_seqs, dic = load_bccwj_data(
             path, update_token=update_token, update_label=update_label, subpos_depth=subpos_depth, 
-            dic=dic, refer_vocab=refer_vocab, do_segmentation=do_segmentation, limit=limit)
+            dic=dic, refer_vocab=refer_vocab, do_segmentation=do_segmentation,
+            limit=limit)
 
     elif data_format == 'cws':
         instances, label_seqs, dic = load_cws_data(
@@ -636,10 +633,8 @@ def read_param_file(path):
 
 def load_model_from_params(params, model_path='', dic=None, token_indices_updated=None, 
                            embed_model=None, gpu=-1):
-    if not 'joint' in params:
-        params['joint'] = False
-    else:
-        params['joint'] = str(params['joint']).lower() == 'true'
+    if not 'joint_type' in params:
+        params['joint_type'] = None
 
     if not 'embed_dim' in params:
         params['embed_dim'] = 300
@@ -664,10 +659,10 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
     else:
         params['rnn_bidirection'] = str(params['rnn_bidirection']).lower() == 'true'
 
-    if not 'lattice' in params:
-        params['lattice'] = False
-    else:
-        params['lattice'] = str(params['lattice']).lower() == 'true'
+    # if not 'lattice' in params:
+    #     params['lattice'] = False
+    # else:
+    #     params['lattice'] = str(params['lattice']).lower() == 'true'
 
     if not 'crf' in params:
         params['crf'] = False
@@ -686,6 +681,9 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
         params['right_contexts'] = 0
     else:
         params['right_contexts'] = int(params['right_contexts'])
+
+    if not 'dict_feat' in params:
+        params['dict_feat'] = False
 
     if not 'dropout' in params:
         params['dropout'] = 0
@@ -709,7 +707,7 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             lattice.TokenIndices(label2id))
     dic.create_id2label()
 
-    if params['lattice']:
+    if params['joint_type'] == 'lattice':
         rnn = models.RNN_LatticeCRF(
             params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
             len(dic.label_indices), dic, dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
@@ -717,7 +715,10 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
             init_embed=embed, gpu=gpu)
 
-    elif params['crf']:
+    elif params['joint_type'] == 'dual_rnn':
+        pass
+
+    elif params['joint_type'] == 'single_rnn':
         rnn = models.RNN_CRF(
             params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
             len(dic.label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
@@ -726,16 +727,23 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             init_embed=embed, gpu=gpu)
 
     else:
-        rnn = models.RNN(
-            params['rnn_layer'], len(token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
-            len(label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
-            rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
-            # n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
-            init_embed=embed, gpu=gpu)
+        if params['crf']:
+            rnn = models.RNN_CRF(
+                params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
+                len(dic.label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
+                rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
+                n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
+                init_embed=embed, gpu=gpu)
+        else:
+            rnn = models.RNN(
+                params['rnn_layer'], len(token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
+                len(label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
+                rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
+                n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
+                init_embed=embed, gpu=gpu)
 
-    if params['lattice'] or params['joint']:
+    if params['joint_type']:
         model = models.JointMorphologicalAnalyzer(rnn, dic.id2label)
-        #TODO Joint_RNN の実装
     else:
         model = models.SequenceTagger(rnn, dic.id2label)
 

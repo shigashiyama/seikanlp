@@ -25,9 +25,12 @@ from chainer import Variable
 
 
 from eval.conlleval import conlleval
-import lattice.lattice as lattice
+import dic.lattice as lattice
+import dic.features as features
 from util import Timer
 
+
+#chainer.Variable(xp.array(0, dtype='f'))
 
 class RNNBase(chainer.Chain):
     def __init__(
@@ -129,6 +132,16 @@ class RNNBase(chainer.Chain):
             exs.append(ex)
         xs = exs
         return xs
+
+
+    # def extract_features(self, xs, dic):
+    #     exs = []
+    #     for x in xs:
+    #         v1 = features.extract_dic_features(dic, x)
+    #         v2 = self.lookup(x)
+    #         con = F.concat(v1, v2, 0)
+    #         F.reshape(con, (len(x),
+                                          
 
 
     def get_id_array(self, start, width, gpu=-1):
@@ -241,6 +254,56 @@ class RNN_CRF(RNNBase):
         return loss, ys
         
 
+# not finished to implement
+class DualRNN(chainer.Chain):
+    def __init__(
+            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
+            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
+            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
+        super(DualRNN, self).__init__()
+
+        with self.init_scope():
+            self.rnn_crf1 = RNN_CRF(
+                n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
+                rnn_bidirection, linear_activation, n_left_contexts, n_right_contexts, init_embed, gpu)
+            self.rnn_ff2 = RNN(
+                n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
+                rnn_bidirection, linear_activation, n_left_contexts, n_right_contexts, init_embed, gpu)
+
+
+    def __call__(self, cxs, cts, wts, train=True):
+        char_loss, cys = self.rnn_crf1(cxs, cts)
+
+        
+        #convert_to_word_seqs(cxs, cys, morph_dic)
+        word_loss, wys = self.rnn_ff2(wxs, wts)
+        loss = char_loss + word_loss
+
+        return
+
+
+    def call_rnn_ff2(self, xs, ts, train=True):
+        xs = self.embed(xs)
+
+        with chainer.using_config('train', train):
+            if self.rnn_unit_type == 'lstm':
+                hy, cy, hs = self.rnn_unit(None, None, xs)
+            else:
+                hy, hs = self.rnn_unit(None, xs)
+            ys = [self.act(self.linear(h)) for h in hs]
+
+        loss = None
+        ps = []
+        for y, t in zip(ys, ts):
+            if loss is not None:
+                loss += self.loss_fun(y, t)
+            else:
+                loss = self.loss_fun(y, t)
+                ps.append([np.argmax(yi.data) for yi in y])
+
+        return loss, ps
+
+
 class RNN_LatticeCRF(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, morph_dic, dropout=0, 
@@ -251,7 +314,8 @@ class RNN_LatticeCRF(RNNBase):
             rnn_bidirection, linear_activation, n_left_contexts, n_right_contexts, init_embed, gpu)
 
         with self.init_scope():
-            self.lattice_crf = LatticeCRF(morph_dic, gpu)
+            self.morph_dic = morph_dic
+            self.lattice_crf = LatticeCRF(self.morph_dic, gpu)
 
     def __call__(self, xs, ts_seg, ts_pos, train=True):
         # ts_seg: unused
@@ -333,6 +397,7 @@ class LatticeCRF(chainer.link.Link):
 
             # print('y:', decode(x, y_pos, self.morph_dic))
             # print('t:', decode(x, t_pos, self.morph_dic))
+            # print('t:', t_pos)
             # print([self.morph_dic.get_token(ti) for ti in x)
             # print(y_seg)
             # print(y_pos)
@@ -362,9 +427,10 @@ class LatticeCRF(chainer.link.Link):
                 print('\nt={}'.format(t))
 
             begins = lat.end2begins.get(t)
-            num_nodes = sum([len(entry[2]) for entry in begins])
-            deltas_t = [Variable(xp.array(0, dtype='f')) for m in range(num_nodes)]
-            scores_t = [Variable(xp.array(0, dtype='f')) for m in range(num_nodes)]
+            if begins:
+                num_nodes = sum([len(entry[2]) for entry in begins])
+                deltas_t = [Variable(xp.array(0, dtype='f')) for m in range(num_nodes)]
+                scores_t = [Variable(xp.array(0, dtype='f')) for m in range(num_nodes)]
 
             for i, entry in enumerate(begins):
                 s = entry[0]    # begin index
@@ -507,16 +573,19 @@ class LatticeCRF(chainer.link.Link):
 
     def argmax(self, lat):
         xp = cuda.cupy if self.gpu >= 0 else np
+        if self.debug:
+            print('\nargmax')
 
         y_seg = []
         y_pos = []
         wis = []
 
         t = len(lat.sen)
-        
         prev_best = int(xp.argmax(lat.scores[t].data))
         while t > 0:
             begins = lat.end2begins.get(t)
+            if self.debug:
+                print(t, begins)
 
             i = j = prev_best
             for begin in begins:
@@ -524,6 +593,8 @@ class LatticeCRF(chainer.link.Link):
                     j -= len(begin[2])
                     continue
                 else:
+                    if self.debug:
+                        print(' ', i, j, begin)
                     s = begin[0]
                     wi = begin[1]
                     pos = begin[2][j]
@@ -639,14 +710,14 @@ class SequenceTagger(chainer.link.Chain):
     #     return ps
 
 
-    def generate_lines(self, x, t, y):
+    def generate_lines(self, x, t, y, is_str=False):
         i = 0
         while True:
             if i == len(x):
                 raise StopIteration
             x_str = str(x[i])
-            t_str = self.id2label[int(t[i])]
-            y_str = self.id2label[int(y[i])]
+            t_str = t[i] if is_str else self.id2label[int(t[i])]
+            y_str = y[i] if is_str else self.id2label[int(y[i])]
 
             yield [x_str, t_str, y_str]
 
@@ -680,13 +751,12 @@ class SequenceTagger(chainer.link.Chain):
 
 
 class JointMorphologicalAnalyzer(SequenceTagger):
-    def __init(self, predictor):
-        super(JointMorphologicalAnalyzer, self).__init__(predictor=predictor)
+    # def __init(self, predictor):
+    #     super(JointMorphologicalAnalyzer, self).__init__(predictor=predictor)
 
 
     def __init__(self, predictor, id2label):
-        super(SequenceTagger, self).__init__(predictor=predictor)
-        self.id2label = id2label
+        super(JointMorphologicalAnalyzer, self).__init__(predictor, id2label)
 
         
     def __call__(self, *args, **kwargs):
@@ -698,25 +768,71 @@ class JointMorphologicalAnalyzer(SequenceTagger):
 
         if self.compute_fscore:
             ecounts_seg = None
-            ecounts_pos = Counter()
+            ecounts_pos = None
+            
             for x, t_seg, t_pos, y_seg, y_pos in zip(xs, ts_seg, ts_pos, ys_seg, ys_pos):
-                generator = self.generate_lines(x, t_seg, y_seg)
-                ecounts_seg = conlleval.merge_counts(ecounts_seg, conlleval.evaluate(generator))
-                ecounts_pos['all'] += len(t_pos)
-                ecounts_pos['correct'] += len(t_pos) - len(set(t_pos) - set(y_pos))
+                generator_seg = self.generate_lines(x, t_seg, y_seg)
+                ecounts_seg = conlleval.merge_counts(ecounts_seg, conlleval.evaluate(generator_seg))
+
+                t_seg_pos = self.convert_to_joint_labels(t_seg, t_pos)
+                y_seg_pos = self.convert_to_joint_labels(y_seg, y_pos)
+                generator_pos = self.generate_lines(x, t_seg_pos, y_seg_pos, is_str=True)
+                ecounts_pos = conlleval.merge_counts(ecounts_seg, conlleval.evaluate(generator_pos))
+                
+                # print([self.predictor.morph_dic.get_label(int(y)) for y in y_seg])
+                # print([self.predictor.morph_dic.get_label(int(t)) for t in t_seg])
+                # print(y_seg_pos)
+                # print(t_seg_pos)
+                # print()
 
         return loss, ecounts_seg, ecounts_pos
 
 
-    def decode(self, sen, pos_seq):
-        return decode(sen, pos_seq, self.morph_dic)
+    def convert_to_joint_labels(self, seg_labels, node_seq):
+        res = [None] * node_seq[-1][1]
+        i = 0
+        for node in node_seq:
+            pos = self.predictor.morph_dic.get_pos(node[2])
+            for j in range(node[0], node[1]):
+                seg_label = self.predictor.morph_dic.get_label(int(seg_labels[j]))
+                res[i] = '{}-{}'.format(seg_label, pos)
+                i += 1
+
+        return res
+
+
+    def decode(self, sen, node_seq):
+        return decode(sen, node_seq, self.morph_dic)
         
+
+def convert_to_word_seqs(cxs, cys, morph_dic):
+    batch_size = len(cxs) 
+    wxs = [None] * batch_size
+    wys = [None] * batch_size
+    for k, ins in enumerate(zip(cxs, cys)):
+        cx = ins[0]
+        cy = ins[1]
+        sen_len = len(ins[0])
+        wx = []
+
+        prev_i = 0
+        next_i = 0
+        while next_i < sen_len:
+            if cy[next_i] == 0 or cy[next_i] == 3:
+                w = ''.join([morph_dic.get_token(cxj) for cxj in cx[prev_i:next_i+1]])
+                wx.append(morph_dic.get_word_id(w))
+
+        wxs[k] = wx
+
+    return wxs
+    
+
 
 def decode(sen, pos_seq, morph_dic):
     seq = []
 
     for node in pos_seq:
-        if lattice.node_len(node) == 1:
+        if node[1] - node[0] == 1:
             ti = int(sen[node[0]])
             word = morph_dic.get_token(ti)
         else:

@@ -4,7 +4,6 @@ import pickle
 import numpy as np
 import chainer
 import chainer.functions as F
-#from chainer.cuda import cupy
 
 
 UNK_TOKEN = '<UNK>'             # common among word and char
@@ -57,7 +56,7 @@ class MapTrie(object):
     def __init__(self):
         self.tree = TrieNode(-1)
         self.next_id = 1        # 0 is used for <UNK>
-        # self.debug = False
+        #self.debug = True
 
 
     def get_word_id(self, word, update=False):
@@ -96,9 +95,11 @@ class MapTrie(object):
                 #     res = [(1, 0)] 
                 break
 
+            print(' ',child.id)
+
             if child.id != UNK_TOKEN_ID:
-                word_id = child.id
-                append((begin_index + i + 1, child.id))
+                append((begin_index, begin_index + i + 1))
+                #append((begin_index + i + 1, child.id))
             node = child
 
         return res
@@ -106,7 +107,8 @@ class MapTrie(object):
 
 class TrieNode(object):
     def __init__(self, id=UNK_TOKEN_ID):
-        self.id = id
+        self.id = id            # id != UNK_TOKEN_ID なら終端
+        #self.is_terminal = False
         self.children = {}
 
 
@@ -147,6 +149,7 @@ class TokenIndices(object):
             return self.unk_id
 
 
+# token indices, label indices
 class IndicesPair(object):
     def __init__(self, token_indices=None, label_indices=None):
         self.token_indices = token_indices if token_indices else TokenIndices(unk_symbol=UNK_TOKEN)
@@ -193,11 +196,14 @@ class IndicesPair(object):
         return self.label_indices.get_id(label)
 
 
+# token indices, label indices, pos indices
 class IndicesTriplet(IndicesPair):
     def __init__(self, token_indices=None, label_indices=None, pos_indices=None):
         super(IndicesTriplet, self).__init__(token_indices, label_indices)
         self.pos_indices = pos_indices if pos_indices else TokenIndices(unk_symbol=DUMMY_POS)
 
+
+# token indices, label indices, pos indices, word trie
 class MorphologyDictionary(IndicesTriplet):
     def __init__(self):
         self.pos_indices = TokenIndices(unk_symbol=DUMMY_POS)
@@ -218,11 +224,11 @@ class MorphologyDictionary(IndicesTriplet):
         tis = [self.token_indices.get_id(token, update=update) for token in chunk]
 
         # 全ての文字を単語として登録
-        if update:
-            for i, ti in enumerate(tis):
-                ci_of_token = self.chunk_trie.get_word_id([ti], True)
-                self.id2chunk[ci_of_token] = chunk[i]
-                self.ci2lis.add(ci_of_token, self.dummy_pos_id)
+        # if update:
+        #     for i, ti in enumerate(tis):
+        #         ci_of_token = self.chunk_trie.get_word_id([ti], True)
+        #         self.id2chunk[ci_of_token] = chunk[i]
+        #         self.ci2lis.add(ci_of_token, self.dummy_pos_id)
 
         # 単語登録と ID 取得
         ci = self.chunk_trie.get_word_id(tis, update)
@@ -258,6 +264,34 @@ class MorphologyDictionary(IndicesTriplet):
             return UNK_TOKEN
 
 
+# token indices, label indices, pos indices, word trie, reverse word trie
+# class BiMorphologyDictionary(MorphologyDictionary):
+#     def __init__(self):
+#         super(BiMorphologyDictionary, self).__init__()
+#         self.chunk_trie_rev = MapTrie()
+
+
+#     def get_entries(self, chunk, pos, update=False):
+#         tis = [self.token_indices.get_id(token, update=update) for token in chunk]
+
+#         # 単語登録と ID 取得
+#         ci = self.chunk_trie.get_word_id(tis, update)
+#         rci = self.chunk_trie_rev.get_word_id(tis[::-1], update)
+#         pi = self.pos_indices.get_id(pos, update=update)
+#         if update:
+#             self.id2chunk[ci] = chunk
+#             self.ci2lis.add(ci, pi)
+
+#         return tis, ci, pi
+
+
+# class CharcterPositionTable(object):
+#     def __init__(self):
+#         self.first_chars = set()
+#         self.inside_chars = set()
+#         self.last_chars = set()
+
+
 class Lattice(object):
     def __init__(self, sen, dic, debug=False):
         self.sen = sen
@@ -269,25 +303,26 @@ class Lattice(object):
         
         T = len(self.sen)
         for i in range(T):
-            sen_rest = sen[i:]
-            hit = dic.chunk_trie.common_prefix_search(sen_rest, i)
-            
-            # if not hit:
-                # 先頭文字を未知単語として追加
-                # t = i + 1
-                # self.eid2posi[t] =  UNK_TOKEN_ID
+            hit = dic.chunk_trie.common_prefix_search(sen[i:], i)
+            if not hit:
+                # 文字を未知単語として追加
+                t = i + 1
+                entry = (i, dic.token_indices.unk_id, (dic.dummy_pos_id,))
+                self.end2begins.add(t, entry)
 
             for tup in hit:
                 t = tup[0]
                 wi = tup[1]
                 pis = tuple(sorted(dic.get_pos_ids(wi)))
-                entry = (i, wi, pis)
-                self.end2begins.add(t, entry)
+                if len(pis) > 0:
+                    entry = (i, wi, pis)
+                    self.end2begins.add(t, entry)
 
-                if self.debug:
-                    for pi in pis:
-                        print('  node=({}, {}, {}) word={}/{}, pos={}'.format(
-                            i, t, pis, wi, dic.get_chunk(wi), dic.get_pos(pi)))
+                    if self.debug:
+                        for pi in pis:
+                            print('  node=({}, {}, {}) word={}/{}, pos={}'.format(
+                                i, t, pis, wi, dic.get_chunk(wi), dic.get_pos(pi)))
+                            #print(' ', self.end2begins.get(t))
 
         if self.debug:
             print('\nconstructed lattice:')
@@ -304,6 +339,8 @@ class Lattice(object):
         self.prev_pointers = [[] for i in range(T+1)]
 
         for t in range(1, T + 1): # t=0 は dummy
+            if not t in self.end2begins.key2values:
+                continue
             
             # convert set to sorted list
             begins = sorted(self.end2begins.key2values[t], reverse=True)
@@ -319,9 +356,12 @@ def load_dictionary(path, read_pos=True):
         with open(path, 'rb') as f:
             dic = pickle.load(f)
             dic.create_id2token()
+
         return dic
 
+
     dic = MorphologyDictionary()
+
     with open(path, 'r') as f:
         for line in f:
             line = line.strip()
@@ -331,7 +371,7 @@ def load_dictionary(path, read_pos=True):
 
             chunk = arr[0]
             pos = arr[1] if read_pos else DUMMY_POS
-            dic.get_entries(chunk, pos, update=True)
+            tis, _, _ = dic.get_entries(chunk, pos, update=True)
 
     dic.create_id2token()
     dic.create_id2pos()
@@ -340,34 +380,34 @@ def load_dictionary(path, read_pos=True):
 
 if __name__ == '__main__':
 
-    dic_path = '../unidic/lex4kytea_zen.txt'
+    dic_path = '/home/shigashi/data_shigashi/work/work_neural/sequence_labeling/unidic/dic_10k.zen'
     dic = load_dictionary(dic_path, read_pos=True)
 
-    dic_pic_path = '../unidic/lex4kytea_zen_li.pickle'
-    with open(dic_pic_path, 'wb') as f:
-        pickle.dump(dic, f)
+    # dic_pic_path = '../unidic/lex4kytea_zen_li.pickle'
+    # with open(dic_pic_path, 'wb') as f:
+    #     pickle.dump(dic, f)
     # dic_pic_path = '../unidic/lex4kytea_zen_li.pickle'
     # with open(dic_pic_path, 'rb') as f:
     #     dic = pickle.load(f)
         
-    org_sen = 'どこかに引っ越す。'
-    sen = [dic.get_token_id(c) for c in org_sen]
-    print(sen)
-    print([dic.maxlen(c) for c in sen])
-    print([dic.get_pos_ids(c) for c in sen])
+    # org_sen = 'どこかに引っ越す。'
+    # sen = [dic.get_token_id(c) for c in org_sen]
+    # print(sen)
+    # print([dic.maxlen(c) for c in sen])
+    # print([dic.get_pos_ids(c) for c in sen])
 
-    latticeFactory = LatticeFactory(dic) 
+    # latticeFactory = LatticeFactory(dic) 
     
-    lat = Lattice(sen, dic)
-    print(lat.sid2nodes)
-    print(lat.eid2nodes)
-    print()
+    # lat = Lattice(sen, dic)
+    # print(lat.sid2nodes)
+    # print(lat.eid2nodes)
+    # print()
 
-    lat.forward()
-    path = lat.argmax()
-    print(path)
+    # lat.forward()
+    # path = lat.argmax()
+    # print(path)
 
-    res = []
-    for node in path:
-        res.append('{}/{}'.format(org_sen[node[0]:node[1]], node[2]))
-    print(res)
+    # res = []
+    # for node in path:
+    #     res.append('{}/{}'.format(org_sen[node[0]:node[1]], node[2]))
+    # print(res)

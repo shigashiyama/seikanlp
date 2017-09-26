@@ -8,12 +8,13 @@ import pickle
 from datetime import datetime
 from collections import Counter
 
+#os.environ["CHAINER_TYPE_CHECK"] = "0"
 import chainer
 from chainer import serializers
 from chainer import cuda
 
 import data
-import lattice.lattice as lattice
+import dic.lattice as lattice
 import read_embedding as emb
 from eval.conlleval import conlleval
 
@@ -47,7 +48,7 @@ def evaluate(model, instances, slab_seqs, plab_seqs=None, batchsize=100, xp=np):
     num_tokens = 0
     total_loss = 0
     total_ecounts_seg = conlleval.EvalCounts()
-    total_ecounts_pos = Counter()
+    total_ecounts_pos = conlleval.EvalCounts()
 
     for batch in batch_generator(instances, slab_seqs, plab_seqs, batchsize=batchsize, shuffle=False, xp=xp):
         xs = batch[0]
@@ -66,43 +67,54 @@ def evaluate(model, instances, slab_seqs, plab_seqs=None, batchsize=100, xp=np):
         ave_loss = total_loss / num_tokens
         total_ecounts_seg = conlleval.merge_counts(total_ecounts_seg, ecounts_seg)
         if eval_pos:
-            total_ecounts_pos += ecounts_pos
+            total_ecounts_pos = conlleval.merge_counts(total_ecounts_pos, ecounts_pos)
+
         seg_c = total_ecounts_seg
         seg_acc = conlleval.calculate_accuracy(seg_c.correct_tags, seg_c.token_counter)
         seg_overall = conlleval.calculate_metrics(
             seg_c.correct_chunk, seg_c.found_guessed, seg_c.found_correct)
+
         if eval_pos:
             pos_c = total_ecounts_pos
-            pos_acc = pos_c['correct'] / pos_c['all'] 
+            pos_acc = conlleval.calculate_accuracy(pos_c.correct_tags, pos_c.token_counter)
+            pos_overall = conlleval.calculate_metrics(
+                pos_c.correct_chunk, pos_c.found_guessed, pos_c.found_correct)
         else:
+            pos_c = None
             pos_acc = None
+            pos_overall = None
 
-    print_results(total_loss, ave_loss, count, seg_c, seg_acc, seg_overall, pos_acc)
+    print_results(
+        total_loss, ave_loss, count, seg_c, seg_acc, seg_overall, pos_acc, pos_overall)
     stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
         count, seg_c.token_counter, seg_c.found_correct, seg_c.found_guessed)
     if eval_pos:
-        res = '%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
-            (100.*pos_acc), (100.*seg_acc), 
-            (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore), 
-            seg_overall.tp, seg_overall.fp, seg_overall.fn, total_loss, ave_loss)
-    else:
-        res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
+        res = '%.2f\t%.2f\t%.2f\t%.2f\t%.4f\t%.4f' % (
             (100.*seg_acc), 
             (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore), 
-            seg_overall.tp, seg_overall.fp, seg_overall.fn, total_loss, ave_loss)
+            total_loss, ave_loss)
+    else:
+        res = '%.2f\t%.2f\t%.2f\t%.2f\t%.4f\t%.4f' % (
+            (100.*seg_acc), (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore), 
+            total_loss, ave_loss)
         
     return stat, res
 
 
-def print_results(total_loss, ave_loss, count, c, acc, overall, acc2=None):
+def print_results(total_loss, ave_loss, count, c, acc, overall, acc2=None, overall2=None):
     print('total loss: %.4f' % total_loss)
     print('ave loss: %.5f'% ave_loss)
-    print('#sen, #token, #chunk, #chunk_pred: %d %d %d %d' %
-          (count, c.token_counter, c.found_correct, c.found_guessed))
-    print('TP, FP, FN: %d %d %d' % (overall.tp, overall.fp, overall.fn))
+    print('#sen, #token, #chunk, #chunk_pred: {} {} {} {}'.format(
+        count, c.token_counter, c.found_correct, c.found_guessed))
     if acc2:
-        print('A, P, R, F | A:%6.2f %6.2f %6.2f %6.2f |%6.2f' % 
-              (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore, 100.*acc2))
+        print('TP, FP, FN: %d %d %d | %d %d %d' % (
+            overall.tp, overall.fp, overall.fn, overall2.tp, overall2.fp, overall2.fn))
+    else:
+        print('TP, FP, FN: %d %d %d' % (overall.tp, overall.fp, overall.fn))
+    if acc2:
+        print('A, P, R, F | A:%6.2f %6.2f %6.2f %6.2f | A:%6.2f %6.2f %6.2f %6.2f' % 
+              (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore,
+               100.*acc2, 100.*overall2.prec, 100.*overall2.rec, 100.*overall2.fscore))
     else:
         print('A, P, R, F:%6.2f %6.2f %6.2f %6.2f' % 
               (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore))
@@ -114,7 +126,6 @@ def parse_arguments():
     parser.add_argument('--gpu', '-g', type=int, default=-1,
                         help='GPU ID (negative value indicates CPU)')
     parser.add_argument('--cudnn', dest='use_cudnn', action='store_true')
-    parser.add_argument('--joint', '-j', action='store_true')
     parser.add_argument('--eval', action='store_true', help='Evaluate on given model using input date without training')
     parser.add_argument('--limit', type=int, default=-1, help='Limit the number of samples for quick tests')
     parser.add_argument('--batchsize', '-b', type=int, default=20)
@@ -127,7 +138,7 @@ def parse_arguments():
     parser.add_argument('--rnn_unit_type', default='lstm')
     parser.add_argument('--rnn_bidirection', action='store_true')
     parser.add_argument('--crf', action='store_true')
-    parser.add_argument('--lattice', action='store_true')
+    parser.add_argument('--joint_type', '-j', default='')
     parser.add_argument('--linear_activation', '-a', default='')
     parser.add_argument('--rnn_hidden_unit', '-u', type=int, default=800)
     parser.add_argument('--embed_dim', '-d', type=int, default=300)
@@ -151,20 +162,20 @@ def parse_arguments():
     parser.add_argument('--validation_data', '-v', help='Filename of validation data')
     parser.add_argument('--test_data', help='Filename of test data')
     parser.add_argument('--dict_path', default='')
+    parser.add_argument('--dict_feat', action='store_true')
     parser.add_argument('--dump_train_data', action='store_true')
-    parser.set_defaults(joint=False)
     parser.set_defaults(use_cudnn=False)
-    parser.set_defaults(crf=False)
-    parser.set_defaults(lattice=False)    
-    parser.set_defaults(rnn_bidirection=False)
+    parser.set_defaults(rnn_bidirection=True)
+    parser.set_defaults(crf=True)
     parser.set_defaults(lowercase=False)
     parser.set_defaults(normalize_digits=False)
     parser.set_defaults(pickle_dump_train_data=False)
+    parser.set_defaults(dict_feat=False)
     args = parser.parse_args()
     if args.lrdecay:
-        parser.ad_argument('lrdecay_start')
-        parser.ad_argument('lrdecay_width')
-        parser.ad_argument('lrdecay_rate')
+        parser.add_argument('lrdecay_start')
+        parser.add_argument('lrdecay_width')
+        parser.add_argument('lrdecay_rate')
         array = args.lrdecay.split(':')
         args.lrdecay_start = int(array[0])
         args.lrdecay_width = int(array[1])
@@ -174,7 +185,6 @@ def parse_arguments():
     print('# No log: {}'.format(args.nolog))
     print('# GPU: {}'.format(args.gpu))
     print('# cudnn: {}'.format(args.use_cudnn))
-    print('# joint: {}'.format(args.joint))
     print('# eval: {}'.format(args.eval))
     print('# limit: {}'.format(args.limit))
     print('# minibatch-size: {}'.format(args.batchsize))
@@ -183,7 +193,7 @@ def parse_arguments():
     print('# rnn unit type: {}'.format(args.rnn_unit_type))
     print('# rnn bidirection: {}'.format(args.rnn_bidirection))
     print('# crf: {}'.format(args.crf))
-    print('# lattice: {}'.format(args.lattice))
+    print('# joint_type: {}'.format(args.joint_type))
     print('# linear_activation: {}'.format(args.linear_activation))
     print('# rnn_layer: {}'.format(args.rnn_layer))
     print('# embedding dimension: {}'.format(args.embed_dim))
@@ -191,6 +201,8 @@ def parse_arguments():
     print('# pre-trained embedding model: {}'.format(args.embed_path))
     print('# left context size: {}'.format(args.lc))
     print('# right context size: {}'.format(args.rc))
+    print('# path of dictionary {}'.format(args.dict_path))
+    print('# use dictionary feature {}'.format(args.dict_feat))
     print('# optimization algorithm: {}'.format(args.optimizer))
     print('# learning rate: {}'.format(args.lr))
     print('# learning rate decay: {}'.format(args.lrdecay))
@@ -265,6 +277,7 @@ class Trainer(object):
 
         token_indices_org = None
 
+        read_pos = args.subpos_depth != 0
         limit = args.limit if args.limit > 0 else -1
 
         if args.trained_data:
@@ -274,7 +287,7 @@ class Trainer(object):
                 pass
 
             trained, trained_t, trained_p, dic = data.load_data(
-                args.format, trained_path, read_pos=args.joint, subpos_depth=args.subpos_depth, 
+                args.format, trained_path, read_pos=read_pos, subpos_depth=args.subpos_depth, 
                 lowercase=args.lowercase, normalize_digits=args.normalize_digits,
                 dic=dic, refer_vocab=refer_vocab, limit=limit)
             token_indices_org = dic.token_indices.copy()
@@ -290,7 +303,7 @@ class Trainer(object):
             pass
         else:
             train, train_t, train_p, dic = data.load_data(
-                args.format, train_path, read_pos=args.joint, subpos_depth=args.subpos_depth, 
+                args.format, train_path, read_pos=read_pos, subpos_depth=args.subpos_depth, 
                 lowercase=args.lowercase, normalize_digits=args.normalize_digits,
                 dic=dic, refer_vocab=refer_vocab, limit=limit)
 
@@ -304,7 +317,7 @@ class Trainer(object):
                 pass
             else:
                 val, val_t, val_p, dic = data.load_data(
-                    args.format, val_path, read_pos=args.joint, update_token=False, update_label=False, 
+                    args.format, val_path, read_pos=read_pos, update_token=False, update_label=False, 
                     subpos_depth=args.subpos_depth, 
                     lowercase=args.lowercase, normalize_digits=args.normalize_digits,
                     dic=dic, refer_vocab=refer_vocab, limit=limit)
@@ -321,7 +334,7 @@ class Trainer(object):
                 pass
             else:
                 test, test_t, test_p, dic = data.load_data(
-                    args.format, test_path, read_pos=args.joint, update_token=False, update_label=False,
+                    args.format, test_path, read_pos=read_pos, update_token=False, update_label=False,
                     subpos_depth=args.subpos_depth, 
                     lowercase=args.lowercase, normalize_digits=args.normalize_digits,
                     dic=dic, refer_vocab=refer_vocab, limit=limit)
@@ -373,16 +386,17 @@ class Trainer(object):
     def prepare_model_and_parameters(self, embed_model=None):
         # parameter
         if not self.params:
-            self.params = {'joint' : self.args.joint,
+            self.params = {'joint_type' : self.args.joint_type,
                            'embed_dim' : self.args.embed_dim,
                            'rnn_layer' : self.args.rnn_layer,
                            'rnn_hidden_unit' : self.args.rnn_hidden_unit,
                            'rnn_bidirection' : self.args.rnn_bidirection,
                            'crf' : self.args.crf,
-                           'lattice' : self.args.lattice,
+                           # 'lattice' : self.args.lattice,
                            'linear_activation' : self.args.linear_activation,
                            'left_contexts' : self.args.lc,
                            'right_contexts' : self.args.rc,
+                           'dict_feat' : self.args.dict_feat,
                            'dropout' : self.args.dropout,
             }
         if self.args.embed_path:
@@ -397,8 +411,8 @@ class Trainer(object):
             ti_updated=None
 
         model = data.load_model_from_params(
-            self.params, model_path=self.args.resume, dic=self.dic, token_indices_updated=ti_updated,
-            embed_model=embed_model, gpu=self.args.gpu)
+            self.params, model_path=self.args.resume, dic=self.dic, 
+            token_indices_updated=ti_updated, embed_model=embed_model, gpu=self.args.gpu)
         model.compute_fscore = True
 
         if grow_lookup:
@@ -587,12 +601,6 @@ class Trainer4JointMA(Trainer):
     def __init__(self, args):
         super(Trainer4JointMA, self).__init__(args)
 
-    # def run(self):
-    #     if self.args.eval:
-    #         self.run_evaluation()
-    #     else:
-    #         self.run_training()
-
 
     def run_training(self):
         xp = cuda.cupy if args.gpu >= 0 else np
@@ -600,13 +608,6 @@ class Trainer4JointMA(Trainer):
         n_train = len(self.train)
         n_iter_report = self.args.iter_to_report
         n_iter = 0
-
-        # for ti in range(6980, 6995):
-        #     token = self.dic.get_token(ti)
-        #     ci = self.dic.get_chunk_id(token)
-        #     poss = [self.dic.get_pos(pi) for pi in self.dic.get_pos_ids(ci)]
-        #     print(ti, ci, self.dic.get_token(ti), poss)
-        # return
 
         for e in range(max(1, self.args.resume_epoch), self.args.epoch+1):
             time = datetime.now().strftime('%Y%m%d_%H%M')
@@ -619,7 +620,7 @@ class Trainer4JointMA(Trainer):
             num_tokens = 0
             total_loss = 0
             total_ecounts_seg = conlleval.EvalCounts()
-            total_ecounts_pos = Counter()
+            total_ecounts_pos = conlleval.EvalCounts()
 
             i = 0
             for xs, ts_seg, ts_pos in batch_generator(
@@ -636,7 +637,7 @@ class Trainer4JointMA(Trainer):
                 count += len(xs)
                 total_loss += loss.data
                 total_ecounts_seg = conlleval.merge_counts(total_ecounts_seg, ecounts_seg)
-                total_ecounts_pos += ecounts_pos
+                total_ecounts_pos = conlleval.merge_counts(total_ecounts_pos, ecounts_pos)
                 i_max = min(i + self.args.batchsize, n_train)
                 print('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
                 i = i_max
@@ -648,9 +649,9 @@ class Trainer4JointMA(Trainer):
                 loss.unchain_backward()       # Truncate the graph
                 optimizer.update()            # Update the parameters
                 t3 = datetime.now()
-                print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
-                print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
-                print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
+                # print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
+                # print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
+                # print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
 
                 # Evaluation
                 if (n_iter * self.args.batchsize) % n_iter_report == 0:
@@ -661,26 +662,33 @@ class Trainer4JointMA(Trainer):
                     print('<training result for previous iterations>')
 
                     ave_loss = total_loss / num_tokens
+
                     seg_c = total_ecounts_seg
                     seg_acc = conlleval.calculate_accuracy(seg_c.correct_tags, seg_c.token_counter)
                     seg_overall = conlleval.calculate_metrics(
                         seg_c.correct_chunk, seg_c.found_guessed, seg_c.found_correct)
+
                     pos_c = total_ecounts_pos
-                    pos_acc = pos_c['correct'] / pos_c['all'] 
-                    print_results(total_loss, ave_loss, count, seg_c, seg_acc, seg_overall, pos_acc)
+                    pos_acc = conlleval.calculate_accuracy(pos_c.correct_tags, pos_c.token_counter)
+                    pos_overall = conlleval.calculate_metrics(
+                        pos_c.correct_chunk, pos_c.found_guessed, pos_c.found_correct)
+
+                    print_results(
+                        total_loss, ave_loss, count, seg_c, seg_acc, seg_overall, pos_acc, pos_overall)
                     print()
 
                     if not self.args.nolog:
                         t_stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
                             count, seg_c.token_counter, seg_c.found_correct, seg_c.found_guessed)
-                        t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
-                            (100.*pos_acc), (100.*seg_acc), 
-                            (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore), 
-                            seg_overall.tp, seg_overall.fp, seg_overall.fn, total_loss, ave_loss)
+                        t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f%.4f\t%.4f' % (
+                            (100.*seg_acc), 
+                            (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore),
+                            (100.*pos_acc), 
+                            (100.*pos_overall.prec), (100.*pos_overall.rec), (100.*pos_overall.fscore), 
+                            total_loss, ave_loss)
                         self.logger.write('INFO: train - %s\n' % t_stat)
                         if n_iter == 1:
-                            self.logger.write(
-                                'data\titer\tep\tpos-acc\tseg-acc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                            self.logger.write('data\titer\tep\t\s-acc\ts-prec\ts-rec\ts-fb1\t\p-acc\tp-prec\tp-rec\tp-fb1\tloss\taloss\n')
                         self.logger.write('train\t%d\t%s\t%s\n' % (n_iter, now_e, t_res))
 
                     if self.args.validation_data:
@@ -692,8 +700,7 @@ class Trainer4JointMA(Trainer):
                         if not self.args.nolog:
                             self.logger.write('INFO: valid - %s\n' % v_stat)
                             if n_iter == 1:
-                                self.logger.write(
-                                    'data\titer\tep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss\n')
+                                self.logger.write('data\titer\tep\t\s-acc\ts-prec\ts-rec\ts-fb1\t\p-acc\tp-prec\tp-rec\tp-fb1\tloss\taloss\n')
                             self.logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
 
                     # Save the model
@@ -725,10 +732,12 @@ if __name__ == '__main__':
     # get arguments and set up trainer
 
     args = parse_arguments()
-    if args.lattice or args.joint:
+    if args.joint_type == 'lattice':
         trainer = Trainer4JointMA(args)
+        read_pos = True
     else:
         trainer = Trainer(args)
+        read_pos = False
     trainer.prepare_gpu()
 
     # Load word embedding model, dictionary and dataset
@@ -736,12 +745,14 @@ if __name__ == '__main__':
     embed_model = emb.read_model(args.embed_path) if args.embed_path else None
 
     if args.dict_path:
-        dic = lattice.load_dictionary(args.dict_path, read_pos=args.joint)
-        print('load dic:', args.dict_path)
+        dic_path = args.dict_path
+        dic = lattice.load_dictionary(dic_path, read_pos=read_pos)
+        print('load dic:', dic_path)
         print('vocab size:', len(dic.token_indices))
 
-        if not args.dict_path.endswith('pickle'):
-            dic_pic_path = args.dict_path.split('.')[0]+'.pickle'
+        if not dic_path.endswith('pickle'):
+            base = dic_path.split('.')[0]
+            dic_pic_path = base + '.pickle'
             with open(dic_pic_path, 'wb') as f:
                 pickle.dump(dic, f)
     else:
