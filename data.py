@@ -672,16 +672,6 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
     if not 'linear_activation' in params:
         params['linear_activation'] = 'identity'
 
-    if not 'left_contexts' in params:
-        params['left_contexts'] = 0
-    else:
-        params['left_contexts'] = int(params['left_contexts'])
-
-    if not 'right_contexts' in params:
-        params['right_contexts'] = 0
-    else:
-        params['right_contexts'] = int(params['right_contexts'])
-
     if not 'dict_feat' in params:
         params['dict_feat'] = False
 
@@ -712,7 +702,6 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
             len(dic.label_indices), dic, dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
             rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
-            n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
             init_embed=embed, gpu=gpu)
 
     elif params['joint_type'] == 'dual_rnn':
@@ -723,7 +712,6 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
             len(dic.label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
             rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
-            n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
             init_embed=embed, gpu=gpu)
 
     else:
@@ -732,14 +720,12 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
                 params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
                 len(dic.label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
                 rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
-                n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
                 init_embed=embed, gpu=gpu)
         else:
             rnn = models.RNN(
                 params['rnn_layer'], len(token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
                 len(label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
                 rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
-                n_left_contexts=params['left_contexts'], n_right_contexts=params['right_contexts'], 
                 init_embed=embed, gpu=gpu)
 
     if params['joint_type']:

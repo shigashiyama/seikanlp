@@ -143,8 +143,6 @@ def parse_arguments():
     parser.add_argument('--rnn_hidden_unit', '-u', type=int, default=800)
     parser.add_argument('--embed_dim', '-d', type=int, default=300)
     parser.add_argument('--embed_path', default='')
-    parser.add_argument('--lc', type=int, default=0, help='Left context size')
-    parser.add_argument('--rc', type=int, default=0, help='Right context size')
     parser.add_argument('--optimizer', '-o', default='sgd')
     parser.add_argument('--lr', '-r', type=float, default=1, help='Value of initial learning rate')
     parser.add_argument('--momentum', '-m', type=float, default=0, help='Momentum ratio')
@@ -199,8 +197,6 @@ def parse_arguments():
     print('# embedding dimension: {}'.format(args.embed_dim))
     print('# rnn hidden unit: {}'.format(args.rnn_hidden_unit))
     print('# pre-trained embedding model: {}'.format(args.embed_path))
-    print('# left context size: {}'.format(args.lc))
-    print('# right context size: {}'.format(args.rc))
     print('# path of dictionary {}'.format(args.dict_path))
     print('# use dictionary feature {}'.format(args.dict_feat))
     print('# optimization algorithm: {}'.format(args.optimizer))
@@ -394,8 +390,6 @@ class Trainer(object):
                            'crf' : self.args.crf,
                            # 'lattice' : self.args.lattice,
                            'linear_activation' : self.args.linear_activation,
-                           'left_contexts' : self.args.lc,
-                           'right_contexts' : self.args.rc,
                            'dict_feat' : self.args.dict_feat,
                            'dropout' : self.args.dropout,
             }

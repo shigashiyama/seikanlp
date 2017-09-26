@@ -36,7 +36,7 @@ class RNNBase(chainer.Chain):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
+            init_embed=None, gpu=-1):
         super(RNNBase, self).__init__()
 
         with self.init_scope():
@@ -49,35 +49,27 @@ class RNNBase(chainer.Chain):
                 n_vocab = init_embed.W.shape[0]
                 embed_dim = init_embed.W.shape[1]
 
-            # padding indices for context window
-            self.left_padding_ids = self.get_id_array(n_vocab, n_left_contexts, gpu)
-            self.right_padding_ids = self.get_id_array(n_vocab + n_left_contexts, n_right_contexts, gpu)
-            self.empty_array = cuda.cupy.array(
-                [], dtype=np.float32) if gpu >= 0 else np.array([], dtype=np.float32)
             # init fields
             self.embed_dim = embed_dim
-            self.context_size = 1 + n_left_contexts + n_right_contexts
-            self.input_vec_size = self.embed_dim * self.context_size
-            vocab_size = n_vocab + n_left_contexts + n_right_contexts
-            rnn_in = embed_dim * self.context_size
+            self.input_vec_size = self.embed_dim
 
             # init layers
-            self.lookup = L.EmbedID(vocab_size, self.embed_dim) if init_embed == None else init_embed
+            self.lookup = L.EmbedID(n_vocab, self.embed_dim) if init_embed == None else init_embed
 
             self.rnn_unit_type = rnn_unit_type
             if rnn_unit_type == 'lstm':
                 if rnn_bidirection:
-                    self.rnn_unit = L.NStepBiLSTM(n_rnn_layers, rnn_in, n_rnn_units, dropout)
+                    self.rnn_unit = L.NStepBiLSTM(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout)
                 else:
                     self.rnn_unit = L.NStepLSTM(n_rnn_layers, embed_dim, n_rnn_units, dropout)
             elif rnn_unit_type == 'gru':
                 if rnn_bidirection:
-                    self.rnn_unit = L.NStepBiGRU(n_rnn_layers, rnn_in, n_rnn_units, dropout) 
+                    self.rnn_unit = L.NStepBiGRU(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout) 
                 else:
                     self.rnn_unit = L.NStepGRU(n_rnn_layers, embed_dim, n_rnn_units, dropout)
             else:
                 if rnn_bidirection:
-                    self.rnn_unit = L.NStepBiRNNTanh(n_rnn_layers, rnn_in, n_rnn_units, dropout) 
+                    self.rnn_unit = L.NStepBiRNNTanh(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout) 
                 else:
                     self.rnn_unit = L.NStepRNNTanh(n_rnn_layers, embed_dim, n_rnn_units, dropout)
 
@@ -101,37 +93,28 @@ class RNNBase(chainer.Chain):
             print('# linear:', self.linear.W.shape, '+', self.linear.b.shape)
             print('# linear_activation:', self.act)
 
-            # tmp
-            self.vocab_size = vocab_size
-            self.n_rnn_layers = n_rnn_layers
-            self.rnn_unit_in = rnn_in
-            self.n_rnn_units = n_rnn_units
-            self.dropout = dropout
-            self.rnn_bidirection = rnn_bidirection
-            self.n_labels = n_labels
-
 
     # create input embeded vector considering context window
-    def embed(self, xs):
-        exs = []
-        for x in xs:
-            if self.context_size > 1:
-                embeddings = F.concat((self.lookup(self.left_padding_ids),
-                                       self.lookup(x),
-                                       self.lookup(self.right_padding_ids)), 0)
-                embeddings = F.reshape(embeddings, (len(x) + self.context_size - 1, self.embed_dim))
+    # def embed(self, xs):
+    #     exs = []
+    #     for x in xs:
+    #         if self.context_size > 1:
+    #             embeddings = F.concat((self.lookup(self.left_padding_ids),
+    #                                    self.lookup(x),
+    #                                    self.lookup(self.right_padding_ids)), 0)
+    #             embeddings = F.reshape(embeddings, (len(x) + self.context_size - 1, self.embed_dim))
 
-                ex = self.empty_array.copy()
-                for i in range(len(x)):
-                    for j in range(i, i + self.context_size):
-                        ex = F.concat((ex, embeddings[j]), 0)
-                ex = F.reshape(ex, (len(x), self.input_vec_size))
-            else:
-                ex = self.lookup(x)
+    #             ex = self.empty_array.copy()
+    #             for i in range(len(x)):
+    #                 for j in range(i, i + self.context_size):
+    #                     ex = F.concat((ex, embeddings[j]), 0)
+    #             ex = F.reshape(ex, (len(x), self.input_vec_size))
+    #         else:
+    #             ex = self.lookup(x)
                 
-            exs.append(ex)
-        xs = exs
-        return xs
+    #         exs.append(ex)
+    #     xs = exs
+    #     return xs
 
 
     # def extract_features(self, xs, dic):
@@ -155,11 +138,11 @@ class RNN(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
+            init_embed=None, gpu=-1):
         super(RNN, self).__init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1)
+            init_embed=None, gpu=-1)
 
         self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
 
@@ -192,10 +175,10 @@ class RNN_CRF(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
+            init_embed=None, gpu=-1):
         super(RNN_CRF, self).__init__(
             n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
-            rnn_bidirection, linear_activation, n_left_contexts, n_right_contexts, init_embed, gpu)
+            rnn_bidirection, linear_activation, init_embed, gpu)
 
         with self.init_scope():
             self.crf = L.CRF1d(n_labels)
@@ -259,16 +242,16 @@ class DualRNN(chainer.Chain):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
+            init_embed=None, gpu=-1):
         super(DualRNN, self).__init__()
 
         with self.init_scope():
             self.rnn_crf1 = RNN_CRF(
                 n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
-                rnn_bidirection, linear_activation, n_left_contexts, n_right_contexts, init_embed, gpu)
+                rnn_bidirection, linear_activation, init_embed, gpu)
             self.rnn_ff2 = RNN(
                 n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
-                rnn_bidirection, linear_activation, n_left_contexts, n_right_contexts, init_embed, gpu)
+                rnn_bidirection, linear_activation, init_embed, gpu)
 
 
     def __call__(self, cxs, cts, wts, train=True):
@@ -308,10 +291,10 @@ class RNN_LatticeCRF(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, morph_dic, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            n_left_contexts=0, n_right_contexts=0, init_embed=None, gpu=-1):
+            init_embed=None, gpu=-1):
         super(RNN_LatticeCRF, self).__init__(
             n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
-            rnn_bidirection, linear_activation, n_left_contexts, n_right_contexts, init_embed, gpu)
+            rnn_bidirection, linear_activation, init_embed, gpu)
 
         with self.init_scope():
             self.morph_dic = morph_dic
@@ -724,30 +707,30 @@ class SequenceTagger(chainer.link.Chain):
             i += 1
 
 
-    def grow_lookup_table(self, token2id_new, gpu=-1):
-        n_left_contexts = len(self.predictor.left_padding_ids)
-        n_right_contexts = len(self.predictor.right_padding_ids)
-        padding_size = n_left_contexts + n_right_contexts
+    # def grow_lookup_table(self, token2id_new, gpu=-1):
+    #     n_left_contexts = len(self.predictor.left_padding_ids)
+    #     n_right_contexts = len(self.predictor.right_padding_ids)
+    #     padding_size = n_left_contexts + n_right_contexts
 
 
-        weight1 = self.predictor.lookup.W if padding_size > 0 else self.predictor.lookup.W[-padding_size:]
-        diff = len(token2id_new) - len(weight1)
-        weight2 = chainer.variable.Parameter(initializers.normal.Normal(1.0), (diff, weight1.shape[1]))
-        weight = F.concat((weight1, weight2), 0)
-        if padding_size > 0:
-            n_vocab = len(weight)
-            self.predictor.left_padding_ids = predictor.get_id_array(n_vocab, n_left_contexts, gpu)
-            self.predictor.right_padding_ids = predictor.get_id_array(n_vocab + n_left_contexts, 
-                                                                      n_right_contexts, gpu)
-            weight3 = predictor.lookup.W[:-padding_size]
-            weight = F.concat((weight, weight3), 0)
+    #     weight1 = self.predictor.lookup.W if padding_size > 0 else self.predictor.lookup.W[-padding_size:]
+    #     diff = len(token2id_new) - len(weight1)
+    #     weight2 = chainer.variable.Parameter(initializers.normal.Normal(1.0), (diff, weight1.shape[1]))
+    #     weight = F.concat((weight1, weight2), 0)
+    #     if padding_size > 0:
+    #         n_vocab = len(weight)
+    #         self.predictor.left_padding_ids = predictor.get_id_array(n_vocab, n_left_contexts, gpu)
+    #         self.predictor.right_padding_ids = predictor.get_id_array(n_vocab + n_left_contexts, 
+    #                                                                   n_right_contexts, gpu)
+    #         weight3 = predictor.lookup.W[:-padding_size]
+    #         weight = F.concat((weight, weight3), 0)
 
-        embed = L.EmbedID(0, 0)
-        embed.W = chainer.Parameter(initializer=weight.data)
-        self.predictor.lookup = embed
+    #     embed = L.EmbedID(0, 0)
+    #     embed.W = chainer.Parameter(initializer=weight.data)
+    #     self.predictor.lookup = embed
 
-        print('# grow vocab size: %d -> %d' % (weight1.shape[0], weight.shape[0]))
-        print('# lookup:', self.predictor.lookup.W.shape)
+    #     print('# grow vocab size: %d -> %d' % (weight1.shape[0], weight.shape[0]))
+    #     print('# lookup:', self.predictor.lookup.W.shape)
 
 
 class JointMorphologicalAnalyzer(SequenceTagger):
