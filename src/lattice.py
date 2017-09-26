@@ -59,6 +59,7 @@ class MapTrie(object):
         #self.debug = True
 
 
+    # word: list of char IDs
     def get_word_id(self, word, update=False):
         len_word = len(word) 
         node = self.tree
@@ -83,19 +84,17 @@ class MapTrie(object):
             node = child
 
 
-    def common_prefix_search(self, word, begin_index=0):
+    def common_prefix_search(self, word, begin_index=0, last_index=-1):
         res = []
         node = self.tree
 
+        seq = word[begin_index:last_index] if last_index >= 0 else word[begin_index:]
         append = res.append
-        for i, char in enumerate(word):
+        for i, char in enumerate(seq):
             child = node.get_child(char)
             if not child:
-                # if i == 0:
-                #     res = [(1, 0)] 
                 break
-
-            print(' ',child.id)
+            #print(' ',child.id)
 
             if child.id != UNK_TOKEN_ID:
                 append((begin_index, begin_index + i + 1))
@@ -262,34 +261,6 @@ class MorphologyDictionary(IndicesTriplet):
             return self.id2chunk[ci]
         else:
             return UNK_TOKEN
-
-
-# token indices, label indices, pos indices, word trie, reverse word trie
-# class BiMorphologyDictionary(MorphologyDictionary):
-#     def __init__(self):
-#         super(BiMorphologyDictionary, self).__init__()
-#         self.chunk_trie_rev = MapTrie()
-
-
-#     def get_entries(self, chunk, pos, update=False):
-#         tis = [self.token_indices.get_id(token, update=update) for token in chunk]
-
-#         # 単語登録と ID 取得
-#         ci = self.chunk_trie.get_word_id(tis, update)
-#         rci = self.chunk_trie_rev.get_word_id(tis[::-1], update)
-#         pi = self.pos_indices.get_id(pos, update=update)
-#         if update:
-#             self.id2chunk[ci] = chunk
-#             self.ci2lis.add(ci, pi)
-
-#         return tis, ci, pi
-
-
-# class CharcterPositionTable(object):
-#     def __init__(self):
-#         self.first_chars = set()
-#         self.inside_chars = set()
-#         self.last_chars = set()
 
 
 class Lattice(object):

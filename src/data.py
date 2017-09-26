@@ -7,6 +7,7 @@ import enum
 import numpy as np
 
 import lattice
+import features
 import models
 import read_embedding as emb
 
@@ -674,6 +675,8 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
 
     if not 'dict_feat' in params:
         params['dict_feat'] = False
+    else:
+        feat_extractor = features.DictionaryFeatureExtractor(dic, gpu=gpu)
 
     if not 'dropout' in params:
         params['dropout'] = 0
@@ -702,7 +705,7 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
             len(dic.label_indices), dic, dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
             rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
-            init_embed=embed, gpu=gpu)
+            init_embed=embed, feat_extractor=feat_extractor, gpu=gpu)
 
     elif params['joint_type'] == 'dual_rnn':
         pass
@@ -712,7 +715,7 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
             len(dic.label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
             rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
-            init_embed=embed, gpu=gpu)
+            init_embed=embed, feat_extractor=feat_extractor, gpu=gpu)
 
     else:
         if params['crf']:
@@ -720,13 +723,13 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
                 params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
                 len(dic.label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
                 rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
-                init_embed=embed, gpu=gpu)
+                init_embed=embed, feat_extractor=feat_extractor, gpu=gpu)
         else:
             rnn = models.RNN(
                 params['rnn_layer'], len(token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
                 len(label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
                 rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
-                init_embed=embed, gpu=gpu)
+                init_embed=embed, feat_extractor=feat_extractor, gpu=gpu)
 
     if params['joint_type']:
         model = models.JointMorphologicalAnalyzer(rnn, dic.id2label)

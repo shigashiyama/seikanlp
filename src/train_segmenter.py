@@ -18,6 +18,8 @@ import lattice
 import read_embedding as emb
 from eval.conlleval import conlleval
 
+HOME_DIR = '..'
+
 
 def batch_generator(instances, label_seqs, label_seqs2=None, batchsize=100, shuffle=True, xp=np):
     len_data = len(instances)
@@ -246,7 +248,7 @@ class Trainer(object):
 
         print('INFO: start: {}\n'.format(self.start_time))
         if not self.args.nolog:
-            self.logger = open('log/{}.log'.format(self.start_time), 'a')
+            self.logger = open('{}/log/{}.log'.format(HOME_DIR, self.start_time), 'a')
             self.logger.write('{}\n'.format(args))
         
     def log(self, message):
@@ -571,7 +573,7 @@ class Trainer(object):
                             self.logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
 
                     # Save the model
-                    mdl_path = 'nn_model/rnn_%s_i%s.mdl' % (self.start_time, now_e)
+                    mdl_path = '{}/nn_model/rnn_{}_i{}.mdl'.format(HOME_DIR, self.start_time, now_e)
                     if not self.args.nolog:
                         print('save the model: %s\n' % mdl_path)
                         self.logger.write('INFO: save the model: %s\n' % mdl_path)
@@ -585,7 +587,7 @@ class Trainer(object):
 
                     if not self.args.nolog:
                         self.logger.close() # 一度保存しておく
-                        self.logger = open('log/' + self.start_time + '.log', 'a')
+                        self.logger = open('{}/log/{}.log'.format(HOME_DIR, self.start_time), 'a')
 
         time = datetime.now().strftime('%Y%m%d_%H%M')
         self.log('finish: %s\n' % time)

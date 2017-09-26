@@ -32,11 +32,40 @@ from util import Timer
 
 #chainer.Variable(xp.array(0, dtype='f'))
 
+"""
+Base model that consists of embedding layer, recurrent network (RNN) layers and linear layer.
+
+Args:
+    n_rnn_layers:
+        the number of (vertical) layers of recurrent network
+    n_vocab:
+        size of vocabulary
+    n_embed_dim:
+        dimention of word embedding
+    n_rnn_units:
+        the number of units of RNN
+    n_labels:
+        the number of labels that input instances will be classified into
+    dropout:
+        dropout ratio of RNN
+    rnn_unit_type:
+        unit type of RNN: lstm, gru or plain
+    rnn_bidirection:
+        use bi-directional RNN or not
+    linear_activation:
+        activation function of linear layer: identity, relu, tanh, sigmoid
+    init_embed:
+        pre-trained embedding matrix
+    feat_extractor:
+        FeatureExtractor object to extract additional features 
+    gpu:
+        gpu device id
+"""
 class RNNBase(chainer.Chain):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            init_embed=None, gpu=-1):
+            init_embed=None, feat_extractor=None, gpu=-1):
         super(RNNBase, self).__init__()
 
         with self.init_scope():
@@ -45,16 +74,19 @@ class RNNBase(chainer.Chain):
                 print('unsupported activation function.')
                 sys.exit()
 
-            if init_embed != None:
+            if init_embed:
                 n_vocab = init_embed.W.shape[0]
                 embed_dim = init_embed.W.shape[1]
 
             # init fields
             self.embed_dim = embed_dim
             self.input_vec_size = self.embed_dim
+            if feat_extractor:
+                self.feat_extractor = feat_extractor
+                self.input_vec_size += self.feat_extractor.dim
 
             # init layers
-            self.lookup = L.EmbedID(n_vocab, self.embed_dim) if init_embed == None else init_embed
+            self.embed = L.EmbedID(n_vocab, self.embed_dim) if init_embed == None else init_embed
 
             self.rnn_unit_type = rnn_unit_type
             if rnn_unit_type == 'lstm':
@@ -76,57 +108,42 @@ class RNNBase(chainer.Chain):
             self.linear = L.Linear(n_rnn_units * (2 if rnn_bidirection else 1), n_labels)
 
             print('## parameters')
-            print('# lookup:', self.lookup.W.shape)
+            print('# embed:', self.embed.W.shape)
             print('# rnn unit:', self.rnn_unit)
-            # i = 0
-            # for c in self.rnn_unit._children:
-            #     print('#   param', i)
-            #     print('#      0 -', c.w0.shape, '+', c.b0.shape)
-            #     print('#      1 -', c.w1.shape, '+', c.b1.shape)
-            #     print('#      2 -', c.w2.shape, '+', c.b2.shape)
-            #     print('#      3 -', c.w3.shape, '+', c.b3.shape)
-            #     print('#      4 -', c.w4.shape, '+', c.b4.shape)
-            #     print('#      5 -', c.w5.shape, '+', c.b5.shape)
-            #     print('#      6 -', c.w6.shape, '+', c.b6.shape)
-            #     print('#      7 -', c.w7.shape, '+', c.b7.shape)
-            #     i += 1
+            if self.rnn_unit_type == 'lstm':
+                i = 0
+                for c in self.rnn_unit._children:
+                    print('#   param', i)
+                    print('#      0 -', c.w0.shape, '+', c.b0.shape)
+                    print('#      1 -', c.w1.shape, '+', c.b1.shape)
+                    print('#      2 -', c.w2.shape, '+', c.b2.shape)
+                    print('#      3 -', c.w3.shape, '+', c.b3.shape)
+                    print('#      4 -', c.w4.shape, '+', c.b4.shape)
+                    print('#      5 -', c.w5.shape, '+', c.b5.shape)
+                    print('#      6 -', c.w6.shape, '+', c.b6.shape)
+                    print('#      7 -', c.w7.shape, '+', c.b7.shape)
+                    i += 1
             print('# linear:', self.linear.W.shape, '+', self.linear.b.shape)
             print('# linear_activation:', self.act)
 
 
-    # create input embeded vector considering context window
-    # def embed(self, xs):
-    #     exs = []
-    #     for x in xs:
-    #         if self.context_size > 1:
-    #             embeddings = F.concat((self.lookup(self.left_padding_ids),
-    #                                    self.lookup(x),
-    #                                    self.lookup(self.right_padding_ids)), 0)
-    #             embeddings = F.reshape(embeddings, (len(x) + self.context_size - 1, self.embed_dim))
-
-    #             ex = self.empty_array.copy()
-    #             for i in range(len(x)):
-    #                 for j in range(i, i + self.context_size):
-    #                     ex = F.concat((ex, embeddings[j]), 0)
-    #             ex = F.reshape(ex, (len(x), self.input_vec_size))
-    #         else:
-    #             ex = self.lookup(x)
+    # create input vector
+    def create_features(self, xs):
+        exs = []
+        for x in xs:
+            if self.feat_extractor:
+                emb = self.embed(x)
+                feat = self.feat_extractor.extract_features(x)
+                ex = F.concat((emb, feat), 1)
+            else:
+                ex = self.embed(x)
                 
-    #         exs.append(ex)
-    #     xs = exs
-    #     return xs
+            exs.append(ex)
+        xs = exs
+        return xs
 
 
-    # def extract_features(self, xs, dic):
-    #     exs = []
-    #     for x in xs:
-    #         v1 = features.extract_dic_features(dic, x)
-    #         v2 = self.lookup(x)
-    #         con = F.concat(v1, v2, 0)
-    #         F.reshape(con, (len(x),
-                                          
-
-
+    ## unused
     def get_id_array(self, start, width, gpu=-1):
         ids = np.array([], dtype=np.int32)
         for i in range(start, start + width):
@@ -138,19 +155,17 @@ class RNN(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            init_embed=None, gpu=-1):
+            init_embed=None, feat_extractor=None, gpu=-1):
         super(RNN, self).__init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            init_embed=None, gpu=-1)
+            init_embed=None, feat_extractor=None, gpu=-1)
 
         self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
 
-        print()
-        
 
     def __call__(self, xs, ts, train=True):
-        xs = self.embed(xs)
+        xs = self.create_features(xs)
 
         with chainer.using_config('train', train):
             if self.rnn_unit_type == 'lstm':
@@ -175,10 +190,10 @@ class RNN_CRF(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            init_embed=None, gpu=-1):
+            init_embed=None, feat_extractor=None, gpu=-1):
         super(RNN_CRF, self).__init__(
             n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
-            rnn_bidirection, linear_activation, init_embed, gpu)
+            rnn_bidirection, linear_activation, init_embed, feat_extractor, gpu)
 
         with self.init_scope():
             self.crf = L.CRF1d(n_labels)
@@ -188,7 +203,7 @@ class RNN_CRF(RNNBase):
 
 
     def __call__(self, xs, ts, train=True):
-        xs = self.embed(xs)
+        xs = self.create_features(xs)
 
         with chainer.using_config('train', train):
             # rnn layers
@@ -242,7 +257,7 @@ class DualRNN(chainer.Chain):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            init_embed=None, gpu=-1):
+            init_embed=None, feat_extractor=None, gpu=-1):
         super(DualRNN, self).__init__()
 
         with self.init_scope():
@@ -266,7 +281,7 @@ class DualRNN(chainer.Chain):
 
 
     def call_rnn_ff2(self, xs, ts, train=True):
-        xs = self.embed(xs)
+        xs = self.create_features(xs)
 
         with chainer.using_config('train', train):
             if self.rnn_unit_type == 'lstm':
@@ -291,10 +306,10 @@ class RNN_LatticeCRF(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, morph_dic, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            init_embed=None, gpu=-1):
+            init_embed=None, feat_extractor=None, gpu=-1):
         super(RNN_LatticeCRF, self).__init__(
             n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
-            rnn_bidirection, linear_activation, init_embed, gpu)
+            rnn_bidirection, linear_activation, init_embed, feat_extractor, gpu)
 
         with self.init_scope():
             self.morph_dic = morph_dic
@@ -302,7 +317,7 @@ class RNN_LatticeCRF(RNNBase):
 
     def __call__(self, xs, ts_seg, ts_pos, train=True):
         # ts_seg: unused
-        embed_xs = self.embed(xs)
+        embed_xs = self.create_features(xs)
 
         with chainer.using_config('train', train):
             # rnn layers
@@ -713,7 +728,7 @@ class SequenceTagger(chainer.link.Chain):
     #     padding_size = n_left_contexts + n_right_contexts
 
 
-    #     weight1 = self.predictor.lookup.W if padding_size > 0 else self.predictor.lookup.W[-padding_size:]
+    #     weight1 = self.predictor.embed.W if padding_size > 0 else self.predictor.embed.W[-padding_size:]
     #     diff = len(token2id_new) - len(weight1)
     #     weight2 = chainer.variable.Parameter(initializers.normal.Normal(1.0), (diff, weight1.shape[1]))
     #     weight = F.concat((weight1, weight2), 0)
@@ -722,15 +737,15 @@ class SequenceTagger(chainer.link.Chain):
     #         self.predictor.left_padding_ids = predictor.get_id_array(n_vocab, n_left_contexts, gpu)
     #         self.predictor.right_padding_ids = predictor.get_id_array(n_vocab + n_left_contexts, 
     #                                                                   n_right_contexts, gpu)
-    #         weight3 = predictor.lookup.W[:-padding_size]
+    #         weight3 = predictor.embed.W[:-padding_size]
     #         weight = F.concat((weight, weight3), 0)
 
     #     embed = L.EmbedID(0, 0)
     #     embed.W = chainer.Parameter(initializer=weight.data)
-    #     self.predictor.lookup = embed
+    #     self.predictor.embed = embed
 
     #     print('# grow vocab size: %d -> %d' % (weight1.shape[0], weight.shape[0]))
-    #     print('# lookup:', self.predictor.lookup.W.shape)
+    #     print('# embed:', self.predictor.embed.W.shape)
 
 
 class JointMorphologicalAnalyzer(SequenceTagger):
