@@ -30,7 +30,6 @@ import features
 from util import Timer
 
 
-#chainer.Variable(xp.array(0, dtype='f'))
 
 """
 Base model that consists of embedding layer, recurrent network (RNN) layers and linear layer.
@@ -80,10 +79,12 @@ class RNNBase(chainer.Chain):
 
             # init fields
             self.embed_dim = embed_dim
-            self.input_vec_size = self.embed_dim
             if feat_extractor:
                 self.feat_extractor = feat_extractor
-                self.input_vec_size += self.feat_extractor.dim
+                self.input_vec_size = self.embed_dim + self.feat_extractor.dim
+            else:
+                self.feat_extractor = None
+                self.input_vec_size = self.embed_dim
 
             # init layers
             self.embed = L.EmbedID(n_vocab, self.embed_dim) if init_embed == None else init_embed

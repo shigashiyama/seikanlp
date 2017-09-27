@@ -675,8 +675,6 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
 
     if not 'dict_feat' in params:
         params['dict_feat'] = False
-    else:
-        feat_extractor = features.DictionaryFeatureExtractor(dic, gpu=gpu)
 
     if not 'dropout' in params:
         params['dropout'] = 0
@@ -691,6 +689,11 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
         embed_dim = embed.W.shape[1]
     else:
         embed = None
+
+    if params['dict_feat']:
+        feat_extractor = features.DictionaryFeatureExtractor(dic, gpu=gpu)
+    else:
+        feat_extractor = None
 
     if not dic:
         token2id = read_map(token2id_path)

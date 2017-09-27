@@ -18,7 +18,7 @@ import lattice
 import read_embedding as emb
 from eval.conlleval import conlleval
 
-HOME_DIR = '..'
+HOME_DIR = '/home/shigashi/data_shigashi/work/work_neural/sequence_labeling'
 
 
 def batch_generator(instances, label_seqs, label_seqs2=None, batchsize=100, shuffle=True, xp=np):
@@ -470,7 +470,8 @@ class Trainer(object):
         xp = cuda.cupy if args.gpu >= 0 else np
 
         print('<test result>')
-        te_stat, te_res = evaluate(self.model, self.test, self.test_t, self.test_p, self.args.batchsize, xp=xp)
+        te_stat, te_res = evaluate(
+            self.model, self.test, self.test_t, batchsize=self.args.batchsize, xp=xp)
         print()
 
         time = datetime.now().strftime('%Y%m%d_%H%M')
@@ -528,9 +529,9 @@ class Trainer(object):
                 loss.unchain_backward()       # Truncate the graph
                 optimizer.update()            # Update the parameters
                 t3 = datetime.now()
-                print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
-                print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
-                print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
+                # print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
+                # print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
+                # print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
 
                 # Evaluation
                 if (n_iter * self.args.batchsize) % n_iter_report == 0: # or i == n_train:
