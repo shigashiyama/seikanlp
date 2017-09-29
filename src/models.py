@@ -24,7 +24,7 @@ from chainer import initializers
 from chainer import Variable
 
 
-from eval.conlleval import conlleval
+from tools import conlleval
 import lattice
 import features
 from util import Timer

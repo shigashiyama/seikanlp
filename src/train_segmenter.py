@@ -16,7 +16,7 @@ from chainer import cuda
 import data
 import lattice
 import read_embedding as emb
-from eval.conlleval import conlleval
+from tools import conlleval
 
 HOME_DIR = '/home/shigashi/data_shigashi/work/work_neural/sequence_labeling'
 
