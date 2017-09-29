@@ -1,47 +1,63 @@
 import os
 import sys
-sys.path.append(os.pardir())
-
+import re
 import argparse
 import subprocess
 
+#sys.path.append(os.pardir)
+sys.path.append('/panfs/panmt/users/shigashi/work/work_neural/sequence_labeling/src')
 import data
-from eval.conlleval import conlleval
+import conlleval
 
 
 class Evaluater(object):
-    def __init__():
-        pass
+    def __init__(self, pred_path=None):
+        self.fp = open(pred_path)
 
-    def get_predicted_result():
-        return None
 
-    def parse_result():
-        return None
+    def close(self):
+        if self.fp:
+            self.fp.close()
 
-    def close():
-        pass
 
-    def iterate_sentences(gold_path):
+    def get_predicted_result(self, *args):
+        res = self.fp.readline()
+        res = res.strip()
+        res = re.sub(' +', ' ', res)
+        return res
+
+
+    def parse_result(self, res):
+        chars = []
+        bounds = []
+        for word in res.split(' '):
+            chars.extend([word[i] for i in range(len(word))])
+            bounds.extend([data.get_label_BI(i, None) for i in range(len(word))])
+        return chars, bounds
+
+
+    def iterate_sentences(self, gold_path):
         print('read file:', gold_path)
         with open(gold_path) as fg:
             g_chars = []
             g_bounds = []
         
             for gline in fg:
-                gline = gline.rstrip()
-                g_chars, g_bounds = parse_result(gline)
+                # 文頭末尾の空白改行コードを除去、重複する空白を除去
+                gline = gline.strip()
+                gline = re.sub(' +', ' ', gline)
+                g_chars, g_bounds = self.parse_result(gline)
                 pres = self.get_predicted_result(gline)
-                _, p_bounds = self.parse_result(res)
+                _, p_bounds = self.parse_result(pres)
 
-                yield g_chars, g_bounds, k_bounds
+                yield g_chars, g_bounds, p_bounds
 
         self.close()
 
         raise StopIteration
 
 
-    def iterate_tokens_for_eval(x, t, y):
+    def iterate_tokens_for_eval(self, x, t, y):
         i = 0
         while True:
             if i == len(x):
@@ -49,18 +65,17 @@ class Evaluater(object):
             x_str = x[i]
             t_str = t[i]
             y_str = y[i]        
-            #yield [x_str, t_str, y_str]
-            yield x_str, t_str, y_str
+            yield [x_str, t_str, y_str]
         
             i += 1
 
 
-    def run(gold_path):
+    def run(self, gold_path):
         sen_count = 0
         eval_counts = None
 
         for g_chars, g_bounds, k_bounds in self.iterate_sentences(gold_path):
-            token_iter = iterate_tokens_for_eval(g_chars, g_bounds, k_bounds)
+            token_iter = self.iterate_tokens_for_eval(g_chars, g_bounds, k_bounds)
             eval_counts = conlleval.merge_counts(eval_counts, conlleval.evaluate(token_iter))
             sen_count += 1
 
@@ -74,12 +89,12 @@ class Evaluater(object):
 
 
 class KyteaEvaluater(Evaluater):
-    def __init__(pred_path=None, model_path=None):
+    def __init__(self, pred_path=None, model_path=None):
         self.fp = open(pred_path) if pred_path else None
         self.model_path = model_path
 
 
-    def get_predicted_result(gline=None):
+    def get_predicted_result(self, gline=None):
         if self.fp:
             res = self.fp.readline().rstrip()
         else:
@@ -99,7 +114,7 @@ class KyteaEvaluater(Evaluater):
         return res
 
 
-    def parse_result(res):
+    def parse_result(self, res):
         chars = []
         bounds = []
         for token in res.split(' '):
@@ -112,17 +127,6 @@ class KyteaEvaluater(Evaluater):
             bounds.extend([data.get_label_BI(i, None) for i in range(len(word))])
         
         return chars, bounds
-
-
-    def close():
-        if self.fp:
-            fp.close()
-
-
-class StanfordSegmenterEvaluater(Evaluater):
-    def __init__(pred_path=None):
-        self.fp = open(pred_path)
-    
 
 
 def show_results(sen_count, eval_count):
@@ -144,12 +148,11 @@ if __name__ == '__main__':
     parser.add_argument('--gold_path', '-g', default='')
     parser.add_argument('--pred_path', '-p', default='') 
     args = parser.parse_args()
-    print(args, '\n')
 
     if args.segmenter == 'kytea':
         evaluater = KyteaEvaluater(args.pred_path, args.model_path)
-    elif args.segmenter == 'stanford':
-        evaluater = StanfordSegmenter(args.pred_path)
+    else:
+        evaluater = Evaluater(args.pred_path)
 
     print('<result>')
     evaluater.run(args.gold_path)
