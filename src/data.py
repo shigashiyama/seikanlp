@@ -9,7 +9,7 @@ import numpy as np
 import lattice
 import features
 import models
-import read_embedding as emb
+import embedding.read_embedding as emb
 
 import chainer
 
@@ -534,61 +534,27 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
     return instances, label_seqs, pos_seqs, dic
 
 
-def load_pickled_data(filename_wo_ext, load_token2id=True, load_label2id=True, load_params=True):
-    ins_dump_path = filename_wo_ext + '.pickle'
-    lab_dump_path = filename_wo_ext + '.pickle'        
-    token2id_dump_path = filename_wo_ext + '.t2i.pickle'
-    label2id_dump_path = filename_wo_ext + '.l2i.pickle'
-    params_dump_path = filename_wo_ext + '.param.pickle'
+def load_pickled_data(filename_wo_ext, load_dic=True):
+    dump_path = filename_wo_ext + '.pickle'
 
-    with open(ins_dump_path, 'rb') as f:
-        instances = pickle.load(f)
-        print('load pickled data:', ins_dump_path)
+    with open(dump_path, 'rb') as f:
+        obj = pickle.load(f)
+        print('load pickled data:', dump_path)
+        instances = obj[0]
+        labels = obj[1]
+        pos_labels = obj[2]
+        dic = obj[3] if load_dic else None 
 
-    with open(lab_dump_path, 'rb') as f:
-        labels = pickle.load(f)
-
-    if load_token2id:
-        with open(token2id_dump_path, 'rb') as f:
-            token2id = pickle.load(f)
-    else:
-        token2id = None
-
-    if load_label2id:
-        with open(label2id_dump_path, 'rb') as f:
-            label2id = pickle.load(f)
-    else:
-        label2id = None
-
-    if load_params:
-        with open(params_dump_path, 'rb') as f:
-            params = pickle.load(f)
-    else:
-        params = None
-
-    return instances, labels, token2id, label2id, params
+    return instances, labels, pos_labels, dic
 
 
-def dump_pickled_data(filename_wo_ext, instances, labels, dic=None, params=None):
-    ins_dump_path = filename_wo_ext + '.pickle'
-    lab_dump_path = filename_wo_ext + '.pickle'        
-    dic_dump_path = filename_wo_ext + '.dic.pickle'
-    params_dump_path = filename_wo_ext + '.param.pickle'
+def dump_pickled_data(filename_wo_ext, instances, labels, pos_labels=None, dic=None):
+    dump_path = filename_wo_ext + '.pickle'
 
-    with open(ins_dump_path, 'wb') as f:
-        pickle.dump(instances, f)
-        print('dump pickled data:', ins_dump_path)
-
-    with open(lab_dump_path, 'wb') as f:
-        pickle.dump(labels, f)
-
-    if dic:
-        with open(dic_dump_path, 'wb') as f:
-            pickle.dump(dic, f)
-
-    if params:
-        with open(params_dump_path, 'wb') as f:
-            pickle.dump(params, f)
+    with open(dump_path, 'wb') as f:
+        obj = (instances, labels, pos_labels, dic)
+        pickle.dump(obj, f)
+        print('dump pickled data:', dump_path)
 
 
 def read_map(path):

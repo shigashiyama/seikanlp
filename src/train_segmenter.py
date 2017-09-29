@@ -281,29 +281,34 @@ class Trainer(object):
         if args.trained_data:
             if args.trained_data.endswith('pickle'):
                 name, ext = os.path.splitext(args.dir_path + args.trained_data)
-                params = {}         # TODO
-                pass
+                trained, trained_t, trained_p, dic = data.load_pickled_data(name)
+            else:
+                trained, trained_t, trained_p, dic = data.load_data(
+                    args.format, trained_path, read_pos=read_pos, subpos_depth=args.subpos_depth, 
+                    lowercase=args.lowercase, normalize_digits=args.normalize_digits,
+                    dic=dic, refer_vocab=refer_vocab, limit=limit)
 
-            trained, trained_t, trained_p, dic = data.load_data(
-                args.format, trained_path, read_pos=read_pos, subpos_depth=args.subpos_depth, 
-                lowercase=args.lowercase, normalize_digits=args.normalize_digits,
-                dic=dic, refer_vocab=refer_vocab, limit=limit)
-            token_indices_org = dic.token_indices.copy()
+            token_indices_org = copy.deepcopy(dic.token_indices)
             print('vocab size:', len(dic.token_indices))
         else:
             trained = []
             trained_t = []
             trained_p = []
-            #TODO params <- args
 
         if args.train_data.endswith('pickle'):
             name, ext = os.path.splitext(args.dir_path + args.train_data)
-            pass
+            train, train_t, train_p, dic = data.load_pickled_data(name)
+
         else:
             train, train_t, train_p, dic = data.load_data(
                 args.format, train_path, read_pos=read_pos, subpos_depth=args.subpos_depth, 
                 lowercase=args.lowercase, normalize_digits=args.normalize_digits,
                 dic=dic, refer_vocab=refer_vocab, limit=limit)
+
+            if self.args.dump_train_data:
+                name, ext = os.path.splitext(self.args.dir_path + self.args.train_data)
+                data.dump_pickled_data(name, train, train_t, train_p, dic)
+                print('pickled training data')
 
         print('vocab size:', len(dic.token_indices))
         if not token_indices_org:
@@ -402,7 +407,7 @@ class Trainer(object):
         grow_lookup = not self.args.eval and len(self.dic.token_indices) > len(self.token_indices_org)
         if grow_lookup:
             ti_updated=self.dic.token_indices
-            self.dic_token_indices = self.token_indices_org
+            self.dic.token_indices = self.token_indices_org
         else:
             ti_updated=None
 
@@ -452,11 +457,11 @@ class Trainer(object):
             data.write_map(self.dic.label_indices.token2id, self.params['label2id_path'])
 
 
-    def dump_train_data_and_params(self):
-        if self.args.dump_train_data and not self.args.train_data.endswith('pickle'):
-            name, ext = os.path.splitext(self.args.dir_path + self.args.train_data)
-            data.dump_pickled_data(name, self.train, self.train_t, self.dic, self.params)
-            print('pickled training data')
+    # def dump_train_data_and_params(self):
+    #     if self.args.dump_train_data and not self.args.train_data.endswith('pickle'):
+    #         name, ext = os.path.splitext(self.args.dir_path + self.args.train_data)
+    #         data.dump_pickled_data(name, self.train, self.train_t, self.dic, self.params)
+    #         print('pickled training data')
     
 
     def run(self):
@@ -653,7 +658,7 @@ class Trainer4JointMA(Trainer):
                 # Evaluation
                 if (n_iter * self.args.batchsize) % n_iter_report == 0:
 
-                    now_e = '%.2f' % (n_iter * self.args.batchsize / n_train)
+                    now_e = '%.3f' % (n_iter * self.args.batchsize / n_train)
                     time = datetime.now().strftime('%Y%m%d_%H%M')
                     print('\n### iteration %s (epoch %s)' % ((n_iter * self.args.batchsize), now_e))
                     print('<training result for previous iterations>')

@@ -723,30 +723,17 @@ class SequenceTagger(chainer.link.Chain):
             i += 1
 
 
-    # def grow_lookup_table(self, token2id_new, gpu=-1):
-    #     n_left_contexts = len(self.predictor.left_padding_ids)
-    #     n_right_contexts = len(self.predictor.right_padding_ids)
-    #     padding_size = n_left_contexts + n_right_contexts
+    def grow_lookup_table(self, token2id_new, gpu=-1):
+        weight1 = self.predictor.embed.W
+        diff = len(token2id_new) - len(weight1)
+        weight2 = chainer.variable.Parameter(initializers.normal.Normal(1.0), (diff, weight1.shape[1]))
+        weight = F.concat((weight1, weight2), 0)
+        embed = L.EmbedID(0, 0)
+        embed.W = chainer.Parameter(initializer=weight.data)
+        self.predictor.embed = embed
 
-
-    #     weight1 = self.predictor.embed.W if padding_size > 0 else self.predictor.embed.W[-padding_size:]
-    #     diff = len(token2id_new) - len(weight1)
-    #     weight2 = chainer.variable.Parameter(initializers.normal.Normal(1.0), (diff, weight1.shape[1]))
-    #     weight = F.concat((weight1, weight2), 0)
-    #     if padding_size > 0:
-    #         n_vocab = len(weight)
-    #         self.predictor.left_padding_ids = predictor.get_id_array(n_vocab, n_left_contexts, gpu)
-    #         self.predictor.right_padding_ids = predictor.get_id_array(n_vocab + n_left_contexts, 
-    #                                                                   n_right_contexts, gpu)
-    #         weight3 = predictor.embed.W[:-padding_size]
-    #         weight = F.concat((weight, weight3), 0)
-
-    #     embed = L.EmbedID(0, 0)
-    #     embed.W = chainer.Parameter(initializer=weight.data)
-    #     self.predictor.embed = embed
-
-    #     print('# grow vocab size: %d -> %d' % (weight1.shape[0], weight.shape[0]))
-    #     print('# embed:', self.predictor.embed.W.shape)
+        print('# grow vocab size: %d -> %d' % (weight1.shape[0], weight.shape[0]))
+        print('# embed:', self.predictor.embed.W.shape)
 
 
 class JointMorphologicalAnalyzer(SequenceTagger):
