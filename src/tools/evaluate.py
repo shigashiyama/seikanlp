@@ -4,10 +4,9 @@ import re
 import argparse
 import subprocess
 
-#sys.path.append(os.pardir)
-sys.path.append('/panfs/panmt/users/shigashi/work/work_neural/sequence_labeling/src')
-import data
 import conlleval
+sys.path.append('src')
+import data
 
 
 class Evaluater(object):
