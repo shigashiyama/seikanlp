@@ -1,8 +1,7 @@
 """
-- (Zaremba 2015) の著者らによる torch 実装
-  - (Zaremba 2015) RECURRENT NEURAL NETWORK REGULARIZATION, ICLR
-  - https://github.com/tomsercu/lstm
--> 同等のプログラムの PFN による chainer 実装 -> 改造
+This code is implemented by remodeling the implementation of (Zaremba 2015) by developers at PFN.
+
+(Zaremba 2015) RECURRENT NEURAL NETWORK REGULARIZATION, ICLR, 2015, https://github.com/tomsercu/lstm
 
 """
 
@@ -788,7 +787,7 @@ class JointMorphologicalAnalyzer(SequenceTagger):
 
 
     def decode(self, sen, node_seq):
-        return decode(sen, node_seq, self.morph_dic)
+        return decode_with_pos(sen, node_seq, self.morph_dic)
         
 
 def convert_to_word_seqs(cxs, cys, morph_dic):
@@ -811,10 +810,9 @@ def convert_to_word_seqs(cxs, cys, morph_dic):
         wxs[k] = wx
 
     return wxs
-    
+   
 
-
-def decode(sen, pos_seq, morph_dic):
+def decode_with_pos(sen, pos_seq, morph_dic):
     seq = []
 
     for node in pos_seq:

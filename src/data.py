@@ -615,10 +615,10 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
     else:
         params['rnn_layers'] = int(params['rnn_layers'])
 
-    if not 'rnn_units' in params:
-        params['rnn_units'] = 500
+    if not 'rnn_hidden_units' in params:
+        params['rnn_hidden_units'] = 500
     else:
-        params['rnn_units'] = int(params['rnn_units'])
+        params['rnn_hidden_units'] = int(params['rnn_hidden_units'])
 
     if not 'rnn_unit_type' in params:
         params['rnn_unit_type'] = 'lstm'
@@ -667,7 +667,7 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
     # if params['joint_type'] == 'lattice':
     #     rnn = models.RNN_LatticeCRF(
     #         params['rnn_layers'], len(dic.token_indices), params['embed_dimension'], 
-    #         params['rnn_units'], len(dic.label_indices), dic, dropout=params['dropout'], 
+    #         params['rnn_hidden_units'], len(dic.label_indices), dic, dropout=params['dropout'], 
     #         rnn_unit_type=params['rnn_unit_type'], rnn_bidirection=params['rnn_bidirection'], 
     #         linear_activation=params['linear_activation'], init_embed=embed, 
     #         feat_extractor=feat_extractor, gpu=gpu)
@@ -678,7 +678,7 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
     # elif params['joint_type'] == 'single_rnn':
     #     rnn = models.RNN_CRF(
     #         params['rnn_layers'], len(dic.token_indices), params['embed_dimension'], 
-    #         params['rnn_units'], len(dic.label_indices), dropout=params['dropout'], 
+    #         params['rnn_hidden_units'], len(dic.label_indices), dropout=params['dropout'], 
     #         rnn_unit_type=params['rnn_unit_type'], rnn_bidirection=params['rnn_bidirection'], 
     #         linear_activation=params['linear_activation'], init_embed=embed, 
     #         feat_extractor=feat_extractor, gpu=gpu)
@@ -688,13 +688,13 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
     if params['inference_layer'] == 'crf':
         rnn = models.RNN_CRF(
             params['rnn_layers'], len(dic.token_indices), params['embed_dimension'], 
-            params['rnn_units'], len(dic.label_indices), dropout=params['dropout'], 
+            params['rnn_hidden_units'], len(dic.label_indices), dropout=params['dropout'], 
             rnn_unit_type=params['rnn_unit_type'], rnn_bidirection=params['rnn_bidirection'], 
             linear_activation=params['linear_activation'], init_embed=embed, 
             feat_extractor=feat_extractor, gpu=gpu)
     else:
         rnn = models.RNN(
-            params['rnn_layers'], len(token_indices), params['embed_dimension'], params['rnn_units'], 
+            params['rnn_layers'], len(token_indices), params['embed_dimension'], params['rnn_hidden_units'], 
             len(label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
             rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
             init_embed=embed, feat_extractor=feat_extractor, gpu=gpu)

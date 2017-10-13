@@ -21,6 +21,7 @@ from tools import conlleval
 
 LOG_DIR = 'log'
 MODEL_DIR = 'models/nn'
+OUT_DIR = 'out'
 
 
 def batch_generator(instances, label_seqs, label_seqs2=None, batchsize=100, shuffle=True, xp=np):
@@ -39,6 +40,21 @@ def batch_generator(instances, label_seqs, label_seqs2=None, batchsize=100, shuf
             yield xs, ts
 
     raise StopIteration
+
+
+def decode(model, instances, batchsize=100, xp=np):
+    model.predictor.train = False
+    model.compute_fscore = False
+
+    len_data = len(instances)
+    for i in range(0, len_data, batchsize):
+        i_max = min(i + batchsize, len_data)
+        xs = [xp.asarray(instances[i], dtype=np.int32) for i in range(i, i_max)]
+        print(xs)
+    
+        with chainer.no_backprop_mode():
+            pass
+        #res = model(xs, train=False)
 
 
 def evaluate(model, instances, slab_seqs, plab_seqs=None, batchsize=100, xp=np):
@@ -125,12 +141,12 @@ def print_results(total_loss, ave_loss, count, c, acc, overall, acc2=None, overa
 
 
 def parse_arguments():
-    #bcedfglmnoprtv
+    #bcedfgilmnoprstvx
 
     parser = argparse.ArgumentParser()
 
     # mandatory options
-    parser.add_argument('--execute_mode', '-m', required=True,
+    parser.add_argument('--execute_mode', '-x', required=True,
                         help='Choose a mode from among \'train\', \'eval\', \'decode\' and \'interactive\'')
     
     # gpu options
@@ -161,7 +177,7 @@ def parse_arguments():
     parser.add_argument('--rnn_unit_type', default='lstm',
                         help='Choose unit type of RNN from among \'lstm\', \'gru\' and \'plain\''
                         + ' (Default: lstm)')
-    parser.add_argument('--rnn_units', '-u', type=int, default=800,
+    parser.add_argument('--rnn_hidden_units', '-u', type=int, default=800,
                         help='The number of hidden units of RNN (Default: 800)')
     parser.add_argument('--rnn_bidirection', action='store_true', 
                         help='Use bidirectional RNN')
@@ -171,7 +187,7 @@ def parse_arguments():
     #parser.add_argument('--linear_activation', '-a', default='identity')
 
     # optimizer parameters
-    parser.add_argument('--optimizer', '-o', default='sgd',
+    parser.add_argument('--optimizer', default='sgd',
                         help='Choose optimizing algorithm from among \'sgd\', \'adam\' and \'adagrad\'')
     parser.add_argument('--learning_rate', '-r', type=float, default=1.0, 
                         help='Initial learning rate')
@@ -186,7 +202,7 @@ def parse_arguments():
                         help='Weight decay ratio')
 
     # options to resume training
-    parser.add_argument('--model_to_resume', 
+    parser.add_argument('--model_to_load', '-m',
                         help='File path of the trained model to resume the training')
     parser.add_argument('--epoch_to_resume', type=int, default=1, 
                         help='Specify how manieth epoch from which you resume the training')
@@ -202,7 +218,7 @@ def parse_arguments():
     parser.add_argument('--subpos_depth', '-s', type=int, default=-1,
                         help='Set 0 (WS only), positive integer (use POS up to i-th hierarcy)'
                         + ' or -1 (use POS with all sub POS) when set \'bccwj_ws\' to data_format')
-    parser.add_argument('--prefix', '-p', help='Path prefix of input data')
+    parser.add_argument('--path_prefix', '-p', help='Path prefix of input data')
     parser.add_argument('--pretrain_data', default='',
                         help='File path of pretrain data succeeding \'path_prefix\'')
     parser.add_argument('--train_data', '-t', default='',
@@ -214,6 +230,10 @@ def parse_arguments():
     parser.add_argument('--label_reference_data', default='',
                         help='File path, which succeeds \'path_prefix\','
                         + ' of data with the same format as training data to load pre-defined labels')
+    parser.add_argument('--raw_data', default='',
+                        help='File path of input raw text which succeeds \'path_prefix\'')
+    parser.add_argument('--output_path', '-o', default='',
+                        help='File path to output parsed text')
     parser.add_argument('--embed_model_path', 
                         help='File path of pretrained model of word (character or other unit) embedding')
     parser.add_argument('--dict_path', 
@@ -299,11 +319,11 @@ class Trainer(object):
     def load_data(self, dic=None, embed_model=None):
         args = self.args
 
-        refer_path = args.prefix + args.label_reference_data
-        trained_path = args.prefix + args.pretrain_data
-        train_path = args.prefix + args.train_data
-        val_path = args.prefix + (args.validation_data if args.validation_data else '')
-        test_path = args.prefix + (args.test_data if args.test_data else '')
+        refer_path = args.path_prefix + args.label_reference_data
+        trained_path = args.path_prefix + args.pretrain_data
+        train_path = args.path_prefix + args.train_data
+        val_path = args.path_prefix + (args.validation_data if args.validation_data else '')
+        test_path = args.path_prefix + (args.test_data if args.test_data else '')
         refer_vocab = embed_model.wv if embed_model else set()
         params = {}
 
@@ -317,12 +337,12 @@ class Trainer(object):
                 args.data_format, refer_path, read_pos=read_pos, update_token=False,
                 subpos_depth=args.subpos_depth, 
                 lowercase=args.lowercase, normalize_digits=args.normalize_digits,
-                dic=dic, refer_vocab=refer_vocab, limit=limit)
+                dic=dic, limit=limit)
             print('load label set from reference data')
 
         if args.pretrain_data:
             if args.pretrain_data.endswith('pickle'):
-                name, ext = os.path.splitext(args.prefix + args.pretrain_data)
+                name, ext = os.path.splitext(args.path_prefix + args.pretrain_data)
                 trained, trained_t, trained_p, dic = data.load_pickled_data(name)
             else:
                 trained, trained_t, trained_p, dic = data.load_data(
@@ -338,7 +358,7 @@ class Trainer(object):
             trained_p = []
 
         if args.train_data.endswith('pickle'):
-            name, ext = os.path.splitext(args.prefix + args.train_data)
+            name, ext = os.path.splitext(args.path_prefix + args.train_data)
             train, train_t, train_p, dic = data.load_pickled_data(name)
 
         else:
@@ -348,7 +368,7 @@ class Trainer(object):
                 dic=dic, refer_vocab=refer_vocab, limit=limit)
 
             if self.args.dump_train_data:
-                name, ext = os.path.splitext(self.args.prefix + self.args.train_data)
+                name, ext = os.path.splitext(self.args.path_prefix + self.args.train_data)
                 data.dump_pickled_data(name, train, train_t, train_p, dic)
                 print('pickled training data')
 
@@ -358,7 +378,7 @@ class Trainer(object):
 
         if args.validation_data:
             if args.validation_data.endswith('pickle'):
-                name, ext = os.path.splitext(args.prefix + args.validation_data)
+                name, ext = os.path.splitext(args.path_prefix + args.validation_data)
                 pass
             else:
                 val, val_t, val_p, dic = data.load_data(
@@ -375,7 +395,7 @@ class Trainer(object):
             
         if args.test_data:
             if args.test_data.endswith('pickle'):
-                name, ext = os.path.splitext(args.prefix + args.test_data)
+                name, ext = os.path.splitext(args.path_prefix + args.test_data)
                 pass
             else:
                 test, test_t, test_p, dic = data.load_data(
@@ -434,7 +454,7 @@ class Trainer(object):
             self.params = {#'joint_type' : self.args.joint_type,
                            'embed_dimension' : self.args.embed_dimension,
                            'rnn_layers' : self.args.rnn_layers,
-                           'rnn_units' : self.args.rnn_units,
+                           'rnn_hidden_units' : self.args.rnn_hidden_units,
                            'rnn_bidirection' : self.args.rnn_bidirection,
                            'inference_layer' : self.args.inference_layer,
                            'linear_activation' : self.args.linear_activation,
@@ -445,7 +465,7 @@ class Trainer(object):
             self.params.update({'embed_model_path' : self.args.embed_model_path})
 
         # model
-        grow_lookup = self.args.execute_mode != 'eval' and len(self.dic.token_indices) > len(self.token_indices_org)
+        grow_lookup = self.args.execute_mode == 'train' and len(self.dic.token_indices) > len(self.token_indices_org)
         if grow_lookup:
             ti_updated=self.dic.token_indices
             self.dic.token_indices = self.token_indices_org
@@ -453,7 +473,7 @@ class Trainer(object):
             ti_updated=None
 
         model = data.load_model_from_params(
-            self.params, model_path=self.args.model_to_resume, dic=self.dic, 
+            self.params, model_path=self.args.model_to_load, dic=self.dic, 
             token_indices_updated=ti_updated, embed_model=embed_model, gpu=self.args.gpu)
         model.compute_fscore = True
 
@@ -487,6 +507,7 @@ class Trainer(object):
         return self.optimizer
 
 
+    # unused
     def write_params_and_indices(self):
         if not self.args.nolog:
             self.params.update({
@@ -501,7 +522,7 @@ class Trainer(object):
 
     # def dump_train_data_and_params(self):
     #     if self.args.dump_train_data and not self.args.train_data.endswith('pickle'):
-    #         name, ext = os.path.splitext(self.args.prefix + self.args.train_data)
+    #         name, ext = os.path.splitext(self.args.path_prefix + self.args.train_data)
     #         data.dump_pickled_data(name, self.train, self.train_t, self.dic, self.params)
     #         print('pickled training data')
     
@@ -509,12 +530,16 @@ class Trainer(object):
     def run(self):
         if self.args.execute_mode == 'train':
             self.run_training()
+
         elif self.args.execute_mode == 'eval':
             self.run_evaluation()
+
         elif self.args.execute_mode == 'decode':
-            pass
+            self.run_decoding()
+
         elif self.args.execute_mode == 'interactive':
-            pass
+            self.run_interactive_decoding()
+
         else:
             print('Invalid execute mode: {}'.format(self.args.execute_mode))
             sys.exit()
@@ -531,6 +556,19 @@ class Trainer(object):
         time = datetime.now().strftime('%Y%m%d_%H%M')
         self.log('finish: %s\n' % time)
         print('finish: %s\n' % time)
+
+
+    def run_decoding(self):
+        xp = cuda.cupy if args.gpu >= 0 else np
+
+        decode(self.model, self.train, batchsize=self.args.batchsize, xp=xp)
+
+        # args.raw_data
+        # args.output_path
+
+
+    def run_interactive_decoding(self):
+        pass
 
 
     def run_training(self):
@@ -822,11 +860,6 @@ if __name__ == '__main__':
 
     model = trainer.prepare_model_and_parameters(embed_model=embed_model)
     optimizer = trainer.setup_optimizer()
-
-    # Dump objects
-
-    # trainer.write_params_and_indices()
-    # trainer.dump_train_data_and_params()
 
     # Run
 
