@@ -172,7 +172,7 @@ example of input data:
   说  ，  这  “  不是  一种  风险  ，  而是  一种  保证  。
 ...
 """
-def load_cws_data(path, update_token=True, update_label=True, dic=None, refer_vocab=set(), limit=-1):
+def load_ws_data(path, update_token=True, update_label=True, dic=None, refer_vocab=set(), limit=-1):
 
     if not dic:
         dic = lattice.IndicesPair()
@@ -194,11 +194,11 @@ def load_cws_data(path, update_token=True, update_label=True, dic=None, refer_vo
             if limit > 0 and ins_cnt >= limit:
                 break
 
-            line = line.rstrip('\n').strip()
+            line = line.strip()
             if len(line) < 1:
                 continue
 
-            words = line.replace('  ', ' ').split(' ')
+            words = re.sub(' +', ' ', line).split()
             # print('sen:', words)
             for word in words:
                 wlen = len(word)
@@ -218,6 +218,8 @@ def load_cws_data(path, update_token=True, update_label=True, dic=None, refer_vo
             ins = []
             labs = []
             ins_cnt += 1
+            if ins_cnt % 100000 == 0:
+                print('read', ins_cnt, 'instances')
 
     return instances, lab_seqs, dic
 
@@ -511,8 +513,8 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
             dic=dic, refer_vocab=refer_vocab, do_segmentation=do_segmentation,
             limit=limit)
 
-    elif data_format == 'cws':
-        instances, label_seqs, dic = load_cws_data(
+    elif data_format == 'ws':
+        instances, label_seqs, dic = load_ws_data(
             path, update_token=update_token, update_label=update_label,
             dic=dic, refer_vocab=refer_vocab, limit=limit)
 
@@ -600,23 +602,23 @@ def read_param_file(path):
 
 def load_model_from_params(params, model_path='', dic=None, token_indices_updated=None, 
                            embed_model=None, gpu=-1):
-    if not 'joint_type' in params:
-        params['joint_type'] = None
+    # if not 'joint_type' in params:
+    #     params['joint_type'] = None
 
-    if not 'embed_dim' in params:
-        params['embed_dim'] = 300
+    if not 'embed_dimension' in params:
+        params['embed_dimension'] = 300
     else:
-        params['embed_dim'] = int(params['embed_dim'])
+        params['embed_dimension'] = int(params['embed_dimension'])
 
-    if not 'rnn_layer' in params:
-        params['rnn_layer'] = 1
+    if not 'rnn_layers' in params:
+        params['rnn_layers'] = 1
     else:
-        params['rnn_layer'] = int(params['rnn_layer'])
+        params['rnn_layers'] = int(params['rnn_layers'])
 
-    if not 'rnn_hidden_unit' in params:
-        params['rnn_hidden_unit'] = 500
+    if not 'rnn_units' in params:
+        params['rnn_units'] = 500
     else:
-        params['rnn_hidden_unit'] = int(params['rnn_hidden_unit'])
+        params['rnn_units'] = int(params['rnn_units'])
 
     if not 'rnn_unit_type' in params:
         params['rnn_unit_type'] = 'lstm'
@@ -626,37 +628,30 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
     else:
         params['rnn_bidirection'] = str(params['rnn_bidirection']).lower() == 'true'
 
-    # if not 'lattice' in params:
-    #     params['lattice'] = False
-    # else:
-    #     params['lattice'] = str(params['lattice']).lower() == 'true'
-
-    if not 'crf' in params:
-        params['crf'] = False
-    else:
-        params['crf'] = str(params['crf']).lower() == 'true'
+    if not 'inference_layer' in params:
+        params['inference_layer'] = 'softmax'
 
     if not 'linear_activation' in params:
         params['linear_activation'] = 'identity'
 
-    if not 'dict_feat' in params:
-        params['dict_feat'] = False
+    if not 'use_dict_feature' in params:
+        params['use_dict_feature'] = False
 
     if not 'dropout' in params:
         params['dropout'] = 0
     else:
         params['dropout'] = int(params['dropout'])
     
-    if not embed_model and 'embed_path' in params:
+    if not embed_model and 'embed_model_path' in params:
         #TODO token2id_update != None の場合の pre-trained embedding の拡張は未対応
         dic.create_id2token()
-        embed_model = emb.read_model(params['embed_path'])
+        embed_model = emb.read_model(params['embed_model_path'])
         embed = emb.construct_lookup_table(dic.id2token, embed_model, gpu=gpu)
-        embed_dim = embed.W.shape[1]
+        embed_dimension = embed.W.shape[1]
     else:
         embed = None
 
-    if params['dict_feat']:
+    if params['use_dict_feature']:
         feat_extractor = features.DictionaryFeatureExtractor(dic, gpu=gpu)
     else:
         feat_extractor = None
@@ -669,41 +664,46 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             lattice.TokenIndices(label2id))
     dic.create_id2label()
 
-    if params['joint_type'] == 'lattice':
-        rnn = models.RNN_LatticeCRF(
-            params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
-            len(dic.label_indices), dic, dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
-            rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
-            init_embed=embed, feat_extractor=feat_extractor, gpu=gpu)
+    # if params['joint_type'] == 'lattice':
+    #     rnn = models.RNN_LatticeCRF(
+    #         params['rnn_layers'], len(dic.token_indices), params['embed_dimension'], 
+    #         params['rnn_units'], len(dic.label_indices), dic, dropout=params['dropout'], 
+    #         rnn_unit_type=params['rnn_unit_type'], rnn_bidirection=params['rnn_bidirection'], 
+    #         linear_activation=params['linear_activation'], init_embed=embed, 
+    #         feat_extractor=feat_extractor, gpu=gpu)
 
-    elif params['joint_type'] == 'dual_rnn':
-        pass
+    # elif params['joint_type'] == 'dual_rnn':
+    #     pass
 
-    elif params['joint_type'] == 'single_rnn':
+    # elif params['joint_type'] == 'single_rnn':
+    #     rnn = models.RNN_CRF(
+    #         params['rnn_layers'], len(dic.token_indices), params['embed_dimension'], 
+    #         params['rnn_units'], len(dic.label_indices), dropout=params['dropout'], 
+    #         rnn_unit_type=params['rnn_unit_type'], rnn_bidirection=params['rnn_bidirection'], 
+    #         linear_activation=params['linear_activation'], init_embed=embed, 
+    #         feat_extractor=feat_extractor, gpu=gpu)
+
+    # else:
+
+    if params['inference_layer'] == 'crf':
         rnn = models.RNN_CRF(
-            params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
-            len(dic.label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
+            params['rnn_layers'], len(dic.token_indices), params['embed_dimension'], 
+            params['rnn_units'], len(dic.label_indices), dropout=params['dropout'], 
+            rnn_unit_type=params['rnn_unit_type'], rnn_bidirection=params['rnn_bidirection'], 
+            linear_activation=params['linear_activation'], init_embed=embed, 
+            feat_extractor=feat_extractor, gpu=gpu)
+    else:
+        rnn = models.RNN(
+            params['rnn_layers'], len(token_indices), params['embed_dimension'], params['rnn_units'], 
+            len(label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
             rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
             init_embed=embed, feat_extractor=feat_extractor, gpu=gpu)
 
-    else:
-        if params['crf']:
-            rnn = models.RNN_CRF(
-                params['rnn_layer'], len(dic.token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
-                len(dic.label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
-                rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
-                init_embed=embed, feat_extractor=feat_extractor, gpu=gpu)
-        else:
-            rnn = models.RNN(
-                params['rnn_layer'], len(token_indices), params['embed_dim'], params['rnn_hidden_unit'], 
-                len(label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
-                rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
-                init_embed=embed, feat_extractor=feat_extractor, gpu=gpu)
+    # if params['joint_type']:
+    #     model = models.JointMorphologicalAnalyzer(rnn, dic.id2label)
+    # else:
 
-    if params['joint_type']:
-        model = models.JointMorphologicalAnalyzer(rnn, dic.id2label)
-    else:
-        model = models.SequenceTagger(rnn, dic.id2label)
+    model = models.SequenceTagger(rnn, dic.id2label)
 
     if model_path:
         chainer.serializers.load_npz(model_path, model)
@@ -715,31 +715,6 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
         model.to_gpu()
 
     return model
-
-        
-def write_param_file(params, path):
-    with open(path, 'w') as f:
-        f.write('# %s\n\n' % path)
-        f.write('# paths\n')
-        f.write('token2id_path %s\n' % params['token2id_path'])
-        f.write('label2id_path %s\n' % params['label2id_path'])
-        if 'embed_path' in params:
-            f.write('embed_path %s\n' % params['embed_path'])
-
-        f.write('# model parameters\n')
-        f.write('embed_dim %d\n' % params['embed_dim'])
-        f.write('rnn_layer %d\n' % params['rnn_layer'])
-        f.write('rnn_hiddlen_unit %d\n' %  params['rnn_hidden_unit'])
-        f.write('rnn_unit_type %s'  % params['rnn_unit_type'])
-        f.write('rnn_bidirection %s\n' % str(params['rnn_bidirection']))
-        f.write('crf %s\n' % str(params['crf']))
-        f.write('linear_activation %s\n' % params['linear_activation'])
-        f.write('left_contexts %d\n' % params['left_contexts'])
-        f.write('right_contexts %d\n' % params['right_contexts'])
-        f.write('dropout %d\n' % params['dropout'])
-
-        f.write('# others\n')
-        f.write('model_date %s\n' % params['model_date'])
     
 
 if __name__ == '__main__':
