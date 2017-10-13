@@ -1,0 +1,6 @@
+*~
+log/
+out/
+models/
+resources/
+!.gitkeep
