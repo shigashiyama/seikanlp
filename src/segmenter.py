@@ -2,13 +2,13 @@ import sys
 import logging
 import argparse
 import copy
-import numpy as np
 import os
 import pickle
 from datetime import datetime
 from collections import Counter
 
 #os.environ["CHAINER_TYPE_CHECK"] = "0"
+import numpy as np
 import chainer
 from chainer import serializers
 from chainer import cuda
@@ -42,7 +42,7 @@ def batch_generator(instances, label_seqs, label_seqs2=None, batchsize=100, shuf
     raise StopIteration
 
 
-def decode(model, instances, batchsize=100, xp=np):
+def decode(model, instances, batchsize=100, seg=False, stream=sys.stdout, xp=np):
     model.predictor.train = False
     model.compute_fscore = False
 
@@ -50,11 +50,26 @@ def decode(model, instances, batchsize=100, xp=np):
     for i in range(0, len_data, batchsize):
         i_max = min(i + batchsize, len_data)
         xs = [xp.asarray(instances[i], dtype=np.int32) for i in range(i, i_max)]
-        print(xs)
-    
-        with chainer.no_backprop_mode():
-            pass
-        #res = model(xs, train=False)
+        decode_batch(xs, model, stream)
+
+
+def decode_batch(xs, model, seg=False, stream=sys.stdout):
+    ys = model.predictor.decode(xs)
+
+    for x, y in zip(xs, ys):
+        x_str = [model.indices.get_token(int(xi)) for xi in x]
+        y_str = [model.indices.get_label(int(yi)) for yi in y]
+
+        if seg:
+            res = ['{}{}'.format(' ' if (yi_str == 'B' or yi_str == 'S') else '', 
+                                 xi_str) for xi_str, yi_str in zip(x_str, y_str)]
+            res = ''.join(res).lstrip()
+
+        else:
+            res = ['{}/{}'.format(xi_str, yi_str) for xi_str, yi_str in zip(x_str, y_str)]
+            res = ' '.join(res)
+
+        print(res, file=stream)
 
 
 def evaluate(model, instances, slab_seqs, plab_seqs=None, batchsize=100, xp=np):
@@ -189,7 +204,7 @@ def parse_arguments():
     # optimizer parameters
     parser.add_argument('--optimizer', default='sgd',
                         help='Choose optimizing algorithm from among \'sgd\', \'adam\' and \'adagrad\'')
-    parser.add_argument('--learning_rate', '-r', type=float, default=1.0, 
+    parser.add_argument('--learning_rate', type=float, default=1.0, 
                         help='Initial learning rate')
     parser.add_argument('--momentum', type=float, default=0.0, help='Momentum ratio for SGD')
     parser.add_argument('--lrdecay', default='', 
@@ -220,18 +235,18 @@ def parse_arguments():
                         + ' or -1 (use POS with all sub POS) when set \'bccwj_ws\' to data_format')
     parser.add_argument('--path_prefix', '-p', help='Path prefix of input data')
     parser.add_argument('--pretrain_data', default='',
-                        help='File path of pretrain data succeeding \'path_prefix\'')
+                        help='File path succeeding \'path_prefix\' of pretrain data')
     parser.add_argument('--train_data', '-t', default='',
-                        help='File path of training data succeeding \'path_prefix\'')
+                        help='File path succeeding \'path_prefix\' of training data')
     parser.add_argument('--validation_data', '-v', default='',
-                        help='File path of validation data succeeding \'path_prefix\'')
+                        help='File path succeeding \'path_prefix\' of validation data')
     parser.add_argument('--test_data', default='',
-                        help='File path of test data succeeding \'path_prefix\'')
-    parser.add_argument('--label_reference_data', default='',
-                        help='File path, which succeeds \'path_prefix\','
-                        + ' of data with the same format as training data to load pre-defined labels')
-    parser.add_argument('--raw_data', default='',
+                        help='File path  succeeding \'path_prefix\' of test data')
+    parser.add_argument('--raw_data', '-r', default='',
                         help='File path of input raw text which succeeds \'path_prefix\'')
+    parser.add_argument('--label_reference_data', default='',
+                        help='File path succeeding \'path_prefix\''
+                        + ' of data with the same format as training data to load pre-defined labels')
     parser.add_argument('--output_path', '-o', default='',
                         help='File path to output parsed text')
     parser.add_argument('--embed_model_path', 
@@ -294,7 +309,7 @@ class Trainer(object):
         self.test_t = None
         self.test_p = None
         self.dic = None
-        self.params = None
+        self.hparams = None
         self.token_indices_org = None
         self.model = None
         self.optimizer = None
@@ -319,13 +334,13 @@ class Trainer(object):
     def load_data(self, dic=None, embed_model=None):
         args = self.args
 
-        refer_path = args.path_prefix + args.label_reference_data
-        trained_path = args.path_prefix + args.pretrain_data
-        train_path = args.path_prefix + args.train_data
-        val_path = args.path_prefix + (args.validation_data if args.validation_data else '')
-        test_path = args.path_prefix + (args.test_data if args.test_data else '')
+        refer_path   = '{}/{}'.format(args.path_prefix, args.label_reference_data)
+        trained_path = '{}/{}'.format(args.path_prefix, args.pretrain_data)
+        train_path   = '{}/{}'.format(args.path_prefix, args.train_data)
+        val_path     = '{}/{}'.format(args.path_prefix, (args.validation_data if args.validation_data else ''))
+        test_path    = '{}/{}'.format(args.path_prefix, (args.test_data if args.test_data else ''))
         refer_vocab = embed_model.wv if embed_model else set()
-        params = {}
+        hparams = {}
 
         token_indices_org = None
 
@@ -342,7 +357,7 @@ class Trainer(object):
 
         if args.pretrain_data:
             if args.pretrain_data.endswith('pickle'):
-                name, ext = os.path.splitext(args.path_prefix + args.pretrain_data)
+                name, ext = os.path.splitext('{}/{}'.format(args.path_prefix, args.pretrain_data))
                 trained, trained_t, trained_p, dic = data.load_pickled_data(name)
             else:
                 trained, trained_t, trained_p, dic = data.load_data(
@@ -358,7 +373,7 @@ class Trainer(object):
             trained_p = []
 
         if args.train_data.endswith('pickle'):
-            name, ext = os.path.splitext(args.path_prefix + args.train_data)
+            name, ext = os.path.splitext('{}/{}'.format(args.path_prefix, args.train_data))
             train, train_t, train_p, dic = data.load_pickled_data(name)
 
         else:
@@ -368,7 +383,7 @@ class Trainer(object):
                 dic=dic, refer_vocab=refer_vocab, limit=limit)
 
             if self.args.dump_train_data:
-                name, ext = os.path.splitext(self.args.path_prefix + self.args.train_data)
+                name, ext = os.path.splitext('{}/{}'.format(self.args.path_prefix, self.args.train_data))
                 data.dump_pickled_data(name, train, train_t, train_p, dic)
                 print('pickled training data')
 
@@ -378,7 +393,7 @@ class Trainer(object):
 
         if args.validation_data:
             if args.validation_data.endswith('pickle'):
-                name, ext = os.path.splitext(args.path_prefix + args.validation_data)
+                name, ext = os.path.splitext('{}/{}'.format(args.path_prefix, args.validation_data))
                 pass
             else:
                 val, val_t, val_p, dic = data.load_data(
@@ -395,7 +410,7 @@ class Trainer(object):
             
         if args.test_data:
             if args.test_data.endswith('pickle'):
-                name, ext = os.path.splitext(args.path_prefix + args.test_data)
+                name, ext = os.path.splitext('{}/{}'.format(args.path_prefix, args.test_data))
                 pass
             else:
                 test, test_t, test_p, dic = data.load_data(
@@ -444,14 +459,16 @@ class Trainer(object):
         self.test_t = test_t
         self.test_p = test_p
         self.dic = dic
-        self.params = params
+        self.hparams = hparams
         self.token_indices_org = token_indices_org
+        self.segment = (args.data_format == 'ws' or
+                        (args.data_format == 'bccwj_ws' and args.subpos_depth == 0))
 
 
-    def prepare_model_and_parameters(self, embed_model=None):
+    def prepare_model_and_hparameters(self, embed_model=None):
         # parameter
-        if not self.params:
-            self.params = {#'joint_type' : self.args.joint_type,
+        if not self.hparams:
+            self.hparams = {#'joint_type' : self.args.joint_type,
                            'embed_dimension' : self.args.embed_dimension,
                            'rnn_layers' : self.args.rnn_layers,
                            'rnn_hidden_units' : self.args.rnn_hidden_units,
@@ -462,7 +479,7 @@ class Trainer(object):
                            'dropout' : self.args.dropout,
             }
         if self.args.embed_model_path:
-            self.params.update({'embed_model_path' : self.args.embed_model_path})
+            self.hparams.update({'embed_model_path' : self.args.embed_model_path})
 
         # model
         grow_lookup = self.args.execute_mode == 'train' and len(self.dic.token_indices) > len(self.token_indices_org)
@@ -472,8 +489,8 @@ class Trainer(object):
         else:
             ti_updated=None
 
-        model = data.load_model_from_params(
-            self.params, model_path=self.args.model_to_load, dic=self.dic, 
+        model = data.load_model_from_hparams(
+            self.hparams, model_path=self.args.model_to_load, dic=self.dic, 
             token_indices_updated=ti_updated, embed_model=embed_model, gpu=self.args.gpu)
         model.compute_fscore = True
 
@@ -510,22 +527,15 @@ class Trainer(object):
     # unused
     def write_params_and_indices(self):
         if not self.args.nolog:
-            self.params.update({
+            self.hparams.update({
                 'token2id_path' : 'nn_model/vocab_' + self.start_time + '.t2i.txt',
                 'label2id_path' : 'nn_model/vocab_' + self.start_time + '.l2i.txt',
                 'model_date': self.start_time
             })
-            data.write_param_file(self.params, 'nn_model/param_' + self.start_time + '.txt')
-            data.write_map(self.dic.token_indices.token2id, self.params['token2id_path'])
-            data.write_map(self.dic.label_indices.token2id, self.params['label2id_path'])
+            data.write_param_file(self.hparams, 'nn_model/param_' + self.start_time + '.txt')
+            data.write_map(self.dic.token_indices.token2id, self.hparams['token2id_path'])
+            data.write_map(self.dic.label_indices.token2id, self.hparams['label2id_path'])
 
-
-    # def dump_train_data_and_params(self):
-    #     if self.args.dump_train_data and not self.args.train_data.endswith('pickle'):
-    #         name, ext = os.path.splitext(self.args.path_prefix + self.args.train_data)
-    #         data.dump_pickled_data(name, self.train, self.train_t, self.dic, self.params)
-    #         print('pickled training data')
-    
 
     def run(self):
         if self.args.execute_mode == 'train':
@@ -561,14 +571,39 @@ class Trainer(object):
     def run_decoding(self):
         xp = cuda.cupy if args.gpu >= 0 else np
 
-        decode(self.model, self.train, batchsize=self.args.batchsize, xp=xp)
+        raw_path = '{}/{}'.format(self.args.path_prefix, self.args.raw_data)
+        if self.segment:
+            instances = data.load_raw_text_for_segmentation(raw_path, self.dic)
+        else:
+            instances = data.load_raw_text(raw_path)
 
-        # args.raw_data
-        # args.output_path
+        stream = open(self.args.output_path, 'w') if self.args.output_path else sys.stdout
+        decode(self.model, instances, batchsize=self.args.batchsize, seg=self.segment, stream=stream, xp=xp)
+
+        if self.args.output_path:
+            stream.close()
 
 
     def run_interactive_decoding(self):
-        pass
+        xp = cuda.cupy if args.gpu >= 0 else np
+
+        print('Please input text or type \'q\' to quit this mode:')
+        while True:
+            line = sys.stdin.readline().rstrip()
+            if len(line) == 0:
+                continue
+            elif line == 'q':
+                break
+
+            if self.segment:
+                ins = [dic.get_token_id(char) for char in line]
+            else:
+                array = line.split(' ')
+                ins = [self.model.dic.get_token_id(word) for word in array]
+
+            xs = [xp.asarray(ins, dtype=np.int32)]
+            decode_batch(xs, self.model, seg=self.segment)
+            print()
 
 
     def run_training(self):
@@ -858,7 +893,7 @@ if __name__ == '__main__':
 
     # Set up model and optimizer
 
-    model = trainer.prepare_model_and_parameters(embed_model=embed_model)
+    model = trainer.prepare_model_and_hparameters(embed_model=embed_model)
     optimizer = trainer.setup_optimizer()
 
     # Run

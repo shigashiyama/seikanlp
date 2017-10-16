@@ -9,6 +9,7 @@ import numpy as np
 import lattice
 import features
 import models
+import models_joint
 import embedding.read_embedding as emb
 
 import chainer
@@ -16,6 +17,49 @@ import chainer
 
 NUM_SYMBOL = '<NUM>'
 Schema = enum.Enum("Schema", "BI BIES")
+
+
+def load_raw_text(path, dic):
+    instances = []
+    ins_cnt = 0
+
+    print("Read file:", path)
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if len(line) < 1:
+                continue
+
+            array = line.split(' ')
+            ins = [dic.get_token_id(word) for word in array]
+            instances.append(ins)
+
+            ins_cnt += 1
+            if ins_cnt % 100000 == 0:
+                print('read', ins_cnt, 'instances')
+
+    return instances
+
+
+def load_raw_text_for_segmentation(path, dic):
+    instances = []
+    ins_cnt = 0
+
+    print("Read file:", path)
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if len(line) < 1:
+                continue
+
+            ins = [dic.get_token_id(char) for char in line]
+            instances.append(ins)
+
+            ins_cnt += 1
+            if ins_cnt % 100000 == 0:
+                print('read', ins_cnt, 'instances')
+
+    return instances
 
 
 """for BCCWJ word segmentation or POS tagging
@@ -587,7 +631,7 @@ def write_map(dic, path):
 
 
 def read_param_file(path):
-    params = {}
+    hparams = {}
 
     with open(path, 'r') as f:
         for line in f:
@@ -595,63 +639,63 @@ def read_param_file(path):
             if len(arr) < 2:
                 continue
             
-            params.update({arr[0]:arr[1]})
+            hparams.update({arr[0]:arr[1]})
 
-    return params
+    return hparams
 
 
-def load_model_from_params(params, model_path='', dic=None, token_indices_updated=None, 
+def load_model_from_hparams(hparams, model_path='', dic=None, token_indices_updated=None, 
                            embed_model=None, gpu=-1):
-    # if not 'joint_type' in params:
-    #     params['joint_type'] = None
+    # if not 'joint_type' in hparams:
+    #     hparams['joint_type'] = None
 
-    if not 'embed_dimension' in params:
-        params['embed_dimension'] = 300
+    if not 'embed_dimension' in hparams:
+        hparams['embed_dimension'] = 300
     else:
-        params['embed_dimension'] = int(params['embed_dimension'])
+        hparams['embed_dimension'] = int(hparams['embed_dimension'])
 
-    if not 'rnn_layers' in params:
-        params['rnn_layers'] = 1
+    if not 'rnn_layers' in hparams:
+        hparams['rnn_layers'] = 1
     else:
-        params['rnn_layers'] = int(params['rnn_layers'])
+        hparams['rnn_layers'] = int(hparams['rnn_layers'])
 
-    if not 'rnn_hidden_units' in params:
-        params['rnn_hidden_units'] = 500
+    if not 'rnn_hidden_units' in hparams:
+        hparams['rnn_hidden_units'] = 500
     else:
-        params['rnn_hidden_units'] = int(params['rnn_hidden_units'])
+        hparams['rnn_hidden_units'] = int(hparams['rnn_hidden_units'])
 
-    if not 'rnn_unit_type' in params:
-        params['rnn_unit_type'] = 'lstm'
+    if not 'rnn_unit_type' in hparams:
+        hparams['rnn_unit_type'] = 'lstm'
 
-    if not 'rnn_bidirection' in params:
-        params['rnn_bidirection'] = False
+    if not 'rnn_bidirection' in hparams:
+        hparams['rnn_bidirection'] = False
     else:
-        params['rnn_bidirection'] = str(params['rnn_bidirection']).lower() == 'true'
+        hparams['rnn_bidirection'] = str(hparams['rnn_bidirection']).lower() == 'true'
 
-    if not 'inference_layer' in params:
-        params['inference_layer'] = 'softmax'
+    if not 'inference_layer' in hparams:
+        hparams['inference_layer'] = 'softmax'
 
-    if not 'linear_activation' in params:
-        params['linear_activation'] = 'identity'
+    if not 'linear_activation' in hparams:
+        hparams['linear_activation'] = 'identity'
 
-    if not 'use_dict_feature' in params:
-        params['use_dict_feature'] = False
+    if not 'use_dict_feature' in hparams:
+        hparams['use_dict_feature'] = False
 
-    if not 'dropout' in params:
-        params['dropout'] = 0
+    if not 'dropout' in hparams:
+        hparams['dropout'] = 0
     else:
-        params['dropout'] = int(params['dropout'])
+        hparams['dropout'] = int(hparams['dropout'])
     
-    if not embed_model and 'embed_model_path' in params:
+    if not embed_model and 'embed_model_path' in hparams:
         #TODO token2id_update != None の場合の pre-trained embedding の拡張は未対応
         dic.create_id2token()
-        embed_model = emb.read_model(params['embed_model_path'])
+        embed_model = emb.read_model(hparams['embed_model_path'])
         embed = emb.construct_lookup_table(dic.id2token, embed_model, gpu=gpu)
         embed_dimension = embed.W.shape[1]
     else:
         embed = None
 
-    if params['use_dict_feature']:
+    if hparams['use_dict_feature']:
         feat_extractor = features.DictionaryFeatureExtractor(dic, gpu=gpu)
     else:
         feat_extractor = None
@@ -664,46 +708,46 @@ def load_model_from_params(params, model_path='', dic=None, token_indices_update
             lattice.TokenIndices(label2id))
     dic.create_id2label()
 
-    # if params['joint_type'] == 'lattice':
-    #     rnn = models.RNN_LatticeCRF(
-    #         params['rnn_layers'], len(dic.token_indices), params['embed_dimension'], 
-    #         params['rnn_hidden_units'], len(dic.label_indices), dic, dropout=params['dropout'], 
-    #         rnn_unit_type=params['rnn_unit_type'], rnn_bidirection=params['rnn_bidirection'], 
-    #         linear_activation=params['linear_activation'], init_embed=embed, 
+    # if hparams['joint_type'] == 'lattice':
+    #     rnn = models_joint.RNN_LatticeCRF(
+    #         hparams['rnn_layers'], len(dic.token_indices), hparams['embed_dimension'], 
+    #         hparams['rnn_hidden_units'], len(dic.label_indices), dic, dropout=hparams['dropout'], 
+    #         rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
+    #         linear_activation=hparams['linear_activation'], init_embed=embed, 
     #         feat_extractor=feat_extractor, gpu=gpu)
 
-    # elif params['joint_type'] == 'dual_rnn':
+    # elif hparams['joint_type'] == 'dual_rnn':
     #     pass
 
-    # elif params['joint_type'] == 'single_rnn':
-    #     rnn = models.RNN_CRF(
-    #         params['rnn_layers'], len(dic.token_indices), params['embed_dimension'], 
-    #         params['rnn_hidden_units'], len(dic.label_indices), dropout=params['dropout'], 
-    #         rnn_unit_type=params['rnn_unit_type'], rnn_bidirection=params['rnn_bidirection'], 
-    #         linear_activation=params['linear_activation'], init_embed=embed, 
+    # elif hparams['joint_type'] == 'single_rnn':
+    #     rnn = models_joint.RNN_CRF(
+    #         hparams['rnn_layers'], len(dic.token_indices), hparams['embed_dimension'], 
+    #         hparams['rnn_hidden_units'], len(dic.label_indices), dropout=hparams['dropout'], 
+    #         rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
+    #         linear_activation=hparams['linear_activation'], init_embed=embed, 
     #         feat_extractor=feat_extractor, gpu=gpu)
 
     # else:
 
-    if params['inference_layer'] == 'crf':
+    if hparams['inference_layer'] == 'crf':
         rnn = models.RNN_CRF(
-            params['rnn_layers'], len(dic.token_indices), params['embed_dimension'], 
-            params['rnn_hidden_units'], len(dic.label_indices), dropout=params['dropout'], 
-            rnn_unit_type=params['rnn_unit_type'], rnn_bidirection=params['rnn_bidirection'], 
-            linear_activation=params['linear_activation'], init_embed=embed, 
+            hparams['rnn_layers'], len(dic.token_indices), hparams['embed_dimension'], 
+            hparams['rnn_hidden_units'], len(dic.label_indices), dropout=hparams['dropout'], 
+            rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
+            linear_activation=hparams['linear_activation'], init_embed=embed, 
             feat_extractor=feat_extractor, gpu=gpu)
     else:
         rnn = models.RNN(
-            params['rnn_layers'], len(token_indices), params['embed_dimension'], params['rnn_hidden_units'], 
-            len(label_indices), dropout=params['dropout'], rnn_unit_type=params['rnn_unit_type'], 
-            rnn_bidirection=params['rnn_bidirection'], linear_activation=params['linear_activation'], 
+            hparams['rnn_layers'], len(token_indices), hparams['embed_dimension'], hparams['rnn_hidden_units'], 
+            len(label_indices), dropout=hparams['dropout'], rnn_unit_type=hparams['rnn_unit_type'], 
+            rnn_bidirection=hparams['rnn_bidirection'], linear_activation=hparams['linear_activation'], 
             init_embed=embed, feat_extractor=feat_extractor, gpu=gpu)
 
-    # if params['joint_type']:
-    #     model = models.JointMorphologicalAnalyzer(rnn, dic.id2label)
+    # if hparams['joint_type']:
+    #     model = models_joint.JointMorphologicalAnalyzer(rnn, dic.id2label)
     # else:
 
-    model = models.SequenceTagger(rnn, dic.id2label)
+    model = models.SequenceTagger(rnn, dic)
 
     if model_path:
         chainer.serializers.load_npz(model_path, model)

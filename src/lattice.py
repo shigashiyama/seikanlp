@@ -222,13 +222,6 @@ class MorphologyDictionary(IndicesTriplet):
     def get_entries(self, chunk, pos, update=False):
         tis = [self.token_indices.get_id(token, update=update) for token in chunk]
 
-        # 全ての文字を単語として登録
-        # if update:
-        #     for i, ti in enumerate(tis):
-        #         ci_of_token = self.chunk_trie.get_word_id([ti], True)
-        #         self.id2chunk[ci_of_token] = chunk[i]
-        #         self.ci2lis.add(ci_of_token, self.dummy_pos_id)
-
         # 単語登録と ID 取得
         ci = self.chunk_trie.get_word_id(tis, update)
         pi = self.pos_indices.get_id(pos, update=update)
