@@ -17,17 +17,17 @@ import lattice
 class DualRNN(chainer.Chain):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
-            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            init_embed=None, feat_extractor=None, gpu=-1):
+            rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
+            init_embed=None, feat_extractor=None):
         super(DualRNN, self).__init__()
 
         with self.init_scope():
             self.rnn_crf1 = RNN_CRF(
                 n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
-                rnn_bidirection, linear_activation, init_embed, gpu)
+                rnn_bidirection, affine_activation, init_embed)
             self.rnn_ff2 = RNN(
                 n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
-                rnn_bidirection, linear_activation, init_embed, gpu)
+                rnn_bidirection, affine_activation, init_embed)
 
 
     def __call__(self, cxs, cts, wts, train=True):
@@ -49,7 +49,7 @@ class DualRNN(chainer.Chain):
                 hy, cy, hs = self.rnn_unit(None, None, xs)
             else:
                 hy, hs = self.rnn_unit(None, xs)
-            ys = [self.act(self.linear(h)) for h in hs]
+            ys = [self.act(self.affine(h)) for h in hs]
 
         loss = None
         ps = []
@@ -66,11 +66,11 @@ class DualRNN(chainer.Chain):
 class RNN_LatticeCRF(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, morph_dic, dropout=0, 
-            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
+            rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
             init_embed=None, feat_extractor=None, gpu=-1):
         super(RNN_LatticeCRF, self).__init__(
             n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
-            rnn_bidirection, linear_activation, init_embed, feat_extractor, gpu)
+            rnn_bidirection, affine_activation, init_embed, feat_extractor, gpu)
 
         with self.init_scope():
             self.morph_dic = morph_dic
@@ -87,11 +87,11 @@ class RNN_LatticeCRF(RNNBase):
             else:
                 hy, hs = self.rnn_unit(None, embed_xs)
 
-            # linear layer
+            # affine layer
             if not self.act or self.act == 'identity':
-                hs = [self.linear(h) for h in hs]
+                hs = [self.affine(h) for h in hs]
             else:
-                hs = [self.act(self.linear(h)) for h in hs]
+                hs = [self.act(self.affine(h)) for h in hs]
 
             # lattice crf layer
             loss, ys_seg, ys_pos = self.lattice_crf(xs, hs, ts_pos)

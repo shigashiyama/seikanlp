@@ -7,7 +7,6 @@ import enum
 import numpy as np
 
 import lattice
-import features
 import models
 import models_joint
 import embedding.read_embedding as emb
@@ -19,7 +18,28 @@ NUM_SYMBOL = '<NUM>'
 Schema = enum.Enum("Schema", "BI BIES")
 
 
-def load_raw_text(path, dic):
+def load_raw_text_for_segmentation(path, indices):
+    instances = []
+    ins_cnt = 0
+
+    print("Read file:", path)
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if len(line) < 1:
+                continue
+
+            ins = [indices.get_token_id(char) for char in line]
+            instances.append(ins)
+
+            ins_cnt += 1
+            if ins_cnt % 100000 == 0:
+                print('read', ins_cnt, 'instances')
+
+    return instances
+
+
+def load_raw_text_for_tagging(path, indices):
     instances = []
     ins_cnt = 0
 
@@ -31,28 +51,7 @@ def load_raw_text(path, dic):
                 continue
 
             array = line.split(' ')
-            ins = [dic.get_token_id(word) for word in array]
-            instances.append(ins)
-
-            ins_cnt += 1
-            if ins_cnt % 100000 == 0:
-                print('read', ins_cnt, 'instances')
-
-    return instances
-
-
-def load_raw_text_for_segmentation(path, dic):
-    instances = []
-    ins_cnt = 0
-
-    print("Read file:", path)
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if len(line) < 1:
-                continue
-
-            ins = [dic.get_token_id(char) for char in line]
+            ins = [indices.get_token_id(word) for word in array]
             instances.append(ins)
 
             ins_cnt += 1
@@ -69,12 +68,12 @@ example of input data:
   I       の      助詞-格助詞$
   I       会話    名詞-普通名詞-サ変可能
 """
-def load_bccwj_data(path, update_token=True, update_label=True, subpos_depth=-1, dic=None, 
+def load_bccwj_data(path, update_token=True, update_label=True, subpos_depth=-1, indices=None, 
                     refer_vocab=set(), do_segmentation=True, ws_dict_feat=False, limit=-1):
-    if not dic:
-        dic = lattice.IndicesPair()
+    if not indices:
+        indices = lattice.IndicesPair()
         if subpos_depth == 0:
-            dic.init_label_indices('BIES')
+            indices.init_label_indices('BIES')
 
     instances = []
     lab_seqs = []
@@ -117,33 +116,33 @@ def load_bccwj_data(path, update_token=True, update_label=True, subpos_depth=-1,
 
             if do_segmentation:
                 wlen = len(word)
-                ins.extend([dic.token_indices.get_id(word[i], update_token) for i in range(wlen)])
+                ins.extend([indices.token_indices.get_id(word[i], update_token) for i in range(wlen)])
                 labs.extend(
-                    [dic.label_indices.get_id(
+                    [indices.label_indices.get_id(
                         get_label_BIES(i, wlen-1, cate=pos), update=update_label) for i in range(wlen)])
 
-                if update_token and ws_dict_feat: # update dic
+                if update_token and ws_dict_feat: # update indices
                     ids = ins[-wlen:]
-                    dic.chunk_trie.get_word_id(ids, True)
+                    indices.chunk_trie.get_word_id(ids, True)
 
             else:
                 update_this_token = update_token or word in refer_vocab
-                ins.append(dic.token_indices.get_id(word, update=update_this_token))
-                labs.append(dic.label_indices.get_id(pos, update=update_label))
+                ins.append(indices.token_indices.get_id(word, update=update_this_token))
+                labs.append(indices.label_indices.get_id(pos, update=update_label))
 
             bof = False
             word_cnt += 1
             token_cnt += len(word)
 
-    return instances, lab_seqs, dic
+    return instances, lab_seqs, indices
 
 
 
 def load_bccwj_data_for_lattice_ma(
-        path, read_pos=True, update_token=True, subpos_depth=-1, dic=None, limit=-1):
+        path, read_pos=True, update_token=True, subpos_depth=-1, indices=None, limit=-1):
 
-    if not dic:
-        dic = lattice.MorphologicalDictitionary()
+    if not indices:
+        indices = lattice.MorphologicalDictitionary()
         
     instances = []
     slab_seqs = []              # list of segmentation labels (B, I, E, S)
@@ -187,9 +186,9 @@ def load_bccwj_data_for_lattice_ma(
 
             wlen = len(word)
             first_char_index = len(ins)
-            char_ids, word_id, pos_id = dic.get_entries(word, pos, update=update_token)
+            char_ids, word_id, pos_id = indices.get_entries(word, pos, update=update_token)
             ins.extend(char_ids)
-            slabs.extend([dic.get_label_id(get_label_BIES(i, wlen-1)) for i in range(wlen)])
+            slabs.extend([indices.get_label_id(get_label_BIES(i, wlen-1)) for i in range(wlen)])
             #if not read_pos:
             plabs.append((first_char_index, first_char_index + wlen, pos_id))
 
@@ -203,10 +202,10 @@ def load_bccwj_data_for_lattice_ma(
             ins_cnt += 1
 
     if update_token:
-        dic.create_id2token()
-        dic.create_id2pos()
+        indices.create_id2token()
+        indices.create_id2pos()
 
-    return instances, slab_seqs, plab_seqs, dic
+    return instances, slab_seqs, plab_seqs, indices
 
 
 """ for Chinese word segmentation
@@ -216,14 +215,14 @@ example of input data:
   说  ，  这  “  不是  一种  风险  ，  而是  一种  保证  。
 ...
 """
-def load_ws_data(path, update_token=True, update_label=True, dic=None, refer_vocab=set(), limit=-1):
+def load_ws_data(path, update_token=True, update_label=True, indices=None, refer_vocab=set(), limit=-1):
 
-    if not dic:
-        dic = lattice.IndicesPair()
-        dic.init_label_indices('BIES')
+    if not indices:
+        indices = lattice.IndicesPair()
+        indices.init_label_indices('BIES')
 
-    token_ind = dic.token_indices
-    label_ind = dic.label_indices
+    token_ind = indices.token_indices
+    label_ind = indices.label_indices
         
     instances = []
     lab_seqs = []
@@ -265,7 +264,7 @@ def load_ws_data(path, update_token=True, update_label=True, dic=None, refer_voc
             if ins_cnt % 100000 == 0:
                 print('read', ins_cnt, 'instances')
 
-    return instances, lab_seqs, dic
+    return instances, lab_seqs, indices
 
 
 """ for PTB WSJ (CoNLL-2005)
@@ -278,14 +277,14 @@ example of input data:
   0001  1 17 O       .     .               NOFUNC          join              8 I-S
 """
 def load_wsj_data(path, update_token=True, update_label=True, lowercase=True, normalize_digits=True,
-                  dic=None, refer_vocab=set(), limit=-1):
+                  indices=None, refer_vocab=set(), limit=-1):
 
-    if not dic:
+    if not indices:
         label_ind = lattice.TokenIndices(unk_symbol=lattice.DUMMY_POS) # '#' が val で出てくる
-        dic = lattice.IndicesPair(label_indices=label_ind)
+        indices = lattice.IndicesPair(label_indices=label_ind)
 
-    token_ind = dic.token_indices
-    label_ind = dic.label_indices
+    token_ind = indices.token_indices
+    label_ind = indices.label_indices
 
     instances = []
     label_seqs = []
@@ -337,7 +336,7 @@ def load_wsj_data(path, update_token=True, update_label=True, lowercase=True, no
             label_seqs.append(labs)
             ins_cnt += 1
 
-    return instances, label_seqs, dic
+    return instances, label_seqs, indices
 
 
 """for CoNLL-2003 NER
@@ -350,12 +349,12 @@ example of input data:
   call NN I-NP O
 """
 def load_conll2003_data(path, update_token=True, update_label=True, lowercase=True, normalize_digits=True,
-                        dic=None, refer_vocab=set(), limit=-1):
+                        indices=None, refer_vocab=set(), limit=-1):
 
-    if not dic:
-        dic = lattice.IndicesPair()
-    token_ind = dic.token_indices
-    label_ind = dic.label_indices
+    if not indices:
+        indices = lattice.IndicesPair()
+    token_ind = indices.token_indices
+    label_ind = indices.label_indices
 
     instances = []
     label_seqs = []
@@ -413,7 +412,7 @@ def load_conll2003_data(path, update_token=True, update_label=True, lowercase=Tr
             label_seqs.append(convert_label_sequence(org_labs, label_ind, update_label))
             ins_cnt += 1
 
-    return instances, label_seqs, dic
+    return instances, label_seqs, indices
 
     
 def convert_label_sequence(org_labs, label_ind, update_label):
@@ -541,46 +540,46 @@ def get_label_BIES(index, last, cate=None):
 
 
 def load_data(data_format, path, read_pos=True, update_token=True, update_label=True, subpos_depth=-1,
-               lowercase=False, normalize_digits=False, dic=None, refer_vocab=set(), limit=-1):
+               lowercase=False, normalize_digits=False, indices=None, refer_vocab=set(), limit=-1):
     pos_seqs = []
 
     if data_format == 'bccwj_ws_lattice':
-        instances, label_seqs, pos_seqs, dic = load_bccwj_data_for_lattice_ma(
+        instances, label_seqs, pos_seqs, indices = load_bccwj_data_for_lattice_ma(
             path, read_pos, update_token=update_token, subpos_depth=subpos_depth, 
-            dic=dic, limit=limit)
+            indices=indices, limit=limit)
 
     elif data_format == 'bccwj_ws' or data_format == 'bccwj_pos':
         do_segmentation = True if data_format == 'bccwj_ws' else False
 
-        instances, label_seqs, dic = load_bccwj_data(
+        instances, label_seqs, indices = load_bccwj_data(
             path, update_token=update_token, update_label=update_label, subpos_depth=subpos_depth, 
-            dic=dic, refer_vocab=refer_vocab, do_segmentation=do_segmentation,
+            indices=indices, refer_vocab=refer_vocab, do_segmentation=do_segmentation,
             limit=limit)
 
     elif data_format == 'ws':
-        instances, label_seqs, dic = load_ws_data(
+        instances, label_seqs, indices = load_ws_data(
             path, update_token=update_token, update_label=update_label,
-            dic=dic, refer_vocab=refer_vocab, limit=limit)
+            indices=indices, refer_vocab=refer_vocab, limit=limit)
 
     elif data_format == 'wsj':
-        instances, label_seqs, dic = load_wsj_data(
+        instances, label_seqs, indices = load_wsj_data(
             path, update_token=update_token, update_label=update_label, 
             lowercase=lowercase, normalize_digits=normalize_digits, 
-            dic=dic, refer_vocab=refer_vocab, limit=limit)
+            indices=indices, refer_vocab=refer_vocab, limit=limit)
 
     elif data_format == 'conll2003':
-        instances, label_seqs, dic = load_conll2003_data(
+        instances, label_seqs, indices = load_conll2003_data(
             path, update_token=update_token, update_label=update_label, 
             lowercase=lowercase, normalize_digits=normalize_digits, 
-            dic=dic, refer_vocab=refer_vocab, limit=limit)
+            indices=indices, refer_vocab=refer_vocab, limit=limit)
     else:
         print("invalid data format")
         sys.exit()
 
-    return instances, label_seqs, pos_seqs, dic
+    return instances, label_seqs, pos_seqs, indices
 
 
-def load_pickled_data(filename_wo_ext, load_dic=True):
+def load_pickled_data(filename_wo_ext, load_indices=True):
     dump_path = filename_wo_ext + '.pickle'
 
     with open(dump_path, 'rb') as f:
@@ -589,16 +588,15 @@ def load_pickled_data(filename_wo_ext, load_dic=True):
         instances = obj[0]
         labels = obj[1]
         pos_labels = obj[2]
-        dic = obj[3] if load_dic else None 
 
-    return instances, labels, pos_labels, dic
+    return instances, labels, pos_labels
 
 
-def dump_pickled_data(filename_wo_ext, instances, labels, pos_labels=None, dic=None):
+def dump_pickled_data(filename_wo_ext, instances, labels, pos_labels=None):
     dump_path = filename_wo_ext + '.pickle'
 
     with open(dump_path, 'wb') as f:
-        obj = (instances, labels, pos_labels, dic)
+        obj = (instances, labels, pos_labels)
         pickle.dump(obj, f)
         print('dump pickled data:', dump_path)
 
@@ -606,18 +604,18 @@ def dump_pickled_data(filename_wo_ext, instances, labels, pos_labels=None, dic=N
 def read_map(path):
     if path.endswith('bin'):
         with open(path, 'rb') as f:
-            dic = pickle.load(f)
+            indices = pickle.load(f)
     else:
-        dic = {}
+        indices = {}
         with open(path, 'r') as f:
             for line in f:
                 arr = line.strip().split('\t')
                 if len(arr) < 2:
                     continue
 
-                dic.update({arr[0]:arr[1]})
+                indices.update({arr[0]:arr[1]})
 
-    return dic
+    return indices
 
 
 def write_map(dic, path):
@@ -629,137 +627,6 @@ def write_map(dic, path):
             for token, index in dic.items():
                 f.write('%s\t%d\n' % (token, index))
 
-
-def read_param_file(path):
-    hparams = {}
-
-    with open(path, 'r') as f:
-        for line in f:
-            arr = line.strip().split(' ')
-            if len(arr) < 2:
-                continue
-            
-            hparams.update({arr[0]:arr[1]})
-
-    return hparams
-
-
-def load_model_from_hparams(hparams, model_path='', dic=None, token_indices_updated=None, 
-                           embed_model=None, gpu=-1):
-    # if not 'joint_type' in hparams:
-    #     hparams['joint_type'] = None
-
-    if not 'embed_dimension' in hparams:
-        hparams['embed_dimension'] = 300
-    else:
-        hparams['embed_dimension'] = int(hparams['embed_dimension'])
-
-    if not 'rnn_layers' in hparams:
-        hparams['rnn_layers'] = 1
-    else:
-        hparams['rnn_layers'] = int(hparams['rnn_layers'])
-
-    if not 'rnn_hidden_units' in hparams:
-        hparams['rnn_hidden_units'] = 500
-    else:
-        hparams['rnn_hidden_units'] = int(hparams['rnn_hidden_units'])
-
-    if not 'rnn_unit_type' in hparams:
-        hparams['rnn_unit_type'] = 'lstm'
-
-    if not 'rnn_bidirection' in hparams:
-        hparams['rnn_bidirection'] = False
-    else:
-        hparams['rnn_bidirection'] = str(hparams['rnn_bidirection']).lower() == 'true'
-
-    if not 'inference_layer' in hparams:
-        hparams['inference_layer'] = 'softmax'
-
-    if not 'linear_activation' in hparams:
-        hparams['linear_activation'] = 'identity'
-
-    if not 'use_dict_feature' in hparams:
-        hparams['use_dict_feature'] = False
-
-    if not 'dropout' in hparams:
-        hparams['dropout'] = 0
-    else:
-        hparams['dropout'] = int(hparams['dropout'])
-    
-    if not embed_model and 'embed_model_path' in hparams:
-        #TODO token2id_update != None の場合の pre-trained embedding の拡張は未対応
-        dic.create_id2token()
-        embed_model = emb.read_model(hparams['embed_model_path'])
-        embed = emb.construct_lookup_table(dic.id2token, embed_model, gpu=gpu)
-        embed_dimension = embed.W.shape[1]
-    else:
-        embed = None
-
-    if hparams['use_dict_feature']:
-        feat_extractor = features.DictionaryFeatureExtractor(dic, gpu=gpu)
-    else:
-        feat_extractor = None
-
-    if not dic:
-        token2id = read_map(token2id_path)
-        label2id = read_map(label2id_path)
-        dic = lattice.IndicesPair(
-            lattice.TokenIndices(token2id), 
-            lattice.TokenIndices(label2id))
-    dic.create_id2label()
-
-    # if hparams['joint_type'] == 'lattice':
-    #     rnn = models_joint.RNN_LatticeCRF(
-    #         hparams['rnn_layers'], len(dic.token_indices), hparams['embed_dimension'], 
-    #         hparams['rnn_hidden_units'], len(dic.label_indices), dic, dropout=hparams['dropout'], 
-    #         rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
-    #         linear_activation=hparams['linear_activation'], init_embed=embed, 
-    #         feat_extractor=feat_extractor, gpu=gpu)
-
-    # elif hparams['joint_type'] == 'dual_rnn':
-    #     pass
-
-    # elif hparams['joint_type'] == 'single_rnn':
-    #     rnn = models_joint.RNN_CRF(
-    #         hparams['rnn_layers'], len(dic.token_indices), hparams['embed_dimension'], 
-    #         hparams['rnn_hidden_units'], len(dic.label_indices), dropout=hparams['dropout'], 
-    #         rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
-    #         linear_activation=hparams['linear_activation'], init_embed=embed, 
-    #         feat_extractor=feat_extractor, gpu=gpu)
-
-    # else:
-
-    if hparams['inference_layer'] == 'crf':
-        rnn = models.RNN_CRF(
-            hparams['rnn_layers'], len(dic.token_indices), hparams['embed_dimension'], 
-            hparams['rnn_hidden_units'], len(dic.label_indices), dropout=hparams['dropout'], 
-            rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
-            linear_activation=hparams['linear_activation'], init_embed=embed, 
-            feat_extractor=feat_extractor, gpu=gpu)
-    else:
-        rnn = models.RNN(
-            hparams['rnn_layers'], len(token_indices), hparams['embed_dimension'], hparams['rnn_hidden_units'], 
-            len(label_indices), dropout=hparams['dropout'], rnn_unit_type=hparams['rnn_unit_type'], 
-            rnn_bidirection=hparams['rnn_bidirection'], linear_activation=hparams['linear_activation'], 
-            init_embed=embed, feat_extractor=feat_extractor, gpu=gpu)
-
-    # if hparams['joint_type']:
-    #     model = models_joint.JointMorphologicalAnalyzer(rnn, dic.id2label)
-    # else:
-
-    model = models.SequenceTagger(rnn, dic)
-
-    if model_path:
-        chainer.serializers.load_npz(model_path, model)
-
-    if token_indices_updated:
-        model.grow_lookup_table(token_indices_updated, gpu=gpu)
-
-    if gpu >= 0:
-        model.to_gpu()
-
-    return model
-    
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

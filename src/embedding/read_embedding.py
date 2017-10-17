@@ -29,9 +29,10 @@ def read_model(model_path):
     return model
 
 
+# unused
 def construct_lookup_table(id2token, model, gpu=-1):
     n_vocab = len(id2token)
-    dim = model.wv.syn0[0].shape[0] #model.wv.vector_size
+    dim = model.wv.syn0[0].shape[0]
     initialW = initializers.normal.Normal(1.0)
     weight = []
 

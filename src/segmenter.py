@@ -15,12 +15,13 @@ from chainer import cuda
 
 import data
 import lattice
+import models
 import embedding.read_embedding as emb
 from tools import conlleval
 
 
 LOG_DIR = 'log'
-MODEL_DIR = 'models/nn'
+MODEL_DIR = 'models/main'
 OUT_DIR = 'out'
 
 
@@ -42,40 +43,49 @@ def batch_generator(instances, label_seqs, label_seqs2=None, batchsize=100, shuf
     raise StopIteration
 
 
-def decode(model, instances, batchsize=100, seg=False, stream=sys.stdout, xp=np):
-    model.predictor.train = False
-    model.compute_fscore = False
+def decode(tagger, instances, batchsize=100, decode_type='tag', stream=sys.stdout, xp=np):
+    tagger.predictor.train = False
+    tagger.compute_fscore = False
 
     len_data = len(instances)
     for i in range(0, len_data, batchsize):
         i_max = min(i + batchsize, len_data)
         xs = [xp.asarray(instances[i], dtype=np.int32) for i in range(i, i_max)]
-        decode_batch(xs, model, stream)
+        decode_batch(xs, tagger, decode_type=decode_type, stream=stream)
 
 
-def decode_batch(xs, model, seg=False, stream=sys.stdout):
-    ys = model.predictor.decode(xs)
+def decode_batch(xs, tagger, decode_type='tag', stream=sys.stdout):
+    ys = tagger.predictor.decode(xs)
 
     for x, y in zip(xs, ys):
-        x_str = [model.indices.get_token(int(xi)) for xi in x]
-        y_str = [model.indices.get_label(int(yi)) for yi in y]
+        x_str = [tagger.indices.get_token(int(xi)) for xi in x]
+        y_str = [tagger.indices.get_label(int(yi)) for yi in y]
 
-        if seg:
-            res = ['{}{}'.format(' ' if (yi_str == 'B' or yi_str == 'S') else '', 
-                                 xi_str) for xi_str, yi_str in zip(x_str, y_str)]
-            res = ''.join(res).lstrip()
-
-        else:
+        if decode_type == 'tag':
             res = ['{}/{}'.format(xi_str, yi_str) for xi_str, yi_str in zip(x_str, y_str)]
             res = ' '.join(res)
+
+        elif decode_type == 'seg':
+            res = ['{}{}'.format(xi_str, ' ' if (yi_str == 'E' or yi_str == 'S') else '') for xi_str, yi_str in zip(x_str, y_str)]
+            res = ''.join(res).rstrip()
+
+        elif decode_type == 'seg_tag':
+            res = ['{}{}'.format(
+                xi_str, 
+                ('/'+yi_str[2:]+' ') if (yi_str.startswith('E-') or yi_str.startswith('S-')) else ''
+            ) for xi_str, yi_str in zip(x_str, y_str)]
+            res = ''.join(res).rstrip()
+
+        else:
+            print('Error: Invalid decode type')
 
         print(res, file=stream)
 
 
-def evaluate(model, instances, slab_seqs, plab_seqs=None, batchsize=100, xp=np):
+def evaluate(tagger, instances, slab_seqs, plab_seqs=None, batchsize=100, xp=np):
     eval_pos = plab_seqs != None
 
-    evaluator = model.copy()          # to use different state
+    evaluator = tagger.copy()          # to use different state
     evaluator.predictor.train = False # dropout does nothing
     evaluator.compute_fscore = True
 
@@ -156,7 +166,7 @@ def print_results(total_loss, ave_loss, count, c, acc, overall, acc2=None, overa
 
 
 def parse_arguments():
-    #bcedfgilmnoprstvx
+    #bcedfgilmnopqrstvx
 
     parser = argparse.ArgumentParser()
 
@@ -266,7 +276,7 @@ def parse_arguments():
                         help='Normalize digits by the same symbol when use English data')
     
     # other options
-    parser.add_argument('--nolog', '-n', action='store_true',
+    parser.add_argument('--quiet', '-q', action='store_true',
                         help='Do not output log file and serialized model file')
 
     #parser.add_argument('--limit', type=int, default=-1, help='Limit the number of samples for quick tests')
@@ -281,8 +291,10 @@ def parse_arguments():
         args.lrdecay_start = int(array[0])
         args.lrdecay_width = int(array[1])
         args.lrdecay_rate = float(array[2])
-    parser.add_argument('linear_activation')
-    args.linear_activation = 'identity'
+    # parser.add_argument('linear_activation')
+    # args.linear_activation = 'identity'
+    if args.execute_mode == 'interactive':
+        args.quiet = True
 
     for k, v in args.__dict__.items():
         print('# {}={}'.format(k, v))
@@ -291,14 +303,81 @@ def parse_arguments():
     return args
 
 
+def load_model(model_path, use_gpu=False):
+    array = model_path.split('_i')
+    indices_path = '{}.s2i'.format(array[0])
+    hparam_path = '{}.hyp'.format(array[0])
+    param_path = model_path
+    
+    with open(indices_path, 'rb') as f:
+        indices = pickle.load(f)
+    print('load indices:', indices_path)
+    print('vocab size:', len(indices.token_indices))
+
+    hparams = {}
+    with open(hparam_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('#'):
+                continue
+
+            kv = line.split('=')
+            key = kv[0]
+            val = kv[1]
+
+            if (key == 'embed_dimension' or
+                key == 'rnn_layers' or
+                key == 'rnn_hidden_units' or
+                key == 'subpos_depth'
+            ):
+                val = int(val)
+
+            elif key == 'dropout':
+                val = float(val)
+
+            elif (key == 'rnn_bidirection' or
+                  key == 'use_dict_feature' or
+                  key == 'lowercase' or
+                  key == 'normalize_digits'
+            ):
+                val = (val.lower() == 'true')
+
+            hparams[key] = val
+
+    print('load hyperparameters:', hparam_path)
+    print('init model from hyperparameters')
+    tagger = models.init_tagger(indices, hparams, use_gpu=use_gpu)
+    chainer.serializers.load_npz(model_path, tagger)
+    print('load model:', model_path)
+
+    return indices, hparams, tagger
+
+
+def init_hyperparameters(args):
+    hparams = {
+        #'joint_type' : args.joint_type,
+        'embed_dimension' : args.embed_dimension,
+        'rnn_layers' : args.rnn_layers,
+        'rnn_hidden_units' : args.rnn_hidden_units,
+        'rnn_unit_type' : args.rnn_unit_type,
+        'rnn_bidirection' : args.rnn_bidirection,
+        'inference_layer' : args.inference_layer,
+        'dropout' : args.dropout,
+        'use_dict_feature' : args.use_dict_feature,
+        'data_format' : args.data_format,
+        'subpos_depth' : args.subpos_depth,
+        'lowercase' : args.lowercase,
+        'normalize_digits' : args.normalize_digits,
+    }
+
+    return hparams
+
+
 class Trainer(object):
     def __init__(self, args):
         self.args = args
         self.start_time = datetime.now().strftime('%Y%m%d_%H%M')
         self.logger = None
-        self.trained = None
-        self.trained_t = None
-        self.trained_p = None
         self.train = None
         self.train_t = None
         self.train_p = None
@@ -308,129 +387,102 @@ class Trainer(object):
         self.test = None
         self.test_t = None
         self.test_p = None
-        self.dic = None
+        self.indices = None
         self.hparams = None
-        self.token_indices_org = None
-        self.model = None
+        self.tagger = None
         self.optimizer = None
+        self.decode_type = None
 
         print('INFO: start: {}\n'.format(self.start_time))
-        if not self.args.nolog:
+        if not self.args.quiet:
             self.logger = open('{}/{}.log'.format(LOG_DIR, self.start_time), 'a')
-            self.logger.write('{}\n'.format(args))
+            for k, v in self.args.__dict__.items():
+                self.logger.write('INFO: arg {}={}\n'.format(k, v))
         
     def log(self, message):
-        if not self.args.nolog:
+        if not self.args.quiet:
             self.logger.write(message)
 
 
-    def prepare_gpu(self):
-        if self.args.gpu >= 0:
-            # Make the specified GPU current
-            cuda.get_device_from_id(self.args.gpu).use()
-            chainer.config.cudnn_deterministic = self.args.use_cudnn
+    def set_hparams(self, hparams):
+        self.hparams = hparams
+
+        if hparams['data_format'] == 'ws':
+            self.decode_type = 'seg'
+
+        elif hparams['data_format'] == 'bccwj_ws':
+            if hparams['subpos_depth'] == 0:
+                self.decode_type = 'seg'
+
+            else:
+                self.decode_type = 'seg_tag'
+
+        else:
+            self.decode_type == 'tag'
 
 
-    def load_data(self, dic=None, embed_model=None):
+    def load_data_for_training(self, indices=None, embed_model=None):
         args = self.args
-
-        refer_path   = '{}/{}'.format(args.path_prefix, args.label_reference_data)
-        trained_path = '{}/{}'.format(args.path_prefix, args.pretrain_data)
-        train_path   = '{}/{}'.format(args.path_prefix, args.train_data)
-        val_path     = '{}/{}'.format(args.path_prefix, (args.validation_data if args.validation_data else ''))
-        test_path    = '{}/{}'.format(args.path_prefix, (args.test_data if args.test_data else ''))
+        hparams = self.hparams
+        prefix = args.path_prefix + '/' if args.path_prefix else ''
+            
+        refer_path   = prefix + args.label_reference_data
+        train_path   = prefix + args.train_data
+        val_path     = prefix + (args.validation_data if args.validation_data else '')
         refer_vocab = embed_model.wv if embed_model else set()
-        hparams = {}
-
-        token_indices_org = None
-
-        read_pos = args.subpos_depth != 0
-        limit = -1 #args.limit if args.limit > 0 else -1
+        read_pos = hparams['subpos_depth'] != 0
 
         if args.label_reference_data:
-            _, _, _, dic = data.load_data(
-                args.data_format, refer_path, read_pos=read_pos, update_token=False,
-                subpos_depth=args.subpos_depth, 
-                lowercase=args.lowercase, normalize_digits=args.normalize_digits,
-                dic=dic, limit=limit)
+            _, _, _, indices = data.load_data(
+                hparams['data_format'], refer_path, read_pos=read_pos, update_token=False,
+                subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
+                normalize_digits=hparams['normalize_digits'], indices=indices)
             print('load label set from reference data')
 
-        if args.pretrain_data:
-            if args.pretrain_data.endswith('pickle'):
-                name, ext = os.path.splitext('{}/{}'.format(args.path_prefix, args.pretrain_data))
-                trained, trained_t, trained_p, dic = data.load_pickled_data(name)
-            else:
-                trained, trained_t, trained_p, dic = data.load_data(
-                    args.data_format, trained_path, read_pos=read_pos, subpos_depth=args.subpos_depth, 
-                    lowercase=args.lowercase, normalize_digits=args.normalize_digits,
-                    dic=dic, refer_vocab=refer_vocab, limit=limit)
-
-            token_indices_org = copy.deepcopy(dic.token_indices)
-            print('vocab size:', len(dic.token_indices))
-        else:
-            trained = []
-            trained_t = []
-            trained_p = []
-
         if args.train_data.endswith('pickle'):
-            name, ext = os.path.splitext('{}/{}'.format(args.path_prefix, args.train_data))
-            train, train_t, train_p, dic = data.load_pickled_data(name)
+            name, ext = os.path.splitext(prefix + args.train_data)
+            train, train_t, train_p = data.load_pickled_data(name)
 
-        else:
-            train, train_t, train_p, dic = data.load_data(
-                args.data_format, train_path, read_pos=read_pos, subpos_depth=args.subpos_depth, 
-                lowercase=args.lowercase, normalize_digits=args.normalize_digits,
-                dic=dic, refer_vocab=refer_vocab, limit=limit)
+        elif args.train_data:
+            train, train_t, train_p, indices = data.load_data(
+                hparams['data_format'], train_path, read_pos=read_pos,
+                subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
+                normalize_digits=hparams['normalize_digits'], indices=indices, refer_vocab=refer_vocab)
 
             if self.args.dump_train_data:
-                name, ext = os.path.splitext('{}/{}'.format(self.args.path_prefix, self.args.train_data))
-                data.dump_pickled_data(name, train, train_t, train_p, dic)
+                name, ext = os.path.splitext(prefix + self.args.train_data)
+                data.dump_pickled_data(name, train, train_t, train_p)
                 print('pickled training data')
 
-        print('vocab size:', len(dic.token_indices))
-        if not token_indices_org:
-            token_indices_org = dic.token_indices
+        else:
+            train, train_t, train_p = [], [], []
+        print('vocab size:', len(indices.token_indices))
 
         if args.validation_data:
-            if args.validation_data.endswith('pickle'):
-                name, ext = os.path.splitext('{}/{}'.format(args.path_prefix, args.validation_data))
-                pass
-            else:
-                val, val_t, val_p, dic = data.load_data(
-                    args.data_format, val_path, read_pos=read_pos, update_token=False, update_label=False, 
-                    subpos_depth=args.subpos_depth, 
-                    lowercase=args.lowercase, normalize_digits=args.normalize_digits,
-                    dic=dic, refer_vocab=refer_vocab, limit=limit)
+            # indices can be updated if embed_model are used
+            val, val_t, val_p, indices = data.load_data(
+                hparams['data_format'], val_path, read_pos=read_pos, update_token=False, update_label=False,
+                subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
+                normalize_digits=hparams['normalize_digits'], indices=indices, refer_vocab=refer_vocab)
 
-            print('vocab size:', len(dic.token_indices))        
+            print('vocab size:', len(indices.token_indices))        
         else:
-            val = []
-            val_t = []
-            val_p = []
-            
-        if args.test_data:
-            if args.test_data.endswith('pickle'):
-                name, ext = os.path.splitext('{}/{}'.format(args.path_prefix, args.test_data))
-                pass
-            else:
-                test, test_t, test_p, dic = data.load_data(
-                    args.data_format, test_path, read_pos=read_pos, update_token=False, update_label=False,
-                    subpos_depth=args.subpos_depth, 
-                    lowercase=args.lowercase, normalize_digits=args.normalize_digits,
-                    dic=dic, refer_vocab=refer_vocab, limit=limit)
-            print('vocab size:', len(dic.token_indices))
-        else:
-            test = []
-            test_t = []
-            test_p = []
+            val, val_t, val_p = [], [], []
+        
+        self.train = train
+        self.train_t = train_t
+        self.train_p = train_p
+        self.val = val
+        self.val_t = val_t
+        self.val_p = val_p
+        self.indices = indices
 
         n_train = len(train)
-        t2i_tmp = list(dic.token_indices.token2id.items())
-        id2label = {v:k for k,v in dic.label_indices.token2id.items()}
+        t2i_tmp = list(indices.token_indices.token2id.items())
+        id2label = {v:k for k,v in indices.label_indices.token2id.items()}
         if train_p:
-            id2pos = {v:k for k,v in dic.pos_indices.token2id.items()}
-
-        print('vocab =', len(dic.token_indices))
+            id2pos = {v:k for k,v in indices.pos_indices.token2id.items()}
+        print('vocab =', len(indices.token_indices))
         print('data length:', len(train))
         print()
         print('train:', train[:3], '...', train[n_train-3:])
@@ -443,66 +495,33 @@ class Trainer(object):
         if train_p:
             print('poss:', id2pos)
         
-        self.log('INFO: vocab = %d\n' % len(dic.token_indices))
+        self.log('INFO: vocab = %d\n' % len(indices.token_indices))
         self.log('INFO: data length: train=%d val=%d\n' % (len(train), len(val)))
 
-        self.trained = trained
-        self.trained_t = trained_t
-        self.trained_p = trained_p
-        self.train = train
-        self.train_t = train_t
-        self.train_p = train_p
-        self.val = val
-        self.val_t = val_t
-        self.val_p = val_p
+
+    def load_data_for_test(self, indices=None, embed_model=None):
+        args = self.args
+        hparams = self.hparams
+        test_path = (args.path_prefix + '/' if args.path_prefix else '') + args.test_data
+        refer_vocab = embed_model.wv if embed_model else set()
+        read_pos = hparams['subpos_depth'] != 0
+            
+        if args.test_data:
+            test, test_t, test_p, indices = data.load_data(
+                hparams['data_format'], test_path, read_pos=read_pos, update_token=False, update_label=False,
+                subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
+                normalize_digits=hparams['normalize_digits'], indices=indices, refer_vocab=refer_vocab)
+            print('vocab size:', len(indices.token_indices))
+        else:
+            test, test_t, test_p = [], [], []
+
         self.test = test
         self.test_t = test_t
         self.test_p = test_p
-        self.dic = dic
-        self.hparams = hparams
-        self.token_indices_org = token_indices_org
-        self.segment = (args.data_format == 'ws' or
-                        (args.data_format == 'bccwj_ws' and args.subpos_depth == 0))
+        self.indices = indices
 
 
-    def prepare_model_and_hparameters(self, embed_model=None):
-        # parameter
-        if not self.hparams:
-            self.hparams = {#'joint_type' : self.args.joint_type,
-                           'embed_dimension' : self.args.embed_dimension,
-                           'rnn_layers' : self.args.rnn_layers,
-                           'rnn_hidden_units' : self.args.rnn_hidden_units,
-                           'rnn_bidirection' : self.args.rnn_bidirection,
-                           'inference_layer' : self.args.inference_layer,
-                           'linear_activation' : self.args.linear_activation,
-                           'use_dict_feature' : self.args.use_dict_feature,
-                           'dropout' : self.args.dropout,
-            }
-        if self.args.embed_model_path:
-            self.hparams.update({'embed_model_path' : self.args.embed_model_path})
-
-        # model
-        grow_lookup = self.args.execute_mode == 'train' and len(self.dic.token_indices) > len(self.token_indices_org)
-        if grow_lookup:
-            ti_updated=self.dic.token_indices
-            self.dic.token_indices = self.token_indices_org
-        else:
-            ti_updated=None
-
-        model = data.load_model_from_hparams(
-            self.hparams, model_path=self.args.model_to_load, dic=self.dic, 
-            token_indices_updated=ti_updated, embed_model=embed_model, gpu=self.args.gpu)
-        model.compute_fscore = True
-
-        if grow_lookup:
-            self.dic.token_indices = ti_updated
-
-        self.model = model
-
-        return self.model
-
-
-    def setup_optimizer(self):
+    def setup_optimizer(self, tagger):
         if self.args.optimizer == 'sgd':
             if self.args.momentum <= 0:
                 optimizer = chainer.optimizers.SGD(lr=self.args.learning_rate)
@@ -514,7 +533,8 @@ class Trainer(object):
         elif self.args.optimizer == 'adagrad':
             optimizer = chainer.optimizers.AdaGrad(lr=self.args.learning_rate)
 
-        optimizer.setup(self.model)
+        self.tagger = tagger
+        optimizer.setup(self.tagger)
         optimizer.add_hook(chainer.optimizer.GradientClipping(self.args.gradclip))
         if self.args.weightdecay > 0:
             optimizer.add_hook(chainer.optimizer.WeightDecay(self.args.weightdecay))
@@ -524,43 +544,12 @@ class Trainer(object):
         return self.optimizer
 
 
-    # unused
-    def write_params_and_indices(self):
-        if not self.args.nolog:
-            self.hparams.update({
-                'token2id_path' : 'nn_model/vocab_' + self.start_time + '.t2i.txt',
-                'label2id_path' : 'nn_model/vocab_' + self.start_time + '.l2i.txt',
-                'model_date': self.start_time
-            })
-            data.write_param_file(self.hparams, 'nn_model/param_' + self.start_time + '.txt')
-            data.write_map(self.dic.token_indices.token2id, self.hparams['token2id_path'])
-            data.write_map(self.dic.label_indices.token2id, self.hparams['label2id_path'])
-
-
-    def run(self):
-        if self.args.execute_mode == 'train':
-            self.run_training()
-
-        elif self.args.execute_mode == 'eval':
-            self.run_evaluation()
-
-        elif self.args.execute_mode == 'decode':
-            self.run_decoding()
-
-        elif self.args.execute_mode == 'interactive':
-            self.run_interactive_decoding()
-
-        else:
-            print('Invalid execute mode: {}'.format(self.args.execute_mode))
-            sys.exit()
-
-
     def run_evaluation(self):
         xp = cuda.cupy if args.gpu >= 0 else np
 
         print('<test result>')
         te_stat, te_res = evaluate(
-            self.model, self.test, self.test_t, batchsize=self.args.batchsize, xp=xp)
+            self.tagger, self.test, self.test_t, batchsize=self.args.batchsize, xp=xp)
         print()
 
         time = datetime.now().strftime('%Y%m%d_%H%M')
@@ -571,14 +560,14 @@ class Trainer(object):
     def run_decoding(self):
         xp = cuda.cupy if args.gpu >= 0 else np
 
-        raw_path = '{}/{}'.format(self.args.path_prefix, self.args.raw_data)
-        if self.segment:
-            instances = data.load_raw_text_for_segmentation(raw_path, self.dic)
+        raw_path = (args.path_prefix + '/' if args.path_prefix else '') + self.args.raw_data
+        if self.decode_type == 'tag':
+            instances = data.load_raw_text_for_tagging(raw_path)
         else:
-            instances = data.load_raw_text(raw_path)
+            instances = data.load_raw_text_for_segmentation(raw_path)
 
         stream = open(self.args.output_path, 'w') if self.args.output_path else sys.stdout
-        decode(self.model, instances, batchsize=self.args.batchsize, seg=self.segment, stream=stream, xp=xp)
+        decode(self.tagger, instances, batchsize=self.args.batchsize, seg=self.decode_type, stream=stream, xp=xp)
 
         if self.args.output_path:
             stream.close()
@@ -595,20 +584,31 @@ class Trainer(object):
             elif line == 'q':
                 break
 
-            if self.segment:
-                ins = [dic.get_token_id(char) for char in line]
-            else:
+            if self.decode_type == 'tag':
                 array = line.split(' ')
-                ins = [self.model.dic.get_token_id(word) for word in array]
+                ins = [self.tagger.indices.get_token_id(word) for word in array]
+            else:
+                ins = [indices.get_token_id(char) for char in line]
 
             xs = [xp.asarray(ins, dtype=np.int32)]
-            decode_batch(xs, self.model, seg=self.segment)
+            decode_batch(xs, self.tagger, decode_type=self.decode_type)
             print()
 
 
     def run_training(self):
-        xp = cuda.cupy if args.gpu >= 0 else np
+        hparam_path = '{}/{}.hyp'.format(MODEL_DIR, self.start_time)
+        with open(hparam_path, 'w') as f:
+            for key, val in hparams.items():
+                line='{}={}'.format(key, val)
+                print(line, file=f)
+        print('save hyperparameters:', hparam_path)
 
+        indices_path = '{}/{}.s2i'.format(MODEL_DIR, self.start_time)
+        with open(indices_path, 'wb') as f:
+            pickle.dump(self.indices, f)
+        print('save string2index table:', indices_path)
+
+        xp = cuda.cupy if args.gpu >= 0 else np
         n_train = len(self.train)
         n_iter_report = self.args.iteration_to_report
         n_iter = 0
@@ -624,7 +624,7 @@ class Trainer(object):
                 if (e - lrdecay_start) % lrdecay_width == 0:
                     lr_tmp = optimizer.lr
                     optimizer.lr = optimizer.lr * lrdecay_rate
-                    if not self.args.nolog:
+                    if not self.args.quiet:
                         self.logger.write('learning decay: %f -> %f' % (lr_tmp, optimizer.lr))
                     print('learning decay: %f -> %f' % (lr_tmp, optimizer.lr))
 
@@ -638,7 +638,7 @@ class Trainer(object):
                                           batchsize=self.args.batchsize, shuffle=True, xp=xp):
 
                 t0 = datetime.now()
-                loss, ecounts = self.model(xs, ts, train=True)
+                loss, ecounts = self.tagger(xs, ts, train=True)
                 t1 = datetime.now()
 
                 num_tokens += sum([len(x) for x in xs])
@@ -675,7 +675,7 @@ class Trainer(object):
                     print_results(total_loss, ave_loss, count, c, acc, overall)
                     print()
 
-                    if not self.args.nolog:
+                    if not self.args.quiet:
                         t_stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
                             count, c.token_counter, c.found_correct, c.found_guessed)
                         t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
@@ -690,10 +690,10 @@ class Trainer(object):
                     if self.args.validation_data:
                         print('<validation result>')
                         v_stat, v_res = evaluate(
-                            self.model, self.val, self.val_t, batchsize=self.args.batchsize, xp=xp)
+                            self.tagger, self.val, self.val_t, batchsize=self.args.batchsize, xp=xp)
                         print()
 
-                        if not self.args.nolog:
+                        if not self.args.quiet:
                             self.logger.write('INFO: valid - %s\n' % v_stat)
                             if n_iter == 1:
                                 self.logger.write(
@@ -701,12 +701,11 @@ class Trainer(object):
                             self.logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
 
                     # Save the model
-                    #mdl_path = '{}/nn_model/nn_{}_i{}.mdl'.format(HOME_DIR, self.start_time, now_e)
-                    mdl_path = '{}/nn_{}_i{}.mdl'.format(MODEL_DIR, self.start_time, now_e)
-                    if not self.args.nolog:
+                    mdl_path = '{}/{}_i{}.npz'.format(MODEL_DIR, self.start_time, now_e)
+                    if not self.args.quiet:
                         print('save the model: %s\n' % mdl_path)
                         self.logger.write('INFO: save the model: %s\n' % mdl_path)
-                        serializers.save_npz(mdl_path, self.model)
+                        serializers.save_npz(mdl_path, self.tagger)
         
                     # Reset counters
                     count = 0
@@ -714,7 +713,7 @@ class Trainer(object):
                     total_loss = 0
                     total_ecounts = conlleval.EvalCounts()
 
-                    if not self.args.nolog:
+                    if not self.args.quiet:
                         self.logger.close() # 一度保存しておく
                         self.logger = open('{}/{}.log'.format(LOG_DIR, self.start_time), 'a')
 
@@ -751,11 +750,11 @@ class Trainer4JointMA(Trainer):
             for xs, ts_seg, ts_pos in batch_generator(
                     self.train, self.train_t, self.train_p, self.args.batchsize, shuffle=False, xp=xp):
 
-                #self.model.predictor.lattice_crf.debug = True
-                #self.dic.chunk_trie.debug = True
+                #self.tagger.predictor.lattice_crf.debug = True
+                #self.indices.chunk_trie.debug = True
                 
                 t0 = datetime.now()
-                loss, ecounts_seg, ecounts_pos = self.model(xs, ts_seg, ts_pos, train=True)
+                loss, ecounts_seg, ecounts_pos = self.tagger(xs, ts_seg, ts_pos, train=True)
                 t1 = datetime.now()
 
                 num_tokens += sum([len(x) for x in xs])
@@ -802,7 +801,7 @@ class Trainer4JointMA(Trainer):
                         total_loss, ave_loss, count, seg_c, seg_acc, seg_overall, pos_acc, pos_overall)
                     print()
 
-                    if not self.args.nolog:
+                    if not self.args.quiet:
                         t_stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
                             count, seg_c.token_counter, seg_c.found_correct, seg_c.found_guessed)
                         t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f%.4f\t%.4f' % (
@@ -819,21 +818,21 @@ class Trainer4JointMA(Trainer):
                     if self.args.validation_data:
                         print('<validation result>')
                         v_stat, v_res = evaluate(
-                            self.model, self.val, self.val_t, self.val_p, self.args.batchsize, xp=xp)
+                            self.tagger, self.val, self.val_t, self.val_p, self.args.batchsize, xp=xp)
                         print()
 
-                        if not self.args.nolog:
+                        if not self.args.quiet:
                             self.logger.write('INFO: valid - %s\n' % v_stat)
                             if n_iter == 1:
                                 self.logger.write('data\titer\tep\t\s-acc\ts-prec\ts-rec\ts-fb1\t\p-acc\tp-prec\tp-rec\tp-fb1\tloss\taloss\n')
                             self.logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
 
                     # Save the model
-                    mdl_path = 'nn_model/rnn_%s_i%s.mdl' % (self.start_time, now_e)
-                    if not self.args.nolog:
+                    mdl_path = '{}/{}_i{}.npz'.format(MODEL_DIR, self.start_time, now_e)
+                    if not self.args.quiet:
                         print('save the model: %s\n' % mdl_path)
                         self.logger.write('INFO: save the model: %s\n' % mdl_path)
-                        serializers.save_npz(mdl_path, self.model)
+                        serializers.save_npz(mdl_path, self.tagger)
         
                     # Reset counters
                     count = 0
@@ -841,7 +840,7 @@ class Trainer4JointMA(Trainer):
                     num_tokens = 0
                     total_ecounts = conlleval.EvalCounts()
 
-                    if not self.args.nolog:
+                    if not self.args.quiet:
                         self.logger.close() # 一度保存しておく
                         self.logger = open('{}/{}.log'.format(LOG_DIR, self.start_time), 'a')
 
@@ -854,50 +853,116 @@ if __name__ == '__main__':
         print("chainer version>=2.0.0 is required.")
         sys.exit()
 
+
+    ################################
+    # Make necessary directories
+
     if not os.path.exists(LOG_DIR):
         os.mkdir(LOG_DIR)
     if not os.path.exists(MODEL_DIR):
         os.makedirs(MODEL_DIR)
 
-    # get arguments and set up trainer
+    ################################
+    # Get arguments and prepare GPU
 
     args = parse_arguments()
-    # if args.joint_type == 'lattice':
-    #     trainer = Trainer4JointMA(args)
-    #     read_pos = True
-    # else:
+    use_gpu = args.gpu >= 0
+    if use_gpu:
+        # Make the specified GPU current
+        cuda.get_device_from_id(args.gpu).use()
+        chainer.config.cudnn_deterministic = args.use_cudnn
+
+    ################################
+    # Intialize trainer
 
     trainer = Trainer(args)
-    read_pos = False
-    trainer.prepare_gpu()
 
-    # Load word embedding model, dictionary and dataset
+    ################################
+    # Load tagger model
 
-    embed_model = emb.read_model(args.embed_model_path) if args.embed_model_path else None
+    if args.model_to_load:
+        indices, hparams, tagger = load_model(args.model_to_load, use_gpu=use_gpu)
+        id2token_org = copy.deepcopy(indices.id2token)
+    else:
+        indices = None
+        hparams = init_hyperparameters(args)
+        tagger = None
+        id2token_org = None
 
-    if args.dict_path:
+    ################################
+    # Load word embedding model
+    
+    if args.embed_model_path and args.execute_mode != 'interactive':
+        embed_model = emb.read_model(args.embed_model_path)
+        embed_dim = embed_model.wv.syn0[0].shape[0]
+        if embed_dim != hparams['embed_dimension']:
+            print('Given embedding model is discarded due to dimension confriction')
+            embed_model = None
+    else:
+        embed_model = None
+
+    ################################
+    # Initialize indices of strings from external dictionary
+
+    if not indices and args.dict_path:
         dic_path = args.dict_path
-        dic = lattice.load_dictionary(dic_path, read_pos=read_pos)
+        indices = lattice.load_dictionary(dic_path, read_pos=False)
         print('load dic:', dic_path)
-        print('vocab size:', len(dic.token_indices))
+        print('vocab size:', len(indices.token_indices))
 
         if not dic_path.endswith('pickle'):
             base = dic_path.split('.')[0]
             dic_pic_path = base + '.pickle'
             with open(dic_pic_path, 'wb') as f:
-                pickle.dump(dic, f)
-    else:
-        dic = None
+                pickle.dump(indices, f)
 
-    trainer.load_data(dic, embed_model)
+    ################################
+    # Load dataset and set up indices
 
-    # Set up model and optimizer
+    trainer.set_hparams(hparams)
 
-    model = trainer.prepare_model_and_hparameters(embed_model=embed_model)
-    optimizer = trainer.setup_optimizer()
+    if args.execute_mode == 'train':
+        trainer.load_data_for_training(indices, embed_model)
+        indices = trainer.indices
 
+    elif args.execute_mode == 'eval':
+        trainer.load_data_for_test(indices, embed_model)
+        indices = trainer.indices
+
+    indices.create_id2token()
+    indices.create_id2label()
+
+    ################################
+    # Set up tagger and optimizer
+
+    if not tagger:
+        tagger = models.init_tagger(indices, hparams, use_gpu=use_gpu)
+
+    if embed_model or (
+            id2token_org and (len(indices.id2token) > len(id2token_org))):
+        tagger.grow_embedding_layer(indices.id2token, id2token_org, embed_model)
+
+    if args.gpu >= 0:
+        tagger.to_gpu()
+
+    optimizer = trainer.setup_optimizer(tagger)
+
+    ################################
     # Run
 
-    trainer.run()
-    if not args.nolog:
+    if args.execute_mode == 'train':
+        trainer.run_training()
+    elif args.execute_mode == 'eval':
+        trainer.run_evaluation()
+    elif args.execute_mode == 'decode':
+        trainer.run_decoding()
+    elif args.execute_mode == 'interactive':
+        trainer.run_interactive_decoding()
+    else:
+        print('Invalid execute mode: {}'.format(args.execute_mode))
+
+    ################################
+    # Terminate
+
+    if not args.quiet:
         trainer.logger.close()

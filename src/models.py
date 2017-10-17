@@ -30,7 +30,7 @@ from util import Timer
 
 
 """
-Base model that consists of embedding layer, recurrent network (RNN) layers and linear layer.
+Base model that consists of embedding layer, recurrent network (RNN) layers and affine layer.
 
 Args:
     n_rnn_layers:
@@ -49,24 +49,22 @@ Args:
         unit type of RNN: lstm, gru or plain
     rnn_bidirection:
         use bi-directional RNN or not
-    linear_activation:
-        activation function of linear layer: identity, relu, tanh, sigmoid
+    affine_activation:
+        activation function of affine layer: identity, relu, tanh, sigmoid
     init_embed:
         pre-trained embedding matrix
     feat_extractor:
         FeatureExtractor object to extract additional features 
-    gpu:
-        gpu device id
 """
 class RNNBase(chainer.Chain):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
-            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            init_embed=None, feat_extractor=None, gpu=-1):
+            rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
+            init_embed=None, feat_extractor=None):
         super(RNNBase, self).__init__()
 
         with self.init_scope():
-            self.act = get_activation(linear_activation)
+            self.act = get_activation(affine_activation)
             if not self.act:
                 print('unsupported activation function.')
                 sys.exit()
@@ -104,7 +102,7 @@ class RNNBase(chainer.Chain):
                 else:
                     self.rnn_unit = L.NStepRNNTanh(n_rnn_layers, embed_dim, n_rnn_units, dropout)
 
-            self.linear = L.Linear(n_rnn_units * (2 if rnn_bidirection else 1), n_labels)
+            self.affine = L.Linear(n_rnn_units * (2 if rnn_bidirection else 1), n_labels)
 
             print('## parameters')
             print('# embed:', self.embed.W.shape)
@@ -122,8 +120,8 @@ class RNNBase(chainer.Chain):
                     print('#      6 -', c.w6.shape, '+', c.b6.shape)
                     print('#      7 -', c.w7.shape, '+', c.b7.shape)
                     i += 1
-            print('# linear:', self.linear.W.shape, '+', self.linear.b.shape)
-            print('# linear_activation:', self.act)
+            print('# affine:', self.affine.W.shape, '+', self.affine.b.shape)
+            print('# affine_activation:', self.act)
 
 
     # create input vector
@@ -133,8 +131,11 @@ class RNNBase(chainer.Chain):
             if self.feat_extractor:
                 emb = self.embed(x)
                 feat = self.feat_extractor.extract_features(x)
+                #print('emb:', type(emb.data))
+                #print('feat:', type(feat.data))
                 ex = F.concat((emb, feat), 1)
             else:
+                #print('embed:', type(self.embed.W.data))
                 ex = self.embed(x)
                 
             exs.append(ex)
@@ -142,23 +143,22 @@ class RNNBase(chainer.Chain):
         return xs
 
 
-    ## unused
-    def get_id_array(self, start, width, gpu=-1):
-        ids = np.array([], dtype=np.int32)
-        for i in range(start, start + width):
-            ids = np.append(ids, np.int32(i))
-        return cuda.to_gpu(ids) if gpu >= 0 else ids
+    # def get_id_array(self, start, width, gpu=-1):
+    #     ids = np.array([], dtype=np.int32)
+    #     for i in range(start, start + width):
+    #         ids = np.append(ids, np.int32(i))
+    #     return cuda.to_gpu(ids) if gpu >= 0 else ids
 
 
 class RNN(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
-            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            init_embed=None, feat_extractor=None, gpu=-1):
+            rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
+            init_embed=None, feat_extractor=None):
         super(RNN, self).__init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
-            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            init_embed=None, feat_extractor=None, gpu=-1)
+            rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
+            init_embed=None, feat_extractor=None)
 
         self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
 
@@ -170,7 +170,7 @@ class RNN(RNNBase):
                 hy, cy, hs = self.rnn_unit(None, None, fs)
             else:
                 hy, hs = self.rnn_unit(None, fs)
-            ys = [self.act(self.linear(h)) for h in hs]
+            ys = [self.act(self.affine(h)) for h in hs]
 
         loss = None
         ps = []
@@ -191,7 +191,7 @@ class RNN(RNNBase):
                 hy, cy, hs = self.rnn_unit(None, None, fs)
             else:
                 hy, hs = self.rnn_unit(None, fs)
-            ys = [self.act(self.linear(h)) for h in hs]
+            ys = [self.act(self.affine(h)) for h in hs]
 
         return ys
 
@@ -199,11 +199,11 @@ class RNN(RNNBase):
 class RNN_CRF(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
-            rnn_unit_type='lstm', rnn_bidirection=True, linear_activation='identity', 
-            init_embed=None, feat_extractor=None, gpu=-1):
+            rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
+            init_embed=None, feat_extractor=None):
         super(RNN_CRF, self).__init__(
             n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
-            rnn_bidirection, linear_activation, init_embed, feat_extractor, gpu)
+            rnn_bidirection, affine_activation, init_embed, feat_extractor)
 
         with self.init_scope():
             self.crf = L.CRF1d(n_labels)
@@ -222,11 +222,11 @@ class RNN_CRF(RNNBase):
             else:
                 hy, hs = self.rnn_unit(None, fs)
 
-            # linear layer
+            # affine layer
             if not self.act or self.act == 'identity':
-                hs = [self.linear(h) for h in hs]                
+                hs = [self.affine(h) for h in hs]                
             else:
-                hs = [self.act(self.linear(h)) for h in hs]
+                hs = [self.act(self.affine(h)) for h in hs]
 
             # crf layer
             indices = argsort_list_descent(hs)
@@ -272,11 +272,11 @@ class RNN_CRF(RNNBase):
             else:
                 hy, hs = self.rnn_unit(None, fs)
 
-            # linear layer
+            # affine layer
             if not self.act or self.act == 'identity':
-                hs = [self.linear(h) for h in hs]                
+                hs = [self.affine(h) for h in hs]                
             else:
-                hs = [self.act(self.linear(h)) for h in hs]
+                hs = [self.act(self.affine(h)) for h in hs]
 
             # crf layer
             indices = argsort_list_descent(hs)
@@ -324,18 +324,100 @@ class SequenceTagger(chainer.link.Chain):
             i += 1
 
 
-    def grow_lookup_table(self, token2id_new, gpu=-1):
+    # def grow_embedding_layer(self, token2id_new):
+    #     weight1 = self.predictor.embed.W
+    #     diff = len(token2id_new) - len(weight1)
+    #     weight2 = chainer.variable.Parameter(initializers.normal.Normal(1.0), (diff, weight1.shape[1]))
+    #     weight = F.concat((weight1, weight2), 0)
+    #     embed = L.EmbedID(0, 0)
+    #     embed.W = chainer.Parameter(initializer=weight.data)
+    #     self.predictor.embed = embed
+
+
+    def grow_embedding_layer(self, id2token_all, id2token_trained={}, embed_model=None):
+        diff = len(id2token_all) - len(id2token_trained)
         weight1 = self.predictor.embed.W
-        diff = len(token2id_new) - len(weight1)
-        weight2 = chainer.variable.Parameter(initializers.normal.Normal(1.0), (diff, weight1.shape[1]))
-        weight = F.concat((weight1, weight2), 0)
-        embed = L.EmbedID(0, 0)
-        embed.W = chainer.Parameter(initializer=weight.data)
-        self.predictor.embed = embed
+        weight2 = []
+
+        dim = self.predictor.embed_dim
+        initialW = initializers.normal.Normal(1.0)
+
+        count = 0
+        if embed_model:
+            start_i = len(id2token_trained)
+            for i in range(start_i, len(id2token_all)):
+                key = id2token_all[i]
+                    
+                if key in embed_model.wv.vocab:
+                    vec = embed_model.wv[key]
+                    weight.append(vec)
+                    count += 1
+                else:
+                    vec = initializers.generate_array(initialW, (dim, ), np)
+                    weight.append(vec)
+
+            weight2 = np.reshape(weight2, (diff, dim))
+            #TODO type check
+
+        else:
+            weight2 = chainer.variable.Parameter(initialW, (diff, dim))
+
+        if id2token_trained:
+            weight = F.concat((weight1, weight2), 0)
+        else:
+            wieght = weight2
+
+        self.predictor.embed = L.EmbedID(0, 0)
+        self.predictor.embed.W = chainer.Parameter(initializer=weight.data)
 
         print('# grow vocab size: %d -> %d' % (weight1.shape[0], weight.shape[0]))
+        if count >= 1:
+            print('# use %d pretrained embedding' % (count))
         print('# embed:', self.predictor.embed.W.shape)
 
+        
+def init_tagger(indices, hparams, use_gpu=False, joint_type=''):
+    
+    n_vocab = len(indices.token_indices)
+    n_labels = len(indices.label_indices)
+    if hparams['use_dict_feature']:
+        feat_extractor = features.DictionaryFeatureExtractor(indices, use_gpu=use_gpu)
+    else:
+        feat_extractor = None
+
+    if joint_type:
+        if joint_type == 'lattice':
+            rnn = models_joint.RNN_LatticeCRF(
+                hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
+                hparams['rnn_hidden_units'], n_labels, indices, dropout=hparams['dropout'],
+                rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
+                feat_extractor=feat_extractor) #gpu=gpu
+
+        elif hparams['joint_type'] == 'dual_rnn':
+            rnn = None
+            print('Not implemented yet')
+
+        tagger = models_joint.JointMorphologicalAnalyzer(rnn, indices.id2label)
+
+    else:
+        if hparams['inference_layer'] == 'crf':
+            rnn = RNN_CRF(
+                hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
+                hparams['rnn_hidden_units'], n_labels, dropout=hparams['dropout'], 
+                rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
+                feat_extractor=feat_extractor)
+
+        else:
+            rnn = RNN(
+                hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
+                hparams['rnn_hidden_units'], n_labels, dropout=hparams['dropout'], 
+                rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
+                feat_extractor=feat_extractor)
+
+        tagger = SequenceTagger(rnn, indices)
+
+    return tagger
+    
 
 def get_activation(activation):
     if not activation  or activation == 'identity':
