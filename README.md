@@ -27,7 +27,7 @@ Only need to clone/download the git repository of this software.
 +-- data       ... directory to place input data
 +-- log        ... directory to export log files
 +-- models     ... directory to export/place model files
-|  +-- nn      ... directory to export NN model files
+|  +-- main    ... directory to export NN model files
 |  +-- embed   ... directory to export/place embedding model files
 +-- out        ... directory to export output files such as parsed text
 +-- resources  ... directory to place resource files such as dictionary
@@ -37,7 +37,13 @@ Only need to clone/download the git repository of this software.
 
 ## How to Use
 
-To be written.
+~~~~
+$ python src/segmenter.py [--options]
+~~~~
+
+Descriptions of options are shown by executing with --help or -h option
+
+See Also sample.sh to confirm typical usages.
 
 
 ## Change Log
