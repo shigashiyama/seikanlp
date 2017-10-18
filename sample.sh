@@ -1,5 +1,6 @@
 ################################################################
 # Sample commands
+################################################################
 
 
 ################################################################
@@ -8,7 +9,8 @@
 # python src/segmenter.py -h
 
 
-# Common arguments
+################################################################
+# [1] Train a new model from the training data
 
 GPU="0 --cudnn"
 ITER=2000
@@ -20,12 +22,8 @@ RNN_UNITS=800
 RNN_LAYERS=2
 DROPOUT=0.1
 
-
-################################################################
-# [1] Train a new model from the training data
-
-TRAIN=data/bccwj_data/MA_SUW/core/train_0.9.tsv
-VALID=data/bccwj_data/MA_SUW/core/dev_0.1.tsv
+TRAIN=
+VALID=
 FORMAT="bccwj_seg --subpos_depth 0"
 
 # python src/segmenter.py \
@@ -49,7 +47,7 @@ FORMAT="bccwj_seg --subpos_depth 0"
 
 EPOCH_BEGIN=2
 EPOCH_END=3
-MODEL=models/main/save/20171017_1242_i0.694.npz
+MODEL=
 
 # python src/segmenter.py \
 #        -x train \
@@ -66,7 +64,7 @@ MODEL=models/main/save/20171017_1242_i0.694.npz
 ################################################################
 ### [3] Evaluate the trained model on the test data
 
-TEST=data/bccwj_data/MA_SUW/core/test_ClassA-1.tsv
+TEST=
 
 # python src/segmenter.py \
 #        -q \
@@ -81,7 +79,7 @@ TEST=data/bccwj_data/MA_SUW/core/test_ClassA-1.tsv
 ################################################################
 ### [4] Decode the raw text data by the trained model
 
-RAW=data/bccwj_data/MA_SUW/for_kytea/core-tmp_val.tsv 
+RAW=
 OUTPUT=out/out.txt
 
 python src/segmenter.py \
