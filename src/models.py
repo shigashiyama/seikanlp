@@ -1,10 +1,11 @@
 """
-This code is implemented by remodeling the implementation of (Zaremba 2015) by developers at PFN.
+This code is implemented by (drastically) remodeling the implementation of (Zaremba 2015) by developers at PFN.
 
 (Zaremba 2015) RECURRENT NEURAL NETWORK REGULARIZATION, ICLR, 2015, https://github.com/tomsercu/lstm
 
 """
 
+import sys
 import copy
 import enum
 from collections import Counter
@@ -60,13 +61,13 @@ class RNNBase(chainer.Chain):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
-            init_embed=None, feat_extractor=None):
+            init_embed=None, feat_extractor=None, stream=sys.stderr):
         super(RNNBase, self).__init__()
 
         with self.init_scope():
             self.act = get_activation(affine_activation)
             if not self.act:
-                print('unsupported activation function.')
+                print('Unsupported activation function', file=stream)
                 sys.exit()
 
             if init_embed:
@@ -104,24 +105,23 @@ class RNNBase(chainer.Chain):
 
             self.affine = L.Linear(n_rnn_units * (2 if rnn_bidirection else 1), n_labels)
 
-            print('## parameters')
-            print('# embed:', self.embed.W.shape)
-            print('# rnn unit:', self.rnn_unit)
+            print('### Parameters', file=stream)
+            print('# Embedding layer: {}'.format(self.embed.W.shape), file=stream)
+            print('# RNN unit: {}'.format(self.rnn_unit), file=stream)
             if self.rnn_unit_type == 'lstm':
                 i = 0
                 for c in self.rnn_unit._children:
-                    print('#   param', i)
-                    print('#      0 -', c.w0.shape, '+', c.b0.shape)
-                    print('#      1 -', c.w1.shape, '+', c.b1.shape)
-                    print('#      2 -', c.w2.shape, '+', c.b2.shape)
-                    print('#      3 -', c.w3.shape, '+', c.b3.shape)
-                    print('#      4 -', c.w4.shape, '+', c.b4.shape)
-                    print('#      5 -', c.w5.shape, '+', c.b5.shape)
-                    print('#      6 -', c.w6.shape, '+', c.b6.shape)
-                    print('#      7 -', c.w7.shape, '+', c.b7.shape)
+                    print('#   LSTM {}-th param'.format(i), file=stream)
+                    print('#      0 - {} + {}'.format(c.w0.shape, c.b0.shape), file=stream) 
+                    print('#      1 - {} + {}'.format(c.w1.shape, c.b1.shape), file=stream) 
+                    print('#      2 - {} + {}'.format(c.w2.shape, c.b2.shape), file=stream) 
+                    print('#      3 - {} + {}'.format(c.w3.shape, c.b3.shape), file=stream) 
+                    print('#      4 - {} + {}'.format(c.w4.shape, c.b4.shape), file=stream) 
+                    print('#      5 - {} + {}'.format(c.w5.shape, c.b5.shape), file=stream) 
+                    print('#      6 - {} + {}'.format(c.w6.shape, c.b6.shape), file=stream) 
+                    print('#      7 - {} + {}'.format(c.w7.shape, c.b7.shape), file=stream) 
                     i += 1
-            print('# affine:', self.affine.W.shape, '+', self.affine.b.shape)
-            print('# affine_activation:', self.act)
+            print('# Affine layer: {} + {}'.format(self.affine.W.shape, self.affine.b.shape), file=stream)
 
 
     # create input vector
@@ -154,11 +154,11 @@ class RNN(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
-            init_embed=None, feat_extractor=None):
+            init_embed=None, feat_extractor=None, stream=sys.stderr):
         super(RNN, self).__init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
-            init_embed=None, feat_extractor=None)
+            init_embed=None, feat_extractor=None, stream=sys.stderr)
 
         self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
 
@@ -200,16 +200,15 @@ class RNN_CRF(RNNBase):
     def __init__(
             self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
-            init_embed=None, feat_extractor=None):
+            init_embed=None, feat_extractor=None, stream=sys.stderr):
         super(RNN_CRF, self).__init__(
             n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
-            rnn_bidirection, affine_activation, init_embed, feat_extractor)
+            rnn_bidirection, affine_activation, init_embed, feat_extractor, stream=sys.stderr)
 
         with self.init_scope():
             self.crf = L.CRF1d(n_labels)
 
-            print('# crf cost:', self.crf.cost.shape)
-            print()
+            print('# CRF cost: {}\n'.format(self.crf.cost.shape), file=stream)
 
 
     def __call__(self, xs, ts, train=True):
@@ -334,7 +333,7 @@ class SequenceTagger(chainer.link.Chain):
     #     self.predictor.embed = embed
 
 
-    def grow_embedding_layer(self, id2token_all, id2token_trained={}, embed_model=None):
+    def grow_embedding_layer(self, id2token_all, id2token_trained={}, embed_model=None, stream=sys.stderr):
         diff = len(id2token_all) - len(id2token_trained)
         weight1 = self.predictor.embed.W
         weight2 = []
@@ -370,16 +369,15 @@ class SequenceTagger(chainer.link.Chain):
         self.predictor.embed = L.EmbedID(0, 0)
         self.predictor.embed.W = chainer.Parameter(initializer=weight.data)
 
-        print('# grow vocab size: %d -> %d' % (weight1.shape[0], weight.shape[0]))
+        print('Grow vocab size: {} -> {}'.format(weight1.shape[0], weight.shape[0]), file=stream)
         if count >= 1:
-            print('# use %d pretrained embedding' % (count))
-        print('# embed:', self.predictor.embed.W.shape)
+            print('Use %d pretrained embedding vectors'.format(count), file=stream)
 
         
 def init_tagger(indices, hparams, use_gpu=False, joint_type=''):
-    
     n_vocab = len(indices.token_indices)
     n_labels = len(indices.label_indices)
+
     if hparams['use_dict_feature']:
         feat_extractor = features.DictionaryFeatureExtractor(indices, use_gpu=use_gpu)
     else:
@@ -395,7 +393,8 @@ def init_tagger(indices, hparams, use_gpu=False, joint_type=''):
 
         elif hparams['joint_type'] == 'dual_rnn':
             rnn = None
-            print('Not implemented yet')
+            print('Not implemented yet', file=sys.stderr)
+            sys.exit()
 
         tagger = models_joint.JointMorphologicalAnalyzer(rnn, indices.id2label)
 

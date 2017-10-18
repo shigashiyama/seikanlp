@@ -22,19 +22,19 @@ def load_raw_text_for_segmentation(path, indices):
     instances = []
     ins_cnt = 0
 
-    print("Read file:", path)
     with open(path) as f:
         for line in f:
             line = line.strip()
             if len(line) < 1:
                 continue
 
+            print(line)
             ins = [indices.get_token_id(char) for char in line]
             instances.append(ins)
 
             ins_cnt += 1
             if ins_cnt % 100000 == 0:
-                print('read', ins_cnt, 'instances')
+                print('read', ins_cnt, 'instances', file=sys.stderr)
 
     return instances
 
@@ -43,7 +43,6 @@ def load_raw_text_for_tagging(path, indices):
     instances = []
     ins_cnt = 0
 
-    print("Read file:", path)
     with open(path) as f:
         for line in f:
             line = line.strip()
@@ -56,7 +55,7 @@ def load_raw_text_for_tagging(path, indices):
 
             ins_cnt += 1
             if ins_cnt % 100000 == 0:
-                print('read', ins_cnt, 'instances')
+                print('read', ins_cnt, 'instances', file=sys.stderr)
 
     return instances
 
@@ -82,7 +81,6 @@ def load_bccwj_data(path, update_token=True, update_label=True, subpos_depth=-1,
     word_cnt = 0
     token_cnt = 0
 
-    print("Read file:", path)
     with open(path) as f:
         bof = True
         ins = []
@@ -109,7 +107,7 @@ def load_bccwj_data(path, update_token=True, update_label=True, subpos_depth=-1,
                 labs = []
                 ins_cnt += 1
                 if ins_cnt % 100000 == 0:
-                    print('read', ins_cnt, 'instances')
+                    print('read', ins_cnt, 'instances', file=sys.stderr)
 
             if limit > 0 and ins_cnt >= limit + 1:
                 break
@@ -150,7 +148,6 @@ def load_bccwj_data_for_lattice_ma(
 
     ins_cnt = 0
 
-    print("Read file:", path)
     with open(path) as f:
         bof = True
         ins = []
@@ -229,7 +226,6 @@ def load_ws_data(path, update_token=True, update_label=True, indices=None, refer
 
     ins_cnt = 0
 
-    print("Read file:", path)
     with open(path) as f:
         ins = []
         labs = []
@@ -262,7 +258,7 @@ def load_ws_data(path, update_token=True, update_label=True, indices=None, refer
             labs = []
             ins_cnt += 1
             if ins_cnt % 100000 == 0:
-                print('read', ins_cnt, 'instances')
+                print('read', ins_cnt, 'instances', file=sys.stderr)
 
     return instances, lab_seqs, indices
 
@@ -291,7 +287,6 @@ def load_wsj_data(path, update_token=True, update_label=True, lowercase=True, no
 
     ins_cnt = 0
 
-    print("Read file:", path)
     with open(path) as f:
         ins = []
         labs = []
@@ -361,7 +356,6 @@ def load_conll2003_data(path, update_token=True, update_label=True, lowercase=Tr
     
     ins_cnt = 0
 
-    print("Read file:", path)
     with open(path) as f:
         ins = []
         org_labs = []
@@ -478,7 +472,6 @@ def process_bccwj_data_for_kytea(input, output, subpos_depth=1):
 
     bof = True
 
-    print("Read file:", input)
     with open(input) as f:
         ins = []
 
@@ -503,7 +496,7 @@ def process_bccwj_data_for_kytea(input, output, subpos_depth=1):
             bof = False
 
     wf.close()
-    print('Output file:', output)
+    #print('Output file:', output)
 
     return
 
@@ -543,20 +536,20 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
                lowercase=False, normalize_digits=False, indices=None, refer_vocab=set(), limit=-1):
     pos_seqs = []
 
-    if data_format == 'bccwj_ws_lattice':
+    if data_format == 'bccwj_seg_lattice':
         instances, label_seqs, pos_seqs, indices = load_bccwj_data_for_lattice_ma(
             path, read_pos, update_token=update_token, subpos_depth=subpos_depth, 
             indices=indices, limit=limit)
 
-    elif data_format == 'bccwj_ws' or data_format == 'bccwj_pos':
-        do_segmentation = True if data_format == 'bccwj_ws' else False
+    elif data_format == 'bccwj_seg' or data_format == 'bccwj_tag':
+        do_segmentation = True if data_format == 'bccwj_seg' else False
 
         instances, label_seqs, indices = load_bccwj_data(
             path, update_token=update_token, update_label=update_label, subpos_depth=subpos_depth, 
             indices=indices, refer_vocab=refer_vocab, do_segmentation=do_segmentation,
             limit=limit)
 
-    elif data_format == 'ws':
+    elif data_format == 'seg':
         instances, label_seqs, indices = load_ws_data(
             path, update_token=update_token, update_label=update_label,
             indices=indices, refer_vocab=refer_vocab, limit=limit)
@@ -573,7 +566,7 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
             lowercase=lowercase, normalize_digits=normalize_digits, 
             indices=indices, refer_vocab=refer_vocab, limit=limit)
     else:
-        print("invalid data format")
+        print("Invalid data format", file=sys.stderr)
         sys.exit()
 
     return instances, label_seqs, pos_seqs, indices
@@ -584,7 +577,6 @@ def load_pickled_data(filename_wo_ext, load_indices=True):
 
     with open(dump_path, 'rb') as f:
         obj = pickle.load(f)
-        print('load pickled data:', dump_path)
         instances = obj[0]
         labels = obj[1]
         pos_labels = obj[2]
@@ -598,9 +590,9 @@ def dump_pickled_data(filename_wo_ext, instances, labels, pos_labels=None):
     with open(dump_path, 'wb') as f:
         obj = (instances, labels, pos_labels)
         pickle.dump(obj, f)
-        print('dump pickled data:', dump_path)
 
 
+# unused
 def read_map(path):
     if path.endswith('bin'):
         with open(path, 'rb') as f:
@@ -618,6 +610,7 @@ def read_map(path):
     return indices
 
 
+# unused
 def write_map(dic, path):
     if path.endswith('bin'):
         with open(path, 'wb') as f:
