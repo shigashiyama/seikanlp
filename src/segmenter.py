@@ -546,6 +546,8 @@ class Trainer(object):
         self.test_t = test_t
         self.test_p = test_p
 
+        return indices
+
 
     def setup_optimizer(self):
         if self.args.optimizer == 'sgd':
@@ -589,7 +591,6 @@ class Trainer(object):
             instances = data.load_raw_text_for_tagging(raw_path, self.tagger.indices)
         else:
             instances = data.load_raw_text_for_segmentation(raw_path, self.tagger.indices)
-            print(instances)
 
         stream = open(self.args.output_path, 'w') if self.args.output_path else sys.stdout
         decode(self.tagger, instances, batchsize=self.args.batchsize, 
@@ -905,7 +906,7 @@ if __name__ == '__main__':
     if args.model_path:
         trainer.load_model(args.model_path, use_gpu=use_gpu)
         trainer.set_hparams(trainer.hparams)
-        id2token_org = copy.deepcopy(trainer.indices.id2token)
+        id2token_org = copy.deepcopy(trainer.tagger.indices.id2token)
     else:
         trainer.set_hparams(init_hyperparameters(args))
         id2token_org = None
@@ -958,11 +959,11 @@ if __name__ == '__main__':
         tagger = models.init_tagger(indices, trainer.hparams, use_gpu=use_gpu)
         trainer.set_tagger(tagger)
     else:
-        tagger.indices = indices
+        trainer.tagger.indices = indices
 
     if embed_model or (
-            id2token_org and (len(tagger.indices.id2token) > len(id2token_org))):
-        trainer.tagger.grow_embedding_layer(tagger.indices.id2token, id2token_org, embed_model)
+            id2token_org and (len(trainer.tagger.indices.id2token) > len(id2token_org))):
+        trainer.tagger.grow_embedding_layer(trainer.tagger.indices.id2token, id2token_org, embed_model)
 
     if args.gpu >= 0:
         trainer.tagger.to_gpu()

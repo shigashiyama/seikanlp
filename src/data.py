@@ -28,7 +28,6 @@ def load_raw_text_for_segmentation(path, indices):
             if len(line) < 1:
                 continue
 
-            print(line)
             ins = [indices.get_token_id(char) for char in line]
             instances.append(ins)
 
