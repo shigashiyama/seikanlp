@@ -943,7 +943,7 @@ if __name__ == '__main__':
     ################################
     # Load dataset and set up indices
 
-    indices = tagger.indices if tagger else None
+    indices = trainer.tagger.indices if trainer.tagger else None
     if args.execute_mode == 'train':
         indices = trainer.load_data_for_training(indices, embed_model)
     elif args.execute_mode == 'eval':
