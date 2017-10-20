@@ -512,7 +512,7 @@ class Trainer(object):
 
         self.log('### Loaded data')
         self.log('# train: {} ... {}\n'.format(train[:3], train[n_train-3:]))
-        self.log('# labels: {} ... {}\n'.format(train_t[:3], train_t[n_train-3:]))
+        self.log('# train_gold: {} ... {}\n'.format(train_t[:3], train_t[n_train-3:]))
         if train_p:
             self.log('# POS labels: {} ... {}\n'.format(train_p[:3], train_p[n_train-3:]))
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
@@ -689,7 +689,7 @@ class Trainer(object):
 
                     now_e = '%.3f' % (n_iter * self.args.batchsize / n_train)
                     time = datetime.now().strftime('%Y%m%d_%H%M')
-                    self.log('### iteration %s (epoch %s)' % ((n_iter * self.args.batchsize), now_e))
+                    self.log('\n### iteration %s (epoch %s)' % ((n_iter * self.args.batchsize), now_e))
                     self.log('<training result for previous iterations>')
 
                     ave_loss = total_loss / num_tokens
@@ -735,8 +735,8 @@ class Trainer(object):
                     total_ecounts = conlleval.EvalCounts()
 
                     if not self.args.quiet:
-                        self.logger.close() 
-                        self.logger = open('{}/{}.log'.format(LOG_DIR, self.start_time), 'a')
+                        self.reporter.close() 
+                        self.reporter = open('{}/{}.log'.format(LOG_DIR, self.start_time), 'a')
 
         time = datetime.now().strftime('%Y%m%d_%H%M')
         self.report('Finish: %s\n' % time)
