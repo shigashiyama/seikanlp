@@ -410,7 +410,7 @@ class Trainer(object):
             self.reporter.close()
     
 
-    def set_hparams(self, hparams):
+    def init_hparams(self, hparams):
         self.hparams = hparams
 
         if hparams['data_format'] == 'seg':
@@ -419,7 +419,6 @@ class Trainer(object):
         elif hparams['data_format'] == 'bccwj_seg':
             if hparams['subpos_depth'] == 0:
                 self.decode_type = 'seg'
-
             else:
                 self.decode_type = 'seg_tag'
 
@@ -489,7 +488,7 @@ class Trainer(object):
         chainer.serializers.load_npz(model_path, tagger)
         self.log('Load model parameters: {}\n'.format(model_path))
 
-        self.hparams = hparams
+        self.init_hparams(hparams)
         self.tagger = tagger
 
 
@@ -944,7 +943,7 @@ if __name__ == '__main__':
         chainer.config.cudnn_deterministic = args.use_cudnn
 
     ################################
-    # Intialize trainer
+    # Intialize trainer and check arguments
 
     trainer = Trainer(args)
 
@@ -953,11 +952,13 @@ if __name__ == '__main__':
 
     if args.model_path:
         trainer.load_model(args.model_path, use_gpu=use_gpu)
-        trainer.set_hparams(trainer.hparams)
         id2token_org = copy.deepcopy(trainer.tagger.indices.id2token)
+        id2label_org = copy.deepcopy(trainer.tagger.indices.id2label)
     else:
-        trainer.set_hparams(init_hyperparameters(args))
-        id2token_org = None
+        hparams = init_hyperparameters(args)
+        trainer.init_hparams(hparams)
+        id2token_org = {}
+        id2label_org = {}
 
 
     ################################
@@ -1009,9 +1010,12 @@ if __name__ == '__main__':
     else:
         trainer.tagger.indices = indices
 
-    if embed_model or (
-            id2token_org and (len(trainer.tagger.indices.id2token) > len(id2token_org))):
+    grow_vocab = id2token_org and (len(trainer.tagger.indices.id2token) > len(id2token_org))
+    if embed_model or grow_vocab:
         trainer.tagger.grow_embedding_layer(trainer.tagger.indices.id2token, id2token_org, embed_model)
+    grow_labels = id2label_org and (len(trainer.tagger.indices.id2label) > len(id2label_org))
+    if grow_labels:
+        trainer.tagger.grow_inference_layers(trainer.tagger.indices.id2label, id2label_org)
 
     if args.gpu >= 0:
         trainer.tagger.to_gpu()

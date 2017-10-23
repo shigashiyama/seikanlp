@@ -112,16 +112,16 @@ class RNNBase(chainer.Chain):
                 i = 0
                 for c in self.rnn_unit._children:
                     print('#   LSTM {}-th param'.format(i), file=stream)
-                    print('#      0 - {} + {}'.format(c.w0.shape, c.b0.shape), file=stream) 
-                    print('#      1 - {} + {}'.format(c.w1.shape, c.b1.shape), file=stream) 
-                    print('#      2 - {} + {}'.format(c.w2.shape, c.b2.shape), file=stream) 
-                    print('#      3 - {} + {}'.format(c.w3.shape, c.b3.shape), file=stream) 
-                    print('#      4 - {} + {}'.format(c.w4.shape, c.b4.shape), file=stream) 
-                    print('#      5 - {} + {}'.format(c.w5.shape, c.b5.shape), file=stream) 
-                    print('#      6 - {} + {}'.format(c.w6.shape, c.b6.shape), file=stream) 
-                    print('#      7 - {} + {}'.format(c.w7.shape, c.b7.shape), file=stream) 
+                    print('#      0 - {}, {}'.format(c.w0.shape, c.b0.shape), file=stream) 
+                    print('#      1 - {}, {}'.format(c.w1.shape, c.b1.shape), file=stream) 
+                    print('#      2 - {}, {}'.format(c.w2.shape, c.b2.shape), file=stream) 
+                    print('#      3 - {}, {}'.format(c.w3.shape, c.b3.shape), file=stream) 
+                    print('#      4 - {}, {}'.format(c.w4.shape, c.b4.shape), file=stream) 
+                    print('#      5 - {}, {}'.format(c.w5.shape, c.b5.shape), file=stream) 
+                    print('#      6 - {}, {}'.format(c.w6.shape, c.b6.shape), file=stream) 
+                    print('#      7 - {}, {}'.format(c.w7.shape, c.b7.shape), file=stream) 
                     i += 1
-            print('# Affine layer: {} + {}'.format(self.affine.W.shape, self.affine.b.shape), file=stream)
+            print('# Affine layer: {}, {}'.format(self.affine.W.shape, self.affine.b.shape), file=stream)
 
 
     # create input vector
@@ -369,11 +369,56 @@ class SequenceTagger(chainer.link.Chain):
         self.predictor.embed = L.EmbedID(0, 0)
         self.predictor.embed.W = chainer.Parameter(initializer=weight.data)
 
-        print('Grow vocab size: {} -> {}'.format(weight1.shape[0], weight.shape[0]), file=stream)
+        print('Grow embedding layer: {} -> {}'.format(weight1.shape, weight.shape), file=stream)
         if count >= 1:
             print('Use %d pretrained embedding vectors'.format(count), file=stream)
+        print('', file=stream)
 
         
+    def grow_inference_layers(self, id2label_all, id2label_trained, stream=sys.stderr):
+        org_len = len(id2label_trained)
+        new_len = len(id2label_all)
+        diff = new_len - org_len
+
+
+        # affine layer
+        w_org = self.predictor.affine.W
+        b_org = self.predictor.affine.b
+        w_org_shape = w_org.shape
+        b_org_shape = b_org.shape
+
+        dim = w_org.shape[1]
+        initialW = initializers.normal.Normal(1.0)
+
+        w_diff = chainer.variable.Parameter(initialW, (diff, dim))
+        w_new = F.concat((w_org, w_diff), 0)
+
+        b_diff = chainer.variable.Parameter(initialW, (diff,))
+        b_new = F.concat((b_org, b_diff), 0)
+            
+        self.predictor.affine.W = chainer.Parameter(initializer=w_new.data)
+        self.predictor.affine.b = chainer.Parameter(initializer=b_new.data)
+
+        print('Grow affine layer: {}, {} -> {}, {}'.format(
+            w_org_shape, b_org_shape, self.predictor.affine.W.shape, 
+            self.predictor.affine.b.shape), file=stream)
+
+        # crf layer
+        if isinstance(self.predictor, RNN_CRF):
+            c_org = self.predictor.crf.cost
+            c_diff1 = chainer.variable.Parameter(0, (org_len, diff))
+            c_diff2 = chainer.variable.Parameter(0, (diff, new_len))
+            c_tmp = F.concat((c_org, c_diff1), 1)
+            c_new = F.concat((c_tmp, c_diff2), 0)
+            self.predictor.crf.cost = chainer.Parameter(initializer=c_new.data)
+
+            print('Grow crf layer: {} -> {}'.format(
+                c_org.shape, self.predictor.crf.cost.shape, file=stream))
+
+        print('', file=stream)
+        
+
+
 def init_tagger(indices, hparams, use_gpu=False, joint_type=''):
     n_vocab = len(indices.token_indices)
     n_labels = len(indices.label_indices)
