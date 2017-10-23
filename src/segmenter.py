@@ -332,9 +332,9 @@ class Trainer(object):
                 msg = 'Error: the following argument is required for {} mode: {}'.format(
                     'train', '--train_data/-t')
                 err_msgs.append(msg)
-            if not args.data_format:
-                msg = 'Error: the following argument is required for {} mode: {}'.format(
-                    'train', '--data_format/-f')
+            if not args.data_format and not args.model_path:
+                msg = 'Error: the following argument is required for {} mode'
+                + ' unless resuming a trained model: {}'.format('train', '--data_format/-f')
                 err_msgs.append(msg)
 
         elif args.execute_mode == 'eval':
