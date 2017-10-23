@@ -15,7 +15,6 @@ import chainer
 
 
 NUM_SYMBOL = '<NUM>'
-Schema = enum.Enum("Schema", "BI BIES")
 
 
 def load_raw_text_for_segmentation(path, indices):
@@ -57,6 +56,67 @@ def load_raw_text_for_tagging(path, indices):
                 print('read', ins_cnt, 'instances', file=sys.stderr)
 
     return instances
+
+
+"""
+Read data with cu1s (char unit, one sentence in one line) format.
+If tagging == True, the following format is expected for joint segmentation and POS tagging:
+  word1_pos1 word2_pos2 ... wordn_posn
+
+otherwise, the following format is expected for segmentation:
+  word1 word2 ... wordn
+"""
+def load_data_cu1s(path, tagging=False, update_token=True, update_label=True, 
+                   indices=None, refer_vocab=set()):
+    if not indices:
+        if tagging:
+            indices = lattice.MorphologyDictionary()
+        else:
+            indices = lattice.IndicesPair()
+            indices.init_label_indices('BIES')
+
+    token_ind = indices.token_indices
+    label_ind = indices.label_indices
+
+    ins_cnt = 0
+    chars_list = []
+    seg_labels_list = []
+
+    with open(path) as f:
+
+        for line in f:
+            line = line.strip()
+            if len(line) < 1:
+                continue
+
+            entries = re.sub(' +', ' ', line).split()
+            chars = []
+            seg_labels = []
+
+            for entry in entries:
+                attrs = entry.split('_')
+                word = attrs[0]
+                wlen = len(word)
+                update_this_token = update_token or word in refer_vocab                    
+                chars.extend([token_ind.get_id(word[i], update_this_token) for i in range(wlen)])
+    
+                if tagging:
+                    pos = attrs[1]
+                    seg_labels.extend(
+                        [label_ind.get_id(
+                            get_label_BIES(i, wlen-1, cate=pos), update=update_label) for i in range(wlen)])
+                else:
+                    seg_labels.extend(
+                        [label_ind.get_id(get_label_BIES(i, wlen-1), update_label) for i in range(wlen)])
+
+            chars_list.append(chars)
+            seg_labels_list.append(seg_labels)
+
+            ins_cnt += 1
+            if ins_cnt % 100000 == 0:
+                print('Read', ins_cnt, 'instances', file=sys.stderr)
+
+    return indices, chars_list, seg_labels_list
 
 
 """for BCCWJ word segmentation or POS tagging
@@ -139,7 +199,7 @@ def load_bccwj_data_for_lattice_ma(
         path, read_pos=True, update_token=True, subpos_depth=-1, indices=None, limit=-1):
 
     if not indices:
-        indices = lattice.MorphologicalDictitionary()
+        indices = lattice.MorphologyDictionary()
         
     instances = []
     slab_seqs = []              # list of segmentation labels (B, I, E, S)
@@ -549,10 +609,15 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
             limit=limit)
 
     elif data_format == 'seg':
-        instances, label_seqs, indices = load_ws_data(
-            path, update_token=update_token, update_label=update_label,
-            indices=indices, refer_vocab=refer_vocab, limit=limit)
+        indices, instances, label_seqs = load_data_cu1s(
+            path, tagging=False, update_token=update_token, update_label=update_label,
+            indices=indices, refer_vocab=refer_vocab)
 
+    elif data_format == 'seg_tag':
+        indices, instances, label_seqs = load_data_cu1s(
+            path, tagging=True, update_token=update_token, update_label=update_label,
+            indices=indices, refer_vocab=refer_vocab)
+        
     elif data_format == 'wsj':
         instances, label_seqs, indices = load_wsj_data(
             path, update_token=update_token, update_label=update_label, 

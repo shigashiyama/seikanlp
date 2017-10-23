@@ -770,10 +770,10 @@ class Trainer(object):
                         self.report('valid\t%d\t%s\t%s' % (n_iter, now_e, v_res))
 
                     # Save the model
-                    mdl_path = '{}/{}_i{}.npz'.format(MODEL_DIR, self.start_time, now_e)
-                    self.log('Save the model: %s\n' % mdl_path)
-                    self.report('[INFO] save the model: %s\n' % mdl_path)
                     if not self.args.quiet:
+                        mdl_path = '{}/{}_i{}.npz'.format(MODEL_DIR, self.start_time, now_e)
+                        self.log('Save the model: %s\n' % mdl_path)
+                        self.report('[INFO] save the model: %s\n' % mdl_path)
                         serializers.save_npz(mdl_path, self.tagger)
         
                     # Reset counters
@@ -898,8 +898,8 @@ class Trainer4JointMA(Trainer):
                             self.logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
 
                     # Save the model
-                    mdl_path = '{}/{}_i{}.npz'.format(MODEL_DIR, self.start_time, now_e)
                     if not self.args.quiet:
+                        mdl_path = '{}/{}_i{}.npz'.format(MODEL_DIR, self.start_time, now_e)
                         print('save the model: %s\n' % mdl_path)
                         self.logger.write('INFO: save the model: %s\n' % mdl_path)
                         serializers.save_npz(mdl_path, self.tagger)
