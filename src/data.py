@@ -565,7 +565,7 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
             lowercase=lowercase, normalize_digits=normalize_digits, 
             indices=indices, refer_vocab=refer_vocab, limit=limit)
     else:
-        print("Invalid data format", file=sys.stderr)
+        print('Error: invalid data format: {}'.format(data_format), file=sys.stderr)
         sys.exit()
 
     return instances, label_seqs, pos_seqs, indices

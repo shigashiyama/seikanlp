@@ -326,6 +326,54 @@ def init_hyperparameters(args):
 
 class Trainer(object):
     def __init__(self, args, logger=sys.stderr):
+        err_msgs = []
+        if args.execute_mode == 'train':
+            if not args.train_data:
+                msg = 'Error: the following argument is required for {} mode: {}'.format(
+                    'train', '--train_data/-t')
+                err_msgs.append(msg)
+            if not args.data_format:
+                msg = 'Error: the following argument is required for {} mode: {}'.format(
+                    'train', '--data_format/-f')
+                err_msgs.append(msg)
+
+        elif args.execute_mode == 'eval':
+            if not args.model_path:
+                msg = 'Error: the following argument is required for {} mode: {}'.format(
+                    'eval', '--model_path/-p')
+                err_msgs.append(msg)
+
+            if not args.test_data:
+                msg = 'Error: the following argument is required for {} mode: {}'.format(
+                    'eval', '--test_data')
+                err_msgs.append(msg)
+
+        elif args.execute_mode == 'decode':
+            if not args.model_path:
+                msg = 'Error: the following argument is required for {} mode: {}'.format(
+                    'decode', '--model_path/-p')
+                err_msgs.append(msg)
+
+            if not args.raw_data:
+                msg = 'Error: the following argument is required for {} mode: {}'.format(
+                    'raw', '--model_path/-p')
+                err_msgs.append(msg)
+
+        elif args.execute_mode == 'interactive':
+            if not args.model_path:
+                msg = 'Error: the following argument is required for {} mode: {}'.format(
+                    'interactive', '--model_path/-p')
+                err_msgs.append(msg)
+
+        else:
+            msg = 'Error: invalid execute mode: {}'.format(args.execute_mode)
+            err_msgs.append(msg)
+
+        if err_msgs:
+            for msg in err_msgs:
+                print(msg, file=sys.stderr)
+            sys.exit()
+
         self.args = args
         self.start_time = datetime.now().strftime('%Y%m%d_%H%M')
         self.logger = logger    # output execute log
@@ -343,7 +391,7 @@ class Trainer(object):
         self.tagger = None
         self.optimizer = None
         self.decode_type = None
-        
+
         self.log('Start time: {}\n'.format(self.start_time))
         if not self.args.quiet:
             self.reporter = open('{}/{}.log'.format(LOG_DIR, self.start_time), 'a')
@@ -981,8 +1029,6 @@ if __name__ == '__main__':
         trainer.run_decoding()
     elif args.execute_mode == 'interactive':
         trainer.run_interactive_decoding()
-    else:
-        print('Invalid execute mode: {}'.format(args.execute_mode))
 
     ################################
     # Terminate
