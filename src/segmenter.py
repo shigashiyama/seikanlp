@@ -431,7 +431,7 @@ class Trainer(object):
 
 
     def load_model(self, model_path, use_gpu=False):
-        array = model_path.split('_i')
+        array = model_path.split('_e')
         indices_path = '{}.s2i'.format(array[0])
         hparam_path = '{}.hyp'.format(array[0])
         param_path = model_path
@@ -771,7 +771,7 @@ class Trainer(object):
 
                     # Save the model
                     if not self.args.quiet:
-                        mdl_path = '{}/{}_i{}.npz'.format(MODEL_DIR, self.start_time, now_e)
+                        mdl_path = '{}/{}_e{}.npz'.format(MODEL_DIR, self.start_time, now_e)
                         self.log('Save the model: %s\n' % mdl_path)
                         self.report('[INFO] save the model: %s\n' % mdl_path)
                         serializers.save_npz(mdl_path, self.tagger)
@@ -899,7 +899,7 @@ class Trainer4JointMA(Trainer):
 
                     # Save the model
                     if not self.args.quiet:
-                        mdl_path = '{}/{}_i{}.npz'.format(MODEL_DIR, self.start_time, now_e)
+                        mdl_path = '{}/{}_e{}.npz'.format(MODEL_DIR, self.start_time, now_e)
                         print('save the model: %s\n' % mdl_path)
                         self.logger.write('INFO: save the model: %s\n' % mdl_path)
                         serializers.save_npz(mdl_path, self.tagger)
