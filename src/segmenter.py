@@ -151,7 +151,7 @@ def print_results(total_loss, ave_loss, count, c, acc, overall, acc2=None, overa
                   stream=sys.stderr):
     print('total loss: %.4f' % total_loss, file=stream)
     print('ave loss: %.5f'% ave_loss, file=stream)
-    print('#sen, #token, #chunk, #chunk_pred: {} {} {} {}'.format(
+    print('sen, token, chunk, chunk_pred: {} {} {} {}'.format(
         count, c.token_counter, c.found_correct, c.found_guessed),
           file=stream)
     if acc2:
@@ -174,7 +174,7 @@ def print_results(total_loss, ave_loss, count, c, acc, overall, acc2=None, overa
 
 
 def parse_arguments():
-    # used letters: bcedfgilmnopqrstvx
+    # used letters: bcedfglmnopqrstvx
 
     parser = argparse.ArgumentParser()
 
@@ -193,9 +193,9 @@ def parse_arguments():
                         help='Conduct training from i-th epoch (Default: 1)')
     parser.add_argument('--epoch_end', '-e', type=int, default=5,
                         help='Conduct training up to i-th epoch (Default: 5)')
-    parser.add_argument('--iterations', '-i', type=int, default=10000, 
-                        help='The number of iterations over mini-batch.'
-                        + ' Trained model is evaluated and saved at each multiple of the number'
+    parser.add_argument('--evaluation_size', type=int, default=10000, 
+                        help='The number of examples which'
+                        + ' trained model is evaluated and saved at each multiple of'
                         + ' (Default: 10000)')
     parser.add_argument('--batchsize', '-b', type=int, default=100,
                         help='The number of examples in each mini-batch (Default: 100)')
@@ -704,7 +704,7 @@ class Trainer(object):
 
         xp = cuda.cupy if args.gpu >= 0 else np
         n_train = len(self.train)
-        n_iter_report = self.args.iterations
+        evaluation_size = self.args.evaluation_size
         n_iter = 0
 
         for e in range(max(1, self.args.epoch_begin), self.args.epoch_end+1):
@@ -753,11 +753,11 @@ class Trainer(object):
                 # print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
 
                 # Evaluation
-                if (n_iter * self.args.batchsize) % n_iter_report == 0: # or i == n_train:
+                if (n_iter * self.args.batchsize) % evaluation_size == 0:
 
                     now_e = '%.3f' % (n_iter * self.args.batchsize / n_train)
                     time = datetime.now().strftime('%Y%m%d_%H%M')
-                    self.log('\n### iteration %s (epoch %s)' % ((n_iter * self.args.batchsize), now_e))
+                    self.log('\n### Finish %s iterations (%s examples: %s epoch)' % (n_iter, (n_iter * self.args.batchsize), now_e))
                     self.log('<training result for previous iterations>')
 
                     ave_loss = total_loss / num_tokens
@@ -820,7 +820,7 @@ class Trainer4JointMA(Trainer):
         xp = cuda.cupy if args.gpu >= 0 else np
 
         n_train = len(self.train)
-        n_iter_report = self.args.iter_to_report
+        evaluation_size = self.args.evaluation_size
         n_iter = 0
 
         for e in range(max(1, self.args.epoch_begin), self.args.epoch_end+1):
@@ -868,7 +868,7 @@ class Trainer4JointMA(Trainer):
                 # print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
 
                 # Evaluation
-                if (n_iter * self.args.batchsize) % n_iter_report == 0:
+                if (n_iter * self.args.batchsize) % evaluation_size == 0:
 
                     now_e = '%.3f' % (n_iter * self.args.batchsize / n_train)
                     time = datetime.now().strftime('%Y%m%d_%H%M')

@@ -13,7 +13,7 @@
 # [1] Train a new model from the training data
 
 GPU="0 --cudnn"
-ITER=2000
+EVAL_SIZE=2000
 EPOCH_END=1
 BATCH=100
 
@@ -29,7 +29,7 @@ FORMAT="bccwj_seg_tag --subpos_depth 1"
 # python src/segmenter.py \
 #        -x train \
 #        -g $GPU \
-#        -i $ITER \
+#        --evaluation_size $EVAL_SIZE
 #        -e $EPOCH_END \
 #        -b $BATCH \
 #        -d $EMBED_DIM \
@@ -52,7 +52,7 @@ MODEL=
 # python src/segmenter.py \
 #        -x train \
 #        -g $GPU \
-#        -i $ITER \
+#        --evaluation_size $EVAL_SIZE
 #        --epoch_begin $EPOCH_BEGIN \
 #        -e $EPOCH_END \
 #        -b $BATCH \
