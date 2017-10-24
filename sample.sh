@@ -29,7 +29,7 @@ FORMAT="bccwj_seg_tag --subpos_depth 1"
 # python src/segmenter.py \
 #        -x train \
 #        -g $GPU \
-#        --evaluation_size $EVAL_SIZE
+#        --evaluation_size $EVAL_SIZE \
 #        -e $EPOCH_END \
 #        -b $BATCH \
 #        -d $EMBED_DIM \
@@ -52,7 +52,7 @@ MODEL=
 # python src/segmenter.py \
 #        -x train \
 #        -g $GPU \
-#        --evaluation_size $EVAL_SIZE
+#        --evaluation_size $EVAL_SIZE \
 #        --epoch_begin $EPOCH_BEGIN \
 #        -e $EPOCH_END \
 #        -b $BATCH \
