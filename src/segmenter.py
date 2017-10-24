@@ -429,17 +429,16 @@ class Trainer(object):
     def finalize_hparams(self, hparams):
         self.hparams = hparams
 
-        if hparams['data_format'] == 'seg':
+        if (hparams['data_format'] == 'seg' or
+            hparams['data_format'] == 'bccwj_seg'):
             self.decode_type = 'seg'
 
-        elif hparams['data_format'] == 'bccwj_seg':
-            if hparams['subpos_depth'] == 0:
-                self.decode_type = 'seg'
-            else:
-                self.decode_type = 'seg_tag'
+        elif (hparams['data_format'] == 'seg_tag' or
+              hparams['data_format'] == 'bccwj_seg_tag'):
+            self.decode_type = 'seg_tag'
 
         else:
-            self.decode_type == 'tag'
+            self.decode_type = 'tag'
 
 
     def set_tagger(self, tagger):
