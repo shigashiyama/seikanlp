@@ -24,7 +24,7 @@ DROPOUT=0.1
 
 TRAIN=
 VALID=
-FORMAT="bccwj_seg --subpos_depth 0"
+FORMAT="bccwj_seg_tag --subpos_depth 1"
 
 # python src/segmenter.py \
 #        -x train \

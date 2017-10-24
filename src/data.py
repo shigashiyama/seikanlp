@@ -67,7 +67,7 @@ otherwise, the following format is expected for segmentation:
   word1 word2 ... wordn
 """
 def load_data_cu1s(path, tagging=False, update_token=True, update_label=True, 
-                   ws_dict_feat=False, indices=None, refer_vocab=set()):
+                   subpos_depth=-1, ws_dict_feat=False, indices=None, refer_vocab=set()):
     if not indices:
         if tagging or ws_dict_feat:
             indices = lattice.MorphologyDictionary()
@@ -99,9 +99,14 @@ def load_data_cu1s(path, tagging=False, update_token=True, update_label=True,
                 wlen = len(word)
                 update_this_token = update_token or word in refer_vocab                    
                 chars.extend([token_ind.get_id(word[i], update_this_token) for i in range(wlen)])
-    
                 
-                pos = attrs[1] if tagging else None
+                if tagging:
+                    pos = attrs[1]
+                    if subpos_depth == 1:
+                        pos = pos.split('-')[0]
+                    elif subpos_depth > 1:
+                        pos = '_'.join(pos.split('-')[0:subpos_depth])
+
                 seg_labels.extend(
                     [label_ind.get_id(
                         get_label_BIES(i, wlen-1, cate=pos), update=update_label) for i in range(wlen)])
@@ -127,14 +132,15 @@ example of input data:
   I       の      助詞-格助詞$
   I       会話    名詞-普通名詞-サ変可能
 """
-def load_bccwj_data(path, update_token=True, update_label=True, subpos_depth=-1, indices=None, 
-                    refer_vocab=set(), do_segmentation=True, ws_dict_feat=False, limit=-1):
+def load_data_1wb(path, segmentation=True, tagging=False,
+                  update_token=True, update_label=True, subpos_depth=-1, ws_dict_feat=False,
+                  indices=None, refer_vocab=set()):
     if not indices:
         if ws_dict_feat:
             indices = lattice.MorphologyDictionary()
         else:
             indices = lattice.IndicesPair()
-            if subpos_depth == 0:
+            if not tagging:
                 indices.init_label_indices('BIES')
 
     instances = []
@@ -155,13 +161,14 @@ def load_bccwj_data(path, update_token=True, update_label=True, subpos_depth=-1,
             line = line.rstrip('\n').split('\t')
             bos = line[2]
             word = line[5]
-            pos = line[3]
-            if do_segmentation and subpos_depth == 0:
-                pos = None
-            elif subpos_depth == 1:
-                pos = pos.split('-')[0]
-            elif subpos_depth > 1:
-                pos = '_'.join(pos.split('-')[0:subpos_depth])
+            if tagging:
+                pos = line[3]
+                if subpos_depth == 1:
+                    pos = pos.split('-')[0]
+                elif subpos_depth > 1:
+                    pos = '_'.join(pos.split('-')[0:subpos_depth])
+            else:
+                 pos = None   
 
             if not bof and bos == 'B':
                 instances.append(ins)
@@ -172,10 +179,7 @@ def load_bccwj_data(path, update_token=True, update_label=True, subpos_depth=-1,
                 if ins_cnt % 100000 == 0:
                     print('read', ins_cnt, 'instances', file=sys.stderr)
 
-            if limit > 0 and ins_cnt >= limit + 1:
-                break
-
-            if do_segmentation:
+            if segmentation:
                 wlen = len(word)
                 update_this_token = update_token or word in refer_vocab
                 ins.extend([indices.token_indices.get_id(word[i], update_this_token) for i in range(wlen)])
@@ -606,23 +610,24 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
     #         path, read_pos, update_token=update_token, subpos_depth=subpos_depth, 
     #         indices=indices, limit=limit)
 
-    if data_format == 'bccwj_seg' or data_format == 'bccwj_tag':
-        do_segmentation = True if data_format == 'bccwj_seg' else False
+    if data_format == 'bccwj_seg' or data_format == 'bccwj_seg_tag' or data_format == 'bccwj_tag':
+        segmentation = True if 'seg' in data_format else False
+        tagging = True if 'tag' in data_format else False
 
-        instances, label_seqs, indices = load_bccwj_data(
-            path, update_token=update_token, update_label=update_label, subpos_depth=subpos_depth, 
-            indices=indices, refer_vocab=refer_vocab, do_segmentation=do_segmentation,
-            ws_dict_feat=ws_dict_feat, limit=limit)
+        instances, label_seqs, indices = load_data_1wb(
+            path, segmentation=segmentation, tagging=tagging,
+            update_token=update_token, update_label=update_label, 
+            subpos_depth=subpos_depth, ws_dict_feat=ws_dict_feat,
+            indices=indices, refer_vocab=refer_vocab)
 
-    elif data_format == 'seg':
+    elif data_format == 'seg' or data_format == 'seg_tag':
+        #segmentation = True if 'seg' in data_format else False
+        tagging = True if 'tag' in data_format else False
+
         indices, instances, label_seqs = load_data_cu1s(
-            path, tagging=False, update_token=update_token, update_label=update_label,
-            ws_dict_feat=ws_dict_feat, indices=indices, refer_vocab=refer_vocab)
-
-    elif data_format == 'seg_tag':
-        indices, instances, label_seqs = load_data_cu1s(
-            path, tagging=True, update_token=update_token, update_label=update_label,
-            ws_dict_feat=ws_dict_feat, indices=indices, refer_vocab=refer_vocab)
+            path, tagging=tagging, update_token=update_token, update_label=update_label,
+            subpos_depth=subpos_depth, ws_dict_feat=ws_dict_feat, 
+            indices=indices, refer_vocab=refer_vocab)
         
     # elif data_format == 'wsj':
     #     instances, label_seqs, indices = load_wsj_data(

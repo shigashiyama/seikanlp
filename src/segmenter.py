@@ -245,13 +245,18 @@ def parse_arguments():
     parser.add_argument('--data_format', '-f', 
                         help='Choose format of input data among from'
                         + ' \'seg\' (word segmentation on data where words are split with single spaces),'
-                        + ' \'bccwj_seg\' (word segmentation w/ or w/o POS tagging on data with BCCWJ format),'
+                        + ' \'seg_tag\' (word segmentation w/ POS tagging on data '
+                        + ' where \'words_pos\' pairs are split with single spaces),'
+                        + ' \'bccwj_seg\' (word segmentation on data with BCCWJ format),'
+                        + ' \'bccwj_seg_tag\' (word segmentation w/ POS tagging on data with BCCWJ format),'
                         + ' \'bccwj_tag\' (POS tagging from gold words on data with BCCWJ format),'
-                        + ' \'wsj\' (POS tagging on data with CoNLL-2005 format),'
-                        + ' \'conll2003\' (NER on data with CoNLL-2003 format),')
+                        # + ' \'wsj\' (POS tagging on data with CoNLL-2005 format),'
+                        # + ' \'conll2003\' (NER on data with CoNLL-2003 format),'
+    )
     parser.add_argument('--subpos_depth', '-s', type=int, default=-1,
-                        help='Set 0 (WS only), positive integer (use POS up to i-th hierarcy)'
-                        + ' or -1 (use POS with all sub POS) when set \'bccwj_seg\' to data_format')
+                        help='Set positive integer (use POS up to i-th hierarcy)'
+                        + ' or other value (use POS with all sub POS) when set \'bccwj_seg_tag\''
+                        + ' to data_format')
     parser.add_argument('--path_prefix', '-p', help='Path prefix of input data')
     parser.add_argument('--train_data', '-t', default='',
                         help='File path succeeding \'path_prefix\' of training data')
