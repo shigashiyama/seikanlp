@@ -304,26 +304,6 @@ def parse_arguments():
     return args
 
 
-def init_hyperparameters(args):
-    hparams = {
-        #'joint_type' : args.joint_type,
-        'embed_dimension' : args.embed_dimension,
-        'rnn_layers' : args.rnn_layers,
-        'rnn_hidden_units' : args.rnn_hidden_units,
-        'rnn_unit_type' : args.rnn_unit_type,
-        'rnn_bidirection' : args.rnn_bidirection,
-        'inference_layer' : args.inference_layer,
-        'dropout' : args.dropout,
-        'use_dict_feature' : args.use_dict_feature,
-        'data_format' : args.data_format,
-        'subpos_depth' : args.subpos_depth,
-        'lowercase' : args.lowercase,
-        'normalize_digits' : args.normalize_digits,
-    }
-
-    return hparams
-
-
 class Trainer(object):
     def __init__(self, args, logger=sys.stderr):
         err_msgs = []
@@ -410,7 +390,38 @@ class Trainer(object):
             self.reporter.close()
     
 
-    def init_hparams(self, hparams):
+    def init_hyperparameters(self, args):
+        hparams = {
+            #'joint_type' : args.joint_type,
+            'embed_dimension' : args.embed_dimension,
+            'rnn_layers' : args.rnn_layers,
+            'rnn_hidden_units' : args.rnn_hidden_units,
+            'rnn_unit_type' : args.rnn_unit_type,
+            'rnn_bidirection' : args.rnn_bidirection,
+            'inference_layer' : args.inference_layer,
+            'dropout' : args.dropout,
+            'use_dict_feature' : args.use_dict_feature,
+            'data_format' : args.data_format,
+            'subpos_depth' : args.subpos_depth,
+            'lowercase' : args.lowercase,
+            'normalize_digits' : args.normalize_digits,
+        }
+        self.finalize_hparams(hparams)
+
+        self.log('Init hyperparameters')
+        self.log('### arguments')
+        for k, v in self.args.__dict__.items():
+            if k in hparams and v != hparams[k]:
+                message = '{}={} (input option value {} was discarded)'.format(k, hparams[k], v)
+            else:
+                message = '{}={}'.format(k, v)
+
+            self.log('# {}'.format(message))
+            self.report('[INFO] arg: {}'.format(message))
+        self.log('')
+
+
+    def finalize_hparams(self, hparams):
         self.hparams = hparams
 
         if hparams['data_format'] == 'seg':
@@ -488,7 +499,7 @@ class Trainer(object):
         chainer.serializers.load_npz(model_path, tagger)
         self.log('Load model parameters: {}\n'.format(model_path))
 
-        self.init_hparams(hparams)
+        self.finalize_hparams(hparams)
         self.tagger = tagger
 
 
@@ -506,6 +517,7 @@ class Trainer(object):
         if args.label_reference_data:
             _, _, _, indices = data.load_data(
                 hparams['data_format'], refer_path, read_pos=read_pos, update_token=False,
+                ws_dict_feat=hparams['use_dict_feature'],
                 subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
                 normalize_digits=hparams['normalize_digits'], indices=indices)
             self.log('Load label set from reference data: {}'.format(refer_path))
@@ -519,6 +531,7 @@ class Trainer(object):
         else:
             train, train_t, train_p, indices = data.load_data(
             hparams['data_format'], train_path, read_pos=read_pos,
+            ws_dict_feat=hparams['use_dict_feature'],
             subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
             normalize_digits=hparams['normalize_digits'], indices=indices, refer_vocab=refer_vocab)
         
@@ -535,6 +548,7 @@ class Trainer(object):
             # indices can be updated if embed_model are used
             val, val_t, val_p, indices = data.load_data(
                 hparams['data_format'], val_path, read_pos=read_pos, update_token=False, update_label=False,
+                ws_dict_feat=hparams['use_dict_feature'],
                 subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
                 normalize_digits=hparams['normalize_digits'], indices=indices, refer_vocab=refer_vocab)
 
@@ -582,6 +596,7 @@ class Trainer(object):
             
         test, test_t, test_p, indices = data.load_data(
             hparams['data_format'], test_path, read_pos=read_pos, update_token=False, update_label=False,
+            ws_dict_feat=hparams['use_dict_feature'],
             subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
             normalize_digits=hparams['normalize_digits'], indices=indices, refer_vocab=refer_vocab)
 
@@ -952,11 +967,12 @@ if __name__ == '__main__':
 
     if args.model_path:
         trainer.load_model(args.model_path, use_gpu=use_gpu)
+        indices = trainer.tagger.indices
         id2token_org = copy.deepcopy(trainer.tagger.indices.id2token)
         id2label_org = copy.deepcopy(trainer.tagger.indices.id2label)
     else:
-        hparams = init_hyperparameters(args)
-        trainer.init_hparams(hparams)
+        trainer.init_hyperparameters(args)
+        indices = None
         id2token_org = {}
         id2label_org = {}
 
@@ -979,7 +995,6 @@ if __name__ == '__main__':
     if not trainer.tagger and args.dict_path:
         dic_path = args.dict_path
         indices = lattice.load_dictionary(dic_path, read_pos=False)
-        trainer.set_indices(indices)
         trainer.log('Load dictionary: {}'.format(dic_path))
         trainer.log('Vocab size: {}'.format(len(indices.token_indices)))
 
@@ -993,7 +1008,6 @@ if __name__ == '__main__':
     ################################
     # Load dataset and set up indices
 
-    indices = trainer.tagger.indices if trainer.tagger else None
     if args.execute_mode == 'train':
         indices = trainer.load_data_for_training(indices, embed_model)
     elif args.execute_mode == 'eval':

@@ -91,17 +91,17 @@ class RNNBase(chainer.Chain):
                 if rnn_bidirection:
                     self.rnn_unit = L.NStepBiLSTM(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout)
                 else:
-                    self.rnn_unit = L.NStepLSTM(n_rnn_layers, embed_dim, n_rnn_units, dropout)
+                    self.rnn_unit = L.NStepLSTM(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout)
             elif rnn_unit_type == 'gru':
                 if rnn_bidirection:
                     self.rnn_unit = L.NStepBiGRU(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout) 
                 else:
-                    self.rnn_unit = L.NStepGRU(n_rnn_layers, embed_dim, n_rnn_units, dropout)
+                    self.rnn_unit = L.NStepGRU(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout)
             else:
                 if rnn_bidirection:
                     self.rnn_unit = L.NStepBiRNNTanh(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout) 
                 else:
-                    self.rnn_unit = L.NStepRNNTanh(n_rnn_layers, embed_dim, n_rnn_units, dropout)
+                    self.rnn_unit = L.NStepRNNTanh(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout)
 
             self.affine = L.Linear(n_rnn_units * (2 if rnn_bidirection else 1), n_labels)
 

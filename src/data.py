@@ -67,9 +67,9 @@ otherwise, the following format is expected for segmentation:
   word1 word2 ... wordn
 """
 def load_data_cu1s(path, tagging=False, update_token=True, update_label=True, 
-                   indices=None, refer_vocab=set()):
+                   ws_dict_feat=False, indices=None, refer_vocab=set()):
     if not indices:
-        if tagging:
+        if tagging or ws_dict_feat:
             indices = lattice.MorphologyDictionary()
         else:
             indices = lattice.IndicesPair()
@@ -100,14 +100,15 @@ def load_data_cu1s(path, tagging=False, update_token=True, update_label=True,
                 update_this_token = update_token or word in refer_vocab                    
                 chars.extend([token_ind.get_id(word[i], update_this_token) for i in range(wlen)])
     
-                if tagging:
-                    pos = attrs[1]
-                    seg_labels.extend(
-                        [label_ind.get_id(
-                            get_label_BIES(i, wlen-1, cate=pos), update=update_label) for i in range(wlen)])
-                else:
-                    seg_labels.extend(
-                        [label_ind.get_id(get_label_BIES(i, wlen-1), update_label) for i in range(wlen)])
+                
+                pos = attrs[1] if tagging else None
+                seg_labels.extend(
+                    [label_ind.get_id(
+                        get_label_BIES(i, wlen-1, cate=pos), update=update_label) for i in range(wlen)])
+
+                if update_this_token and ws_dict_feat: # update indices
+                    ids = chars[-wlen:]
+                    indices.chunk_trie.get_word_id(ids, True)
 
             chars_list.append(chars)
             seg_labels_list.append(seg_labels)
@@ -129,9 +130,12 @@ example of input data:
 def load_bccwj_data(path, update_token=True, update_label=True, subpos_depth=-1, indices=None, 
                     refer_vocab=set(), do_segmentation=True, ws_dict_feat=False, limit=-1):
     if not indices:
-        indices = lattice.IndicesPair()
-        if subpos_depth == 0:
-            indices.init_label_indices('BIES')
+        if ws_dict_feat:
+            indices = lattice.MorphologyDictionary()
+        else:
+            indices = lattice.IndicesPair()
+            if subpos_depth == 0:
+                indices.init_label_indices('BIES')
 
     instances = []
     lab_seqs = []
@@ -173,12 +177,13 @@ def load_bccwj_data(path, update_token=True, update_label=True, subpos_depth=-1,
 
             if do_segmentation:
                 wlen = len(word)
-                ins.extend([indices.token_indices.get_id(word[i], update_token) for i in range(wlen)])
+                update_this_token = update_token or word in refer_vocab
+                ins.extend([indices.token_indices.get_id(word[i], update_this_token) for i in range(wlen)])
                 labs.extend(
                     [indices.label_indices.get_id(
                         get_label_BIES(i, wlen-1, cate=pos), update=update_label) for i in range(wlen)])
 
-                if update_token and ws_dict_feat: # update indices
+                if update_this_token and ws_dict_feat: # update indices
                     ids = ins[-wlen:]
                     indices.chunk_trie.get_word_id(ids, True)
 
@@ -591,44 +596,45 @@ def get_label_BIES(index, last, cate=None):
     return '{}{}'.format(prefix, suffix)
 
 
-def load_data(data_format, path, read_pos=True, update_token=True, update_label=True, subpos_depth=-1,
-               lowercase=False, normalize_digits=False, indices=None, refer_vocab=set(), limit=-1):
+def load_data(data_format, path, read_pos=True, update_token=True, update_label=True, ws_dict_feat=False,
+              subpos_depth=-1, lowercase=False, normalize_digits=False, 
+              indices=None, refer_vocab=set(), limit=-1):
     pos_seqs = []
 
-    if data_format == 'bccwj_seg_lattice':
-        instances, label_seqs, pos_seqs, indices = load_bccwj_data_for_lattice_ma(
-            path, read_pos, update_token=update_token, subpos_depth=subpos_depth, 
-            indices=indices, limit=limit)
+    # if data_format == 'bccwj_seg_lattice':
+    #     instances, label_seqs, pos_seqs, indices = load_bccwj_data_for_lattice_ma(
+    #         path, read_pos, update_token=update_token, subpos_depth=subpos_depth, 
+    #         indices=indices, limit=limit)
 
-    elif data_format == 'bccwj_seg' or data_format == 'bccwj_tag':
+    if data_format == 'bccwj_seg' or data_format == 'bccwj_tag':
         do_segmentation = True if data_format == 'bccwj_seg' else False
 
         instances, label_seqs, indices = load_bccwj_data(
             path, update_token=update_token, update_label=update_label, subpos_depth=subpos_depth, 
             indices=indices, refer_vocab=refer_vocab, do_segmentation=do_segmentation,
-            limit=limit)
+            ws_dict_feat=ws_dict_feat, limit=limit)
 
     elif data_format == 'seg':
         indices, instances, label_seqs = load_data_cu1s(
             path, tagging=False, update_token=update_token, update_label=update_label,
-            indices=indices, refer_vocab=refer_vocab)
+            ws_dict_feat=ws_dict_feat, indices=indices, refer_vocab=refer_vocab)
 
     elif data_format == 'seg_tag':
         indices, instances, label_seqs = load_data_cu1s(
             path, tagging=True, update_token=update_token, update_label=update_label,
-            indices=indices, refer_vocab=refer_vocab)
+            ws_dict_feat=ws_dict_feat, indices=indices, refer_vocab=refer_vocab)
         
-    elif data_format == 'wsj':
-        instances, label_seqs, indices = load_wsj_data(
-            path, update_token=update_token, update_label=update_label, 
-            lowercase=lowercase, normalize_digits=normalize_digits, 
-            indices=indices, refer_vocab=refer_vocab, limit=limit)
+    # elif data_format == 'wsj':
+    #     instances, label_seqs, indices = load_wsj_data(
+    #         path, update_token=update_token, update_label=update_label, 
+    #         lowercase=lowercase, normalize_digits=normalize_digits, 
+    #         indices=indices, refer_vocab=refer_vocab, limit=limit)
 
-    elif data_format == 'conll2003':
-        instances, label_seqs, indices = load_conll2003_data(
-            path, update_token=update_token, update_label=update_label, 
-            lowercase=lowercase, normalize_digits=normalize_digits, 
-            indices=indices, refer_vocab=refer_vocab, limit=limit)
+    # elif data_format == 'conll2003':
+    #     instances, label_seqs, indices = load_conll2003_data(
+    #         path, update_token=update_token, update_label=update_label, 
+    #         lowercase=lowercase, normalize_digits=normalize_digits, 
+    #         indices=indices, refer_vocab=refer_vocab, limit=limit)
     else:
         print('Error: invalid data format: {}'.format(data_format), file=sys.stderr)
         sys.exit()
