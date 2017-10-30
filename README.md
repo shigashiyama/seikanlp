@@ -48,7 +48,7 @@ See Also sample.sh to confirm typical usages.
 
 ## Change Log
 
-- 2017-10-24 version 0.0.1
+- 2017-10-30 version 0.0.1
     - Initial release
 
 
