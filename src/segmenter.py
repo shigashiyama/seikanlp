@@ -318,8 +318,7 @@ class Trainer(object):
                     'train', '--train_data/-t')
                 err_msgs.append(msg)
             if not args.data_format and not args.model_path:
-                msg = 'Error: the following argument is required for {} mode'
-                + ' unless resuming a trained model: {}'.format('train', '--data_format/-f')
+                msg = 'Error: the following argument is required for {} mode unless resuming a trained model: {}'.format('train', '--data_format/-f')
                 err_msgs.append(msg)
 
         elif args.execute_mode == 'eval':
@@ -429,12 +428,12 @@ class Trainer(object):
     def finalize_hparams(self, hparams):
         self.hparams = hparams
 
-        if (hparams['data_format'] == 'seg' or
-            hparams['data_format'] == 'bccwj_seg'):
+        if (hparams['data_format'] == 'wl_seg' or
+            hparams['data_format'] == 'sl_seg'):
             self.decode_type = 'seg'
 
-        elif (hparams['data_format'] == 'seg_tag' or
-              hparams['data_format'] == 'bccwj_seg_tag'):
+        elif (hparams['data_format'] == 'wl_seg_tag' or
+              hparams['data_format'] == 'sl_seg_tag'):
             self.decode_type = 'seg_tag'
 
         else:
@@ -807,134 +806,6 @@ class Trainer(object):
 
         time = datetime.now().strftime('%Y%m%d_%H%M')
         self.report('Finish: %s\n' % time)
-
-
-#TODO modify loggging 
-class Trainer4JointMA(Trainer):
-    def __init__(self, args, logger=sys.stderr):
-        super(Trainer4JointMA, self).__init__(args, logger=sys.stderr)
-
-
-    def run_training(self):
-        xp = cuda.cupy if args.gpu >= 0 else np
-
-        n_train = len(self.train)
-        evaluation_size = self.args.evaluation_size
-        n_iter = 0
-
-        for e in range(max(1, self.args.epoch_begin), self.args.epoch_end+1):
-            time = datetime.now().strftime('%Y%m%d_%H%M')
-            self.report('[INFO] Start epoch %d at %s\n' % (e, time))
-            self.log('Start epoch %d: %s' % (e, time))
-
-            # learning rate decay: not implemented
-
-            count = 0
-            num_tokens = 0
-            total_loss = 0
-            total_ecounts_seg = conlleval.EvalCounts()
-            total_ecounts_pos = conlleval.EvalCounts()
-
-            i = 0
-            for xs, ts_seg, ts_pos in batch_generator(
-                    self.train, self.train_t, self.train_p, self.args.batchsize, shuffle=False, xp=xp):
-
-                #self.tagger.predictor.lattice_crf.debug = True
-                #self.tagger.indices.chunk_trie.debug = True
-                
-                t0 = datetime.now()
-                loss, ecounts_seg, ecounts_pos = self.tagger(xs, ts_seg, ts_pos, train=True)
-                t1 = datetime.now()
-
-                num_tokens += sum([len(x) for x in xs])
-                count += len(xs)
-                total_loss += loss.data
-                total_ecounts_seg = conlleval.merge_counts(total_ecounts_seg, ecounts_seg)
-                total_ecounts_pos = conlleval.merge_counts(total_ecounts_pos, ecounts_pos)
-                i_max = min(i + self.args.batchsize, n_train)
-                self.log('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
-                i = i_max
-                n_iter += 1
-
-                t2 = datetime.now()
-                self.optimizer.target.cleargrads() # Clear the parameter gradients
-                loss.backward()               # Backprop
-                loss.unchain_backward()       # Truncate the graph
-                self.optimizer.update()            # Update the parameters
-                t3 = datetime.now()
-                # print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
-                # print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
-                # print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
-
-                # Evaluation
-                if (n_iter * self.args.batchsize) % evaluation_size == 0:
-
-                    now_e = '%.3f' % (n_iter * self.args.batchsize / n_train)
-                    time = datetime.now().strftime('%Y%m%d_%H%M')
-                    self.log('\n### iteration %s (epoch %s)' % ((n_iter * self.args.batchsize), now_e))
-                    self.log('<training result for previous iterations>')
-
-                    ave_loss = total_loss / num_tokens
-
-                    seg_c = total_ecounts_seg
-                    seg_acc = conlleval.calculate_accuracy(seg_c.correct_tags, seg_c.token_counter)
-                    seg_overall = conlleval.calculate_metrics(
-                        seg_c.correct_chunk, seg_c.found_guessed, seg_c.found_correct)
-
-                    pos_c = total_ecounts_pos
-                    pos_acc = conlleval.calculate_accuracy(pos_c.correct_tags, pos_c.token_counter)
-                    pos_overall = conlleval.calculate_metrics(
-                        pos_c.correct_chunk, pos_c.found_guessed, pos_c.found_correct)
-
-                    print_results(
-                        total_loss, ave_loss, count, seg_c, seg_acc, seg_overall, pos_acc, pos_overall)
-                    print()
-
-                    if not self.args.quiet:
-                        t_stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
-                            count, seg_c.token_counter, seg_c.found_correct, seg_c.found_guessed)
-                        t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f%.4f\t%.4f' % (
-                            (100.*seg_acc), 
-                            (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore),
-                            (100.*pos_acc), 
-                            (100.*pos_overall.prec), (100.*pos_overall.rec), (100.*pos_overall.fscore), 
-                            total_loss, ave_loss)
-                        self.logger.write('INFO: train - %s\n' % t_stat)
-                        if n_iter == 1:
-                            self.logger.write('data\titer\tep\t\s-acc\ts-prec\ts-rec\ts-fb1\t\p-acc\tp-prec\tp-rec\tp-fb1\tloss\taloss\n')
-                        self.logger.write('train\t%d\t%s\t%s\n' % (n_iter, now_e, t_res))
-
-                    if self.args.valid_data:
-                        print('<validation result>')
-                        v_stat, v_res = evaluate(
-                            self.tagger, self.val, self.val_t, self.val_p, self.args.batchsize, xp=xp)
-                        print()
-
-                        if not self.args.quiet:
-                            self.logger.write('INFO: valid - %s\n' % v_stat)
-                            if n_iter == 1:
-                                self.logger.write('data\titer\tep\t\s-acc\ts-prec\ts-rec\ts-fb1\t\p-acc\tp-prec\tp-rec\tp-fb1\tloss\taloss\n')
-                            self.logger.write('valid\t%d\t%s\t%s\n' % (n_iter, now_e, v_res))
-
-                    # Save the model
-                    if not self.args.quiet:
-                        mdl_path = '{}/{}_e{}.npz'.format(MODEL_DIR, self.start_time, now_e)
-                        print('save the model: %s\n' % mdl_path)
-                        self.logger.write('INFO: save the model: %s\n' % mdl_path)
-                        serializers.save_npz(mdl_path, self.tagger)
-        
-                    # Reset counters
-                    count = 0
-                    total_loss = 0
-                    num_tokens = 0
-                    total_ecounts = conlleval.EvalCounts()
-
-                    if not self.args.quiet:
-                        self.logger.close() # 一度保存しておく
-                        self.logger = open('{}/{}.log'.format(LOG_DIR, self.start_time), 'a')
-
-        time = datetime.now().strftime('%Y%m%d_%H%M')
-        self.log('finish: %s\n' % time)
 
 
 if __name__ == '__main__':

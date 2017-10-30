@@ -428,37 +428,36 @@ def init_tagger(indices, hparams, use_gpu=False, joint_type=''):
     else:
         feat_extractor = None
 
-    if joint_type:
-        if joint_type == 'lattice':
-            rnn = models_joint.RNN_LatticeCRF(
-                hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
-                hparams['rnn_hidden_units'], n_labels, indices, dropout=hparams['dropout'],
-                rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
-                feat_extractor=feat_extractor) #gpu=gpu
+    # if joint_type:
+    #     if joint_type == 'lattice':
+    #         rnn = models_joint.RNN_LatticeCRF(
+    #             hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
+    #             hparams['rnn_hidden_units'], n_labels, indices, dropout=hparams['dropout'],
+    #             rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
+    #             feat_extractor=feat_extractor) #gpu=gpu
 
-        elif hparams['joint_type'] == 'dual_rnn':
-            rnn = None
-            print('Not implemented yet', file=sys.stderr)
-            sys.exit()
+    #     elif hparams['joint_type'] == 'dual_rnn':
+    #         rnn = None
+    #         print('Not implemented yet', file=sys.stderr)
+    #         sys.exit()
 
-        tagger = models_joint.JointMorphologicalAnalyzer(rnn, indices.id2label)
+    #     tagger = models_joint.JointMorphologicalAnalyzer(rnn, indices.id2label)
 
+    if hparams['inference_layer'] == 'crf':
+        rnn = RNN_CRF(
+            hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
+            hparams['rnn_hidden_units'], n_labels, dropout=hparams['dropout'], 
+            rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
+            feat_extractor=feat_extractor)
+        
     else:
-        if hparams['inference_layer'] == 'crf':
-            rnn = RNN_CRF(
-                hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
-                hparams['rnn_hidden_units'], n_labels, dropout=hparams['dropout'], 
-                rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
-                feat_extractor=feat_extractor)
+        rnn = RNN(
+            hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
+            hparams['rnn_hidden_units'], n_labels, dropout=hparams['dropout'], 
+            rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
+            feat_extractor=feat_extractor)
 
-        else:
-            rnn = RNN(
-                hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
-                hparams['rnn_hidden_units'], n_labels, dropout=hparams['dropout'], 
-                rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
-                feat_extractor=feat_extractor)
-
-        tagger = SequenceTagger(rnn, indices)
+    tagger = SequenceTagger(rnn, indices)
 
     return tagger
     
