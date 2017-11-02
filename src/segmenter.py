@@ -13,9 +13,10 @@ import chainer
 from chainer import serializers
 from chainer import cuda
 
-import data
+import data_io
 import lattice
 import models
+import features
 import embedding.read_embedding as emb
 from tools import conlleval
 
@@ -25,129 +26,16 @@ MODEL_DIR = 'models/main'
 OUT_DIR = 'out'
 
 
-def batch_generator(instances, label_seqs, label_seqs2=None, batchsize=100, shuffle=True, xp=np):
-    len_data = len(instances)
-    perm = np.random.permutation(len_data) if shuffle else range(0, len_data)
-
+def batch_generator(len_data, batchsize=100, shuffle=True):
+    perm = np.random.permutation(len_data) if shuffle else list(range(0, len_data))
     for i in range(0, len_data, batchsize):
         i_max = min(i + batchsize, len_data)
-        xs = [xp.asarray(instances[perm[i]], dtype=np.int32) for i in range(i, i_max)]
-        ts = [xp.asarray(label_seqs[perm[i]], dtype=np.int32) for i in range(i, i_max)]
-
-        if label_seqs2:
-            ts2 = [label_seqs2[perm[i]] for i in range(i, i_max)]
-            yield xs, ts, ts2
-        else:
-            yield xs, ts
+        yield perm[i:i_max+1]
 
     raise StopIteration
 
 
-def decode(tagger, instances, batchsize=100, decode_type='tag', stream=sys.stderr, xp=np):
-    tagger.predictor.train = False
-    tagger.compute_fscore = False
-
-    len_data = len(instances)
-    for i in range(0, len_data, batchsize):
-        i_max = min(i + batchsize, len_data)
-        xs = [xp.asarray(instances[i], dtype=np.int32) for i in range(i, i_max)]
-        decode_batch(xs, tagger, decode_type=decode_type, stream=stream)
-
-
-def decode_batch(xs, tagger, decode_type='tag', stream=sys.stderr):
-    ys = tagger.predictor.decode(xs)
-
-    for x, y in zip(xs, ys):
-        x_str = [tagger.indices.get_token(int(xi)) for xi in x]
-        y_str = [tagger.indices.get_label(int(yi)) for yi in y]
-
-        if decode_type == 'tag':
-            res = ['{}/{}'.format(xi_str, yi_str) for xi_str, yi_str in zip(x_str, y_str)]
-            res = ' '.join(res)
-
-        elif decode_type == 'seg':
-            res = ['{}{}'.format(xi_str, ' ' if (yi_str == 'E' or yi_str == 'S') else '') for xi_str, yi_str in zip(x_str, y_str)]
-            res = ''.join(res).rstrip()
-
-        elif decode_type == 'seg_tag':
-            res = ['{}{}'.format(
-                xi_str, 
-                ('/'+yi_str[2:]+' ') if (yi_str.startswith('E-') or yi_str.startswith('S-')) else ''
-            ) for xi_str, yi_str in zip(x_str, y_str)]
-            res = ''.join(res).rstrip()
-
-        else:
-            print('Error: Invalid decode type', file=stream)
-            sys.exit()
-
-        print(res, file=stream)
-
-
-def evaluate(tagger, instances, slab_seqs, plab_seqs=None, batchsize=100, xp=np, stream=sys.stderr):
-    eval_pos = plab_seqs != None
-
-    evaluator = tagger.copy()
-    evaluator.predictor.train = False # dropout does nothing
-    evaluator.compute_fscore = True
-
-    count = 0
-    num_tokens = 0
-    total_loss = 0
-    total_ecounts_seg = conlleval.EvalCounts()
-    total_ecounts_pos = conlleval.EvalCounts()
-
-    for batch in batch_generator(instances, slab_seqs, plab_seqs, batchsize=batchsize, shuffle=False, xp=xp):
-        xs = batch[0]
-        ts_seg = batch[1]
-        ts_pos = batch[2] if len(batch) == 3 else None
-        with chainer.no_backprop_mode():
-            if eval_pos:
-                loss, ecounts_seg, ecounts_pos = evaluator(xs, ts_seg, ts_pos, train=True)
-            else:
-                loss, ecounts_seg = evaluator(xs, ts_seg, train=False)
-                ecounts_pos = None
-
-        num_tokens += sum([len(x) for x in xs])
-        count += len(xs)
-        total_loss += loss.data
-        ave_loss = total_loss / num_tokens
-        total_ecounts_seg = conlleval.merge_counts(total_ecounts_seg, ecounts_seg)
-        if eval_pos:
-            total_ecounts_pos = conlleval.merge_counts(total_ecounts_pos, ecounts_pos)
-
-        seg_c = total_ecounts_seg
-        seg_acc = conlleval.calculate_accuracy(seg_c.correct_tags, seg_c.token_counter)
-        seg_overall = conlleval.calculate_metrics(
-            seg_c.correct_chunk, seg_c.found_guessed, seg_c.found_correct)
-
-        if eval_pos:
-            pos_c = total_ecounts_pos
-            pos_acc = conlleval.calculate_accuracy(pos_c.correct_tags, pos_c.token_counter)
-            pos_overall = conlleval.calculate_metrics(
-                pos_c.correct_chunk, pos_c.found_guessed, pos_c.found_correct)
-        else:
-            pos_c = None
-            pos_acc = None
-            pos_overall = None
-
-    print_results(
-        total_loss, ave_loss, count, seg_c, seg_acc, seg_overall, pos_acc, pos_overall, stream=stream)
-    stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
-        count, seg_c.token_counter, seg_c.found_correct, seg_c.found_guessed)
-    if eval_pos:
-        res = '%.2f\t%.2f\t%.2f\t%.2f\t%.4f\t%.4f' % (
-            (100.*seg_acc), 
-            (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore), 
-            total_loss, ave_loss)
-    else:
-        res = '%.2f\t%.2f\t%.2f\t%.2f\t%.4f\t%.4f' % (
-            (100.*seg_acc), (100.*seg_overall.prec), (100.*seg_overall.rec), (100.*seg_overall.fscore), 
-            total_loss, ave_loss)
-        
-    return stat, res
-
-
-def print_results(total_loss, ave_loss, count, c, acc, overall, acc2=None, overall2=None, 
+def show_results(total_loss, ave_loss, count, c, acc, overall, acc2=None, overall2=None, 
                   stream=sys.stderr):
     print('total loss: %.4f' % total_loss, file=stream)
     print('ave loss: %.5f'% ave_loss, file=stream)
@@ -275,8 +163,10 @@ def parse_arguments():
                         help='File path of pretrained model of word (character or other unit) embedding')
     parser.add_argument('--dict_path', 
                         help='File path of word dictionary that lists words, or words and POS')
-    parser.add_argument('--use_dict_feature', action='store_true',
-                        help='Use dictionary features based on training data and specified word dictionary')
+    parser.add_argument('--feature_template', default='',
+                        help='Use dictionary features based on given feature template file.'
+                        + ' Specify \'defualt\' to use default features defined for each task,'
+                        + ' or specify the path of castomized template file.')
     parser.add_argument('--dump_train_data', action='store_true',
                         help='Dump data specified as \'train_data\''
                         + ' using new file name endding with \'.pickle\'')
@@ -363,18 +253,14 @@ class Trainer(object):
         self.logger = logger    # output execute log
         self.reporter = None    # output evaluation results
         self.train = None
-        self.train_t = None
-        self.train_p = None
         self.val = None
-        self.val_t = None
-        self.val_p = None
         self.test = None
-        self.test_t = None
-        self.test_p = None
         self.hparams = None
         self.tagger = None
+        self.feat_extractor = None
         self.optimizer = None
         self.decode_type = None
+        self.n_iter = 0
 
         self.log('Start time: {}\n'.format(self.start_time))
         if not self.args.quiet:
@@ -394,9 +280,24 @@ class Trainer(object):
             self.reporter.close()
     
 
+    def init_feat_extractor(self, use_gpu=False):
+        template = self.hparams['feature_template']
+        feat_dim = 0
+
+        if template:
+            self.feat_extractor = features.DictionaryFeatureExtractor(template, use_gpu=use_gpu)
+
+            if 'add_feat_dimension' in self.hparams:
+                feat_dim = self.hparams['add_feat_dimension']
+            else:
+                feat_dim = self.feat_extractor.dim
+
+        self.hparams.update({'add_feat_dimension' : feat_dim})
+                
+        
+
     def init_hyperparameters(self, args):
         hparams = {
-            #'joint_type' : args.joint_type,
             'embed_dimension' : args.embed_dimension,
             'rnn_layers' : args.rnn_layers,
             'rnn_hidden_units' : args.rnn_hidden_units,
@@ -404,7 +305,7 @@ class Trainer(object):
             'rnn_bidirection' : args.rnn_bidirection,
             'inference_layer' : args.inference_layer,
             'dropout' : args.dropout,
-            'use_dict_feature' : args.use_dict_feature,
+            'feature_template' : args.feature_template,
             'data_format' : args.data_format,
             'subpos_depth' : args.subpos_depth,
             'lowercase' : args.lowercase,
@@ -415,11 +316,7 @@ class Trainer(object):
         self.log('Init hyperparameters')
         self.log('### arguments')
         for k, v in self.args.__dict__.items():
-            if k in hparams and v != hparams[k]:
-                message = '{}={} (input option value {} was discarded)'.format(k, hparams[k], v)
-            else:
-                message = '{}={}'.format(k, v)
-
+            message = '{}={}'.format(k, v)
             self.log('# {}'.format(message))
             self.report('[INFO] arg: {}'.format(message))
         self.log('')
@@ -455,6 +352,7 @@ class Trainer(object):
         self.log('Load indices: {}'.format(indices_path))
         self.log('Vocab size: {}\n'.format(len(indices.token_indices)))
 
+        # hyper parameters
         hparams = {}
         with open(hparam_path, 'r') as f:
             for line in f:
@@ -467,6 +365,7 @@ class Trainer(object):
                 val = kv[1]
 
                 if (key == 'embed_dimension' or
+                    key == 'add_feat_dimension' or
                     key == 'rnn_layers' or
                     key == 'rnn_hidden_units' or
                     key == 'subpos_depth'
@@ -477,7 +376,6 @@ class Trainer(object):
                     val = float(val)
 
                 elif (key == 'rnn_bidirection' or
-                      key == 'use_dict_feature' or
                       key == 'lowercase' or
                       key == 'normalize_digits'
                 ):
@@ -497,6 +395,7 @@ class Trainer(object):
             self.report('[INFO] arg: {}'.format(message))
         self.log('')
 
+        # model
         self.log('Initialize model from hyperparameters\n')
         tagger = models.init_tagger(indices, hparams, use_gpu=use_gpu)
         chainer.serializers.load_npz(model_path, tagger)
@@ -518,74 +417,77 @@ class Trainer(object):
         read_pos = hparams['subpos_depth'] != 0
 
         if args.label_reference_data:
-            _, _, _, indices = data.load_data(
+            _, indices = data_io.load_data(
                 hparams['data_format'], refer_path, read_pos=read_pos, update_token=False,
-                ws_dict_feat=hparams['use_dict_feature'],
+                ws_dict_feat=hparams['feature_template'],
                 subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
                 normalize_digits=hparams['normalize_digits'], indices=indices)
             self.log('Load label set from reference data: {}'.format(refer_path))
 
         if args.train_data.endswith('pickle'):
             name, ext = os.path.splitext(train_path)
-            train, train_t, train_p = data.load_pickled_data(name)
+            train = data_io.load_pickled_data(name)
             self.log('Load dumpped data:'.format(train_path))
             #TODO 別データで再学習の場合は要エラー処理
 
         else:
-            train, train_t, train_p, indices = data.load_data(
+            train, indices = data_io.load_data(
             hparams['data_format'], train_path, read_pos=read_pos,
-            ws_dict_feat=hparams['use_dict_feature'],
+            ws_dict_feat=hparams['feature_template'],
             subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
             normalize_digits=hparams['normalize_digits'], indices=indices, refer_vocab=refer_vocab)
         
         if self.args.dump_train_data:
             name, ext = os.path.splitext(train_path)
-            data.dump_pickled_data(name, train, train_t, train_p)
+            data_io.dump_pickled_data(name, train)
             self.log('Dumpped training data: {}.pickle'.format(train_path))
 
         self.log('Load training data: {}'.format(train_path))
-        self.log('Data length: {}'.format(len(train)))
+        self.log('Data length: {}'.format(len(train.instances)))
         self.log('Vocab size: {}\n'.format(len(indices.token_indices)))
+        if self.hparams['feature_template']:
+            self.log('Start feature extraction for training data\n')
+            self.extract_features(train, indices)
 
         if args.valid_data:
             # indices can be updated if embed_model are used
-            val, val_t, val_p, indices = data.load_data(
+            val, indices = data_io.load_data(
                 hparams['data_format'], val_path, read_pos=read_pos, update_token=False, update_label=False,
-                ws_dict_feat=hparams['use_dict_feature'],
+                ws_dict_feat=hparams['feature_template'],
                 subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
                 normalize_digits=hparams['normalize_digits'], indices=indices, refer_vocab=refer_vocab)
 
             self.log('Load validation data: {}'.format(val_path))
-            self.log('Data length: {}'.format(len(val)))
+            self.log('Data length: {}'.format(len(val.instances)))
             self.log('Vocab size: {}\n'.format(len(indices.token_indices)))
+            if self.hparams['feature_template']:
+                self.log('Start feature extraction for validation data\n')
+                self.extract_features(val, indices)
         else:
-            val, val_t, val_p = [], [], []
+            val = None
         
         self.train = train
-        self.train_t = train_t
-        self.train_p = train_p
         self.val = val
-        self.val_t = val_t
-        self.val_p = val_p
 
-        n_train = len(train)
+        n_train = len(train.instances)
         t2i_tmp = list(indices.token_indices.token2id.items())
         id2label = {v:k for k,v in indices.label_indices.token2id.items()}
-        if train_p:
-            id2pos = {v:k for k,v in indices.pos_indices.token2id.items()}
+        # if train_p:
+        #     id2pos = {v:k for k,v in indices.pos_indices.token2id.items()}
 
         self.log('### Loaded data')
-        self.log('# train: {} ... {}\n'.format(train[:3], train[n_train-3:]))
-        self.log('# train_gold: {} ... {}\n'.format(train_t[:3], train_t[n_train-3:]))
-        if train_p:
-            self.log('# POS labels: {} ... {}\n'.format(train_p[:3], train_p[n_train-3:]))
+        self.log('# train: {} ... {}\n'.format(train.instances[:3], train.instances[n_train-3:]))
+        self.log('# train_gold: {} ... {}\n'.format(train.labels[0][:3], train.labels[0][n_train-3:]))
+        # if train_p:
+        #     self.log('# POS labels: {} ... {}\n'.format(train_p[:3], train_p[n_train-3:]))
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
         self.log('# labels: {}\n'.format(id2label))
-        if train_p:
-            self.log('poss: {}\n'.format(id2pos))
+        # if train_p:
+        #     self.log('poss: {}\n'.format(id2pos))
         
         self.report('[INFO] vocab: {}'.format(len(indices.token_indices)))
-        self.report('[INFO] data length: train={} val={}'.format(len(train), len(val)))
+        self.report('[INFO] data length: train={} val={}'.format(
+            len(train.instances), len(val.instances) if val else 0))
 
         return indices
 
@@ -597,21 +499,27 @@ class Trainer(object):
         refer_vocab = embed_model.wv if embed_model else set()
         read_pos = hparams['subpos_depth'] != 0
             
-        test, test_t, test_p, indices = data.load_data(
+        test, indices = data_io.load_data(
             hparams['data_format'], test_path, read_pos=read_pos, update_token=False, update_label=False,
-            ws_dict_feat=hparams['use_dict_feature'],
+            ws_dict_feat=hparams['feature_template'],
             subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
             normalize_digits=hparams['normalize_digits'], indices=indices, refer_vocab=refer_vocab)
 
         self.log('Load test data: {}'.format(test_path))
-        self.log('Data length: {}'.format(len(test)))
+        self.log('Data length: {}'.format(len(test.instances)))
         self.log('Vocab size: {}\n'.format(len(indices.token_indices)))
+        if self.hparams['feature_template']:
+            self.log('Start feature extraction for test data\n')
+            self.extract_features(test, indices)
 
         self.test = test
-        self.test_t = test_t
-        self.test_p = test_p
 
         return indices
+
+
+    def extract_features(self, data, indices):
+        features = self.feat_extractor.extract_features(data.instances, indices)
+        data.set_features(features)
 
 
     def setup_optimizer(self):
@@ -636,36 +544,228 @@ class Trainer(object):
         return self.optimizer
 
 
-    def run_evaluation(self):
+    def decode(self, data, stream=sys.stdout):
         xp = cuda.cupy if args.gpu >= 0 else np
 
-        self.log('<test result>')
-        te_stat, te_res = evaluate(
-            self.tagger, self.test, self.test_t, batchsize=self.args.batchsize, xp=xp, stream=self.logger)
+        n_ins = len(data.instances)
+        for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=False):
+            xs = [xp.asarray(data.instances[j], dtype=np.int32) for j in ids]
+            if self.hparams['feature_template']:
+                fs = [data.features[j] for j in ids]
+            else:
+                fs = None
+
+            self.decode_batch(xs, fs)
+
+
+    def decode_batch(self, xs, fs, stream=sys.stdout):
+        ys = self.tagger.decode(xs, fs)
+
+        for x, y in zip(xs, ys):
+            x_str = [self.tagger.indices.get_token(int(xi)) for xi in x]
+            y_str = [self.tagger.indices.get_label(int(yi)) for yi in y]
+
+            if self.decode_type == 'tag':
+                res = ['{}/{}'.format(xi_str, yi_str) for xi_str, yi_str in zip(x_str, y_str)]
+                res = ' '.join(res)
+
+            elif self.decode_type == 'seg':
+                res = ['{}{}'.format(xi_str, ' ' if (yi_str == 'E' or yi_str == 'S') else '') for xi_str, yi_str in zip(x_str, y_str)]
+                res = ''.join(res).rstrip()
+
+            elif self.decode_type == 'seg_tag':
+                res = ['{}{}'.format(
+                    xi_str, 
+                    ('/'+yi_str[2:]+' ') if (yi_str.startswith('E-') or yi_str.startswith('S-')) else ''
+                ) for xi_str, yi_str in zip(x_str, y_str)]
+                res = ''.join(res).rstrip()
+
+            else:
+                print('Error: Invalid decode type', file=self.logger)
+                sys.exit()
+
+            print(res, file=stream)
+
+
+    def run_epoch(self, data, train=False):
+        xp = cuda.cupy if args.gpu >= 0 else np
+
+        if train:
+            tagger = self.tagger
+        else:
+            tagger = self.tagger.copy()
+
+        count = 0
+        num_tokens = 0
+        total_loss = 0
+        total_ecounts = conlleval.EvalCounts()
+        #total_ecounts_pos = conlleval.EvalCounts()
+
+        i = 0
+        n_ins = len(data.instances)
+        shuffle = True if train else False
+        for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=shuffle):
+            xs = [xp.asarray(data.instances[j], dtype=np.int32) for j in ids]
+            ts = [xp.asarray(data.labels[0][j], dtype=np.int32) for j in ids]
+            if self.hparams['feature_template']:
+                fs = [data.features[j] for j in ids]
+            else:
+                fs = None
+
+            if train:
+                loss, ecounts = tagger(xs, fs, ts)
+
+                self.optimizer.target.cleargrads() # Clear the parameter gradients
+                loss.backward()                    # Backprop
+                loss.unchain_backward()            # Truncate the graph
+                self.optimizer.update()            # Update the parameters
+
+                i_max = min(i + self.args.batchsize, n_ins)
+                self.log('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
+                i = i_max
+                self.n_iter += 1
+
+            else:
+                with chainer.no_backprop_mode():
+                    loss, ecounts = tagger(xs, fs, ts)
+
+            num_tokens += sum([len(x) for x in xs])
+            count += len(xs)
+            total_loss += loss.data
+            total_ecounts = conlleval.merge_counts(total_ecounts, ecounts)
+            # if eval_pos:
+            #     total_ecounts_pos = conlleval.merge_counts(total_ecounts_pos, ecounts_pos)
+
+            if train and ((self.n_iter * self.args.batchsize) % self.args.evaluation_size == 0):
+                now_e = '%.3f' % (self.n_iter * self.args.batchsize / n_ins)
+                time = datetime.now().strftime('%Y%m%d_%H%M')
+
+                self.log('\n### Finish %s iterations (%s examples: %s epoch)' % (
+                    self.n_iter, (self.n_iter * self.args.batchsize), now_e))
+                self.log('<training result for previous iterations>')            
+                stat, res = self.evaluate(count, num_tokens, total_ecounts, total_loss)
+                self.report('[INFO] train - %s' % stat)
+                self.report('train\t%d\t%s\t%s' % (self.n_iter, now_e, res))
+
+                if self.args.valid_data:
+                    self.log('<validation result>')
+                    v_stat, v_res = self.run_epoch(self.val, train=False)
+                    self.report('[INFO] valid - %s' % v_stat)
+                    self.report('valid\t%d\t%s\t%s' % (self.n_iter, now_e, v_res))
+
+                # Save the model
+                if not self.args.quiet:
+                    mdl_path = '{}/{}_e{}.npz'.format(MODEL_DIR, self.start_time, now_e)
+                    self.log('Save the model: %s\n' % mdl_path)
+                    self.report('[INFO] save the model: %s\n' % mdl_path)
+                    serializers.save_npz(mdl_path, self.tagger)
         
+                if not self.args.quiet:
+                    self.reporter.close() 
+                    self.reporter = open('{}/{}.log'.format(LOG_DIR, self.start_time), 'a')
+
+                # Reset counters
+                count = 0
+                num_tokens = 0
+                total_loss = 0
+                total_ecounts = conlleval.EvalCounts()
+
+        if not train:
+            stat, res = self.evaluate(count, num_tokens, total_ecounts, total_loss)
+        else:
+            stat = res = None
+    
+        return stat, res
+
+
+    def evaluate(self, count, num_tokens, total_ecounts, total_loss):
+        ave_loss = total_loss / num_tokens
+        c = total_ecounts
+        acc = conlleval.calculate_accuracy(c.correct_tags, c.token_counter)
+        overall = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
+        show_results(total_loss, ave_loss, count, c, acc, overall, stream=self.logger)
+
+        # if eval_pos:
+        #     res = '%.2f\t%.2f\t%.2f\t%.2f\t%.4f\t%.4f' % (
+        #         (100.*seg_acc), (100.*seg_overall.prec), (100.*seg_overall.rec), 
+        #         (100.*seg_overall.fscore), total_loss, ave_loss)
+        # else:
+
+        stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
+            count, c.token_counter, c.found_correct, c.found_guessed)
+        res = '%.2f\t%.2f\t%.2f\t%.2f\t%.4f\t%.4f' % (
+            (100.*acc), (100.*overall.prec), (100.*overall.rec), 
+            (100.*overall.fscore), total_loss, ave_loss)
+
+        return stat, res
+
+
+    def run_train_mode(self):
+        # save model
+        if not self.args.quiet:
+            hparam_path = '{}/{}.hyp'.format(MODEL_DIR, self.start_time)
+            with open(hparam_path, 'w') as f:
+                for key, val in self.hparams.items():
+                    print('{}={}'.format(key, val), file=f)
+                self.log('save hyperparameters: {}'.format(hparam_path))
+
+            indices_path = '{}/{}.s2i'.format(MODEL_DIR, self.start_time)
+            with open(indices_path, 'wb') as f:
+                pickle.dump(self.tagger.indices, f)
+            self.log('save string2index table: {}'.format(indices_path))
+
+        #self.report('data\titer\tep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss')
+
+        for e in range(max(1, self.args.epoch_begin), self.args.epoch_end+1):
+            time = datetime.now().strftime('%Y%m%d_%H%M')
+            self.log('Start epoch {}: {}\n'.format(e, time))
+            self.report('[INFO] Start epoch {} at {}'.format(e, time))
+
+            # learning rate decay
+            if self.args.lrdecay and self.args.optimizer == 'sgd':
+                if (e - lrdecay_start) % lrdecay_width == 0:
+                    lr_tmp = self.optimizer.lr
+                    self.optimizer.lr = self.optimizer.lr * lrdecay_rate
+                    self.log('Learning rate decay: {} -> {}\n'.format(lr_tmp, self.optimizer.lr))
+                    self.report('Learning rate decay: {} -> {}'.format(lr_tmp, self.optimizer.lr))
+
+            # learning and evaluation for each epoch
+            self.run_epoch(self.train, train=True)
+
+
+        time = datetime.now().strftime('%Y%m%d_%H%M')
+        self.report('Finish: %s\n' % time)
+
+
+    def run_eval_mode(self):
+        self.log('<test result>')
+        self.run_epoch(self.test, train=False)
         time = datetime.now().strftime('%Y%m%d_%H%M')
         self.log('Finish: %s\n' % time)
         self.report('Finish: %s\n' % time)
 
 
-    def run_decoding(self):
+    def run_decode_mode(self):
         xp = cuda.cupy if args.gpu >= 0 else np
 
         raw_path = (args.path_prefix if args.path_prefix else '') + self.args.raw_data
         if self.decode_type == 'tag':
-            instances = data.load_raw_text_for_tagging(raw_path, self.tagger.indices)
+            instances = data_io.load_raw_text_for_tagging(raw_path, self.tagger.indices)
         else:
-            instances = data.load_raw_text_for_segmentation(raw_path, self.tagger.indices)
+            instances = data_io.load_raw_text_for_segmentation(raw_path, self.tagger.indices)
+        data = data_io.Data(instances, None)
+
+        if self.hparams['feature_template']:
+            self.extract_features(data, self.tagger.indices)
 
         stream = open(self.args.output_path, 'w') if self.args.output_path else sys.stdout
-        decode(self.tagger, instances, batchsize=self.args.batchsize, 
-               decode_type=self.decode_type, stream=stream, xp=xp)
+        self.decode(data, stream=stream)
 
         if self.args.output_path:
             stream.close()
 
 
-    def run_interactive_decoding(self):
+    def run_interactive_mode(self):
         xp = cuda.cupy if args.gpu >= 0 else np
 
         print('Please input text or type \'q\' to quit this mode:')
@@ -681,131 +781,15 @@ class Trainer(object):
                 ins = [self.tagger.indices.get_token_id(word) for word in array]
             else:
                 ins = [self.tagger.indices.get_token_id(char) for char in line]
-
             xs = [xp.asarray(ins, dtype=np.int32)]
-            decode_batch(xs, self.tagger, decode_type=self.decode_type)
+
+            if self.hparams['feature_template']:
+                fs = self.feat_extractor.extract_features([ins], self.tagger.indices)
+            else:
+                fs = None
+
+            self.decode_batch(xs, fs)
             print()
-
-
-    def run_training(self):
-        if not self.args.quiet:
-            hparam_path = '{}/{}.hyp'.format(MODEL_DIR, self.start_time)
-            with open(hparam_path, 'w') as f:
-                for key, val in self.hparams.items():
-                    print('{}={}'.format(key, val), file=f)
-                self.log('save hyperparameters: {}'.format(hparam_path))
-
-            indices_path = '{}/{}.s2i'.format(MODEL_DIR, self.start_time)
-            with open(indices_path, 'wb') as f:
-                pickle.dump(self.tagger.indices, f)
-            self.log('save string2index table: {}'.format(indices_path))
-
-        xp = cuda.cupy if args.gpu >= 0 else np
-        n_train = len(self.train)
-        evaluation_size = self.args.evaluation_size
-        n_iter = 0
-
-        for e in range(max(1, self.args.epoch_begin), self.args.epoch_end+1):
-            time = datetime.now().strftime('%Y%m%d_%H%M')
-            self.log('Start epoch {}: {}\n'.format(e, time))
-            self.report('[INFO] Start epoch {} at {}'.format(e, time))
-
-            # learning rate decay
-            if self.args.lrdecay and self.args.optimizer == 'sgd':
-                if (e - lrdecay_start) % lrdecay_width == 0:
-                    lr_tmp = self.optimizer.lr
-                    self.optimizer.lr = self.optimizer.lr * lrdecay_rate
-                    self.log('Learning rate decay: {} -> {}\n'.format(lr_tmp, self.optimizer.lr))
-                    self.report('Learning rate decay: {} -> {}'.format(lr_tmp, self.optimizer.lr))
-
-            count = 0
-            num_tokens = 0
-            total_loss = 0
-            total_ecounts = conlleval.EvalCounts()
-
-            i = 0
-            for xs, ts in batch_generator(self.train, self.train_t, label_seqs2=None, 
-                                          batchsize=self.args.batchsize, shuffle=True, xp=xp):
-
-                t0 = datetime.now()
-                loss, ecounts = self.tagger(xs, ts, train=True)
-                t1 = datetime.now()
-
-                num_tokens += sum([len(x) for x in xs])
-                count += len(xs)
-                total_loss += loss.data
-                total_ecounts = conlleval.merge_counts(total_ecounts, ecounts)
-                i_max = min(i + self.args.batchsize, n_train)
-                self.log('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
-                i = i_max
-                n_iter += 1
-
-                t2 = datetime.now()
-                self.optimizer.target.cleargrads() # Clear the parameter gradients
-                loss.backward()               # Backprop
-                loss.unchain_backward()       # Truncate the graph
-                self.optimizer.update()            # Update the parameters
-                t3 = datetime.now()
-                # print('train    {} ins: {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6, len(xs)))
-                # print('backprop {} ins: {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6, len(xs)))
-                # print('total    {} ins: {}'.format((t3-t0).seconds+(t3-t0).microseconds/10**6, len(xs)))
-
-                # Evaluation
-                if (n_iter * self.args.batchsize) % evaluation_size == 0:
-
-                    now_e = '%.3f' % (n_iter * self.args.batchsize / n_train)
-                    time = datetime.now().strftime('%Y%m%d_%H%M')
-                    self.log('\n### Finish %s iterations (%s examples: %s epoch)' % (n_iter, (n_iter * self.args.batchsize), now_e))
-                    self.log('<training result for previous iterations>')
-
-                    ave_loss = total_loss / num_tokens
-                    c = total_ecounts
-                    acc = conlleval.calculate_accuracy(c.correct_tags, c.token_counter)
-                    overall = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
-                    print_results(total_loss, ave_loss, count, c, acc, overall, stream=self.logger)
-
-                    t_stat = 'n_sen: %d, n_token: %d, n_chunk: %d, n_chunk_p: %d' % (
-                        count, c.token_counter, c.found_correct, c.found_guessed)
-                    t_res = '%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%d\t%.4f\t%.4f' % (
-                        (100.*acc), (100.*overall.prec), (100.*overall.rec), (100.*overall.fscore), 
-                        overall.tp, overall.fp, overall.fn, total_loss, ave_loss)
-                    self.report('[INFO] train - %s' % t_stat)
-                    if n_iter == 1:
-                        self.report(
-                            'data\titer\tep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss')
-                    self.report('train\t%d\t%s\t%s' % (n_iter, now_e, t_res))
-
-                    if self.args.valid_data:
-                        self.log('<validation result>')
-                        v_stat, v_res = evaluate(
-                            self.tagger, self.val, self.val_t, batchsize=self.args.batchsize, xp=xp,
-                            stream=self.logger)
-
-                        self.report('[INFO] valid - %s' % v_stat)
-                        if n_iter == 1:
-                            self.report(
-                                'data\titer\tep\tacc\tprec\trec\tfb1\tTP\tFP\tFN\ttloss\taloss')
-                        self.report('valid\t%d\t%s\t%s' % (n_iter, now_e, v_res))
-
-                    # Save the model
-                    if not self.args.quiet:
-                        mdl_path = '{}/{}_e{}.npz'.format(MODEL_DIR, self.start_time, now_e)
-                        self.log('Save the model: %s\n' % mdl_path)
-                        self.report('[INFO] save the model: %s\n' % mdl_path)
-                        serializers.save_npz(mdl_path, self.tagger)
-        
-                    # Reset counters
-                    count = 0
-                    num_tokens = 0
-                    total_loss = 0
-                    total_ecounts = conlleval.EvalCounts()
-
-                    if not self.args.quiet:
-                        self.reporter.close() 
-                        self.reporter = open('{}/{}.log'.format(LOG_DIR, self.start_time), 'a')
-
-        time = datetime.now().strftime('%Y%m%d_%H%M')
-        self.report('Finish: %s\n' % time)
 
 
 if __name__ == '__main__':
@@ -838,7 +822,7 @@ if __name__ == '__main__':
     trainer = Trainer(args)
 
     ################################
-    # Load tagger model
+    # Load feature extractor and tagger model
 
     if args.model_path:
         trainer.load_model(args.model_path, use_gpu=use_gpu)
@@ -850,6 +834,7 @@ if __name__ == '__main__':
         indices = None
         id2token_org = {}
         id2label_org = {}
+    trainer.init_feat_extractor(use_gpu=use_gpu)
 
 
     ################################
@@ -915,13 +900,13 @@ if __name__ == '__main__':
     # Run
 
     if args.execute_mode == 'train':
-        trainer.run_training()
+        trainer.run_train_mode()
     elif args.execute_mode == 'eval':
-        trainer.run_evaluation()
+        trainer.run_eval_mode()
     elif args.execute_mode == 'decode':
-        trainer.run_decoding()
+        trainer.run_decode_mode()
     elif args.execute_mode == 'interactive':
-        trainer.run_interactive_decoding()
+        trainer.run_interactive_mode()
 
     ################################
     # Terminate

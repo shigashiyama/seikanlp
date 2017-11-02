@@ -54,14 +54,12 @@ Args:
         activation function of affine layer: identity, relu, tanh, sigmoid
     init_embed:
         pre-trained embedding matrix
-    feat_extractor:
-        FeatureExtractor object to extract additional features 
 """
 class RNNBase(chainer.Chain):
     def __init__(
-            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
+            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, feat_dim=0, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
-            init_embed=None, feat_extractor=None, stream=sys.stderr):
+            init_embed=None, stream=sys.stderr):
         super(RNNBase, self).__init__()
 
         with self.init_scope():
@@ -76,12 +74,8 @@ class RNNBase(chainer.Chain):
 
             # init fields
             self.embed_dim = embed_dim
-            if feat_extractor:
-                self.feat_extractor = feat_extractor
-                self.input_vec_size = self.embed_dim + self.feat_extractor.dim
-            else:
-                self.feat_extractor = None
-                self.input_vec_size = self.embed_dim
+            self.feat_dim = feat_dim
+            self.input_vec_size = self.embed_dim + self.feat_dim
 
             # init layers
             self.embed = L.EmbedID(n_vocab, self.embed_dim) if init_embed == None else init_embed
@@ -107,6 +101,7 @@ class RNNBase(chainer.Chain):
 
             print('### Parameters', file=stream)
             print('# Embedding layer: {}'.format(self.embed.W.shape), file=stream)
+            print('# Additional features dimension: {}'.format(self.feat_dim), file=stream)
             print('# RNN unit: {}'.format(self.rnn_unit), file=stream)
             if self.rnn_unit_type == 'lstm':
                 i = 0
@@ -124,53 +119,25 @@ class RNNBase(chainer.Chain):
             print('# Affine layer: {}, {}'.format(self.affine.W.shape, self.affine.b.shape), file=stream)
 
 
-    # create input vector
-    def create_features(self, xs):
-        exs = []
-        for x in xs:
-            if self.feat_extractor:
-                emb = self.embed(x)
-                feat = self.feat_extractor.extract_features(x)
-                #print('emb:', type(emb.data))
-                #print('feat:', type(feat.data))
-                ex = F.concat((emb, feat), 1)
-            else:
-                #print('embed:', type(self.embed.W.data))
-                ex = self.embed(x)
-                
-            exs.append(ex)
-        xs = exs
-        return xs
-
-
-    # def get_id_array(self, start, width, gpu=-1):
-    #     ids = np.array([], dtype=np.int32)
-    #     for i in range(start, start + width):
-    #         ids = np.append(ids, np.int32(i))
-    #     return cuda.to_gpu(ids) if gpu >= 0 else ids
-
-
 class RNN(RNNBase):
     def __init__(
-            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
+            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, feat_dim=0, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
-            init_embed=None, feat_extractor=None, stream=sys.stderr):
+            init_embed=None, stream=sys.stderr):
         super(RNN, self).__init__(
-            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
-            rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
-            init_embed=None, feat_extractor=None, stream=sys.stderr)
+            n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, feat_dim, dropout, rnn_unit_type, 
+            rnn_bidirection, affine_activation, init_embed, stream)
 
         self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
 
 
-    def __call__(self, xs, ts, train=True):
-        with chainer.using_config('train', train):
-            fs = self.create_features(xs)
-            if self.rnn_unit_type == 'lstm':
-                hy, cy, hs = self.rnn_unit(None, None, fs)
-            else:
-                hy, hs = self.rnn_unit(None, fs)
-            ys = [self.act(self.affine(h)) for h in hs]
+    def __call__(self, xs, ts):
+        #with chainer.using_config('train', train):
+        if self.rnn_unit_type == 'lstm':
+            hy, cy, hs = self.rnn_unit(None, None, xs)
+        else:
+            hy, hs = self.rnn_unit(None, xs)
+        ys = [self.act(self.affine(h)) for h in hs]
 
         loss = None
         ps = []
@@ -186,11 +153,10 @@ class RNN(RNNBase):
 
     def decode(self, xs):
         with chainer.no_backprop_mode():
-            fs = self.create_features(xs)
             if self.rnn_unit_type == 'lstm':
-                hy, cy, hs = self.rnn_unit(None, None, fs)
+                hy, cy, hs = self.rnn_unit(None, None, xs)
             else:
-                hy, hs = self.rnn_unit(None, fs)
+                hy, hs = self.rnn_unit(None, xs)
             ys = [self.act(self.affine(h)) for h in hs]
 
         return ys
@@ -198,12 +164,12 @@ class RNN(RNNBase):
 
 class RNN_CRF(RNNBase):
     def __init__(
-            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout=0, 
+            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, feat_dim=0, dropout=0, 
             rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
-            init_embed=None, feat_extractor=None, stream=sys.stderr):
+            init_embed=None, stream=sys.stderr):
         super(RNN_CRF, self).__init__(
-            n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, dropout, rnn_unit_type, 
-            rnn_bidirection, affine_activation, init_embed, feat_extractor, stream=sys.stderr)
+            n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, feat_dim, dropout, rnn_unit_type, 
+            rnn_bidirection, affine_activation, init_embed, stream=sys.stderr)
 
         with self.init_scope():
             self.crf = L.CRF1d(n_labels)
@@ -211,65 +177,62 @@ class RNN_CRF(RNNBase):
             print('# CRF cost: {}\n'.format(self.crf.cost.shape), file=stream)
 
 
-    def __call__(self, xs, ts, train=True):
-        with chainer.using_config('train', train):
-            fs = self.create_features(xs)
+    def __call__(self, xs, ts):
+        #with chainer.using_config('train', train):
 
-            # rnn layers
-            if self.rnn_unit_type == 'lstm':
-                hy, cy, hs = self.rnn_unit(None, None, fs)
-            else:
-                hy, hs = self.rnn_unit(None, fs)
+        # rnn layers
+        if self.rnn_unit_type == 'lstm':
+            hy, cy, hs = self.rnn_unit(None, None, xs)
+        else:
+            hy, hs = self.rnn_unit(None, xs)
 
-            # affine layer
-            if not self.act or self.act == 'identity':
-                hs = [self.affine(h) for h in hs]                
-            else:
-                hs = [self.act(self.affine(h)) for h in hs]
+        # affine layer
+        if not self.act or self.act == 'identity':
+            hs = [self.affine(h) for h in hs]                
+        else:
+            hs = [self.act(self.affine(h)) for h in hs]
 
-            # crf layer
-            indices = argsort_list_descent(hs)
-            trans_hs = F.transpose_sequence(permutate_list(hs, indices, inv=False))
-            trans_ts = F.transpose_sequence(permutate_list(ts, indices, inv=False))
-            loss = self.crf(trans_hs, trans_ts)
-            score, trans_ys = self.crf.argmax(trans_hs)
-            ys = permutate_list(F.transpose_sequence(trans_ys), indices, inv=True)
-            ys = [y.data for y in ys]
+        # crf layer
+        indices = argsort_list_descent(hs)
+        trans_hs = F.transpose_sequence(permutate_list(hs, indices, inv=False))
+        trans_ts = F.transpose_sequence(permutate_list(ts, indices, inv=False))
+        loss = self.crf(trans_hs, trans_ts)
+        score, trans_ys = self.crf.argmax(trans_hs)
+        ys = permutate_list(F.transpose_sequence(trans_ys), indices, inv=True)
+        ys = [y.data for y in ys]
 
-            ################
-            # loss = chainer.Variable(cuda.cupy.array(0, dtype=np.float32))
-            # trans_ys = []
-            # for i in range(len(hs)):
-            #     hs_tmp = hs[i:i+1]
-            #     ts_tmp = ts[i:i+1]
-            #     t0 = datetime.now()
-            #     indices = argsort_list_descent(hs_tmp)
-            #     trans_hs = F.transpose_sequence(permutate_list(hs_tmp, indices, inv=False))
-            #     trans_ts = F.transpose_sequence(permutate_list(ts_tmp, indices, inv=False))
-            #     t1 = datetime.now()
-            #     loss += self.crf(trans_hs, trans_ts)
-            #     t2 = datetime.now()
-            #     score, trans_y = self.crf.argmax(trans_hs)
-            #     t3 = datetime.now()
-            #     #trans_ys.append(trans_y)
-            #     # print('  transpose     : {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6))
-            #     # print('  crf forward   : {}'.format((t2-t1).seconds+(t2-t1).microseconds/10**6))
-            #     # print('  crf argmax    : {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6))
-            # ys = [None]
-            ################
+        ################
+        # loss = chainer.Variable(cuda.cupy.array(0, dtype=np.float32))
+        # trans_ys = []
+        # for i in range(len(hs)):
+        #     hs_tmp = hs[i:i+1]
+        #     ts_tmp = ts[i:i+1]
+        #     t0 = datetime.now()
+        #     indices = argsort_list_descent(hs_tmp)
+        #     trans_hs = F.transpose_sequence(permutate_list(hs_tmp, indices, inv=False))
+        #     trans_ts = F.transpose_sequence(permutate_list(ts_tmp, indices, inv=False))
+        #     t1 = datetime.now()
+        #     loss += self.crf(trans_hs, trans_ts)
+        #     t2 = datetime.now()
+        #     score, trans_y = self.crf.argmax(trans_hs)
+        #     t3 = datetime.now()
+        #     #trans_ys.append(trans_y)
+        #     # print('  transpose     : {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6))
+        #     # print('  crf forward   : {}'.format((t2-t1).seconds+(t2-t1).microseconds/10**6))
+        #     # print('  crf argmax    : {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6))
+        # ys = [None]
+        ################
 
         return loss, ys
         
 
     def decode(self, xs):
         with chainer.no_backprop_mode():
-            fs = self.create_features(xs)
-
             # rnn layers
             if self.rnn_unit_type == 'lstm':
-                hy, cy, hs = self.rnn_unit(None, None, fs)
+                hy, cy, hs = self.rnn_unit(None, None, xs)
             else:
-                hy, hs = self.rnn_unit(None, fs)
+                hy, hs = self.rnn_unit(None, xs)
 
             # affine layer
             if not self.act or self.act == 'identity':
@@ -290,15 +253,14 @@ class RNN_CRF(RNNBase):
 class SequenceTagger(chainer.link.Chain):
     compute_fscore = True
 
-    def __init__(self, predictor, indices):
+    def __init__(self, indices, predictor):
         super(SequenceTagger, self).__init__(predictor=predictor)
         self.indices = indices
+
         
-    def __call__(self, *args, **kwargs):
-        assert len(args) >= 2
-        xs = args[0]
-        ts = args[1]
-        loss, ys = self.predictor(*args, **kwargs)
+    def __call__(self, xs, fs, ts):
+        exs = self.merge_features(xs, fs)
+        loss, ys = self.predictor(exs, ts)
 
         eval_counts = None
         if self.compute_fscore:
@@ -307,6 +269,28 @@ class SequenceTagger(chainer.link.Chain):
                 eval_counts = conlleval.merge_counts(eval_counts, conlleval.evaluate(generator))
 
         return loss, eval_counts
+
+
+    def decode(self, xs, fs):
+        exs = self.merge_features(xs, fs)
+        ys = self.predictor.decode(exs)
+        return ys
+
+
+    def merge_features(self, xs, fs=None):
+        exs = []
+        if fs:
+            for x, feat in zip(xs, fs):
+                emb = self.predictor.embed(x)
+                ex = F.concat((emb, feat), 1)
+                exs.append(ex)
+
+        else:
+            for x in xs:
+                ex = self.predictor.embed(x)
+                exs.append(ex)
+
+        return exs
 
 
     def generate_lines(self, x, t, y, is_str=False):
@@ -419,45 +403,25 @@ class SequenceTagger(chainer.link.Chain):
         
 
 
-def init_tagger(indices, hparams, use_gpu=False, joint_type=''):
+def init_tagger(indices, hparams, use_gpu=False):
     n_vocab = len(indices.token_indices)
     n_labels = len(indices.label_indices)
-
-    if hparams['use_dict_feature']:
-        feat_extractor = features.DictionaryFeatureExtractor(indices, use_gpu=use_gpu)
-    else:
-        feat_extractor = None
-
-    # if joint_type:
-    #     if joint_type == 'lattice':
-    #         rnn = models_joint.RNN_LatticeCRF(
-    #             hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
-    #             hparams['rnn_hidden_units'], n_labels, indices, dropout=hparams['dropout'],
-    #             rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
-    #             feat_extractor=feat_extractor) #gpu=gpu
-
-    #     elif hparams['joint_type'] == 'dual_rnn':
-    #         rnn = None
-    #         print('Not implemented yet', file=sys.stderr)
-    #         sys.exit()
-
-    #     tagger = models_joint.JointMorphologicalAnalyzer(rnn, indices.id2label)
 
     if hparams['inference_layer'] == 'crf':
         rnn = RNN_CRF(
             hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
-            hparams['rnn_hidden_units'], n_labels, dropout=hparams['dropout'], 
-            rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
-            feat_extractor=feat_extractor)
+            hparams['rnn_hidden_units'], n_labels, feat_dim=hparams['add_feat_dimension'], 
+            dropout=hparams['dropout'], 
+            rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'])
         
     else:
         rnn = RNN(
             hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
-            hparams['rnn_hidden_units'], n_labels, dropout=hparams['dropout'], 
-            rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'], 
-            feat_extractor=feat_extractor)
+            hparams['rnn_hidden_units'], n_labels, feat_dim=hparams['add_feat_dimension'],
+            dropout=hparams['dropout'], 
+            rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'])
 
-    tagger = SequenceTagger(rnn, indices)
+    tagger = SequenceTagger(indices, rnn)
 
     return tagger
     

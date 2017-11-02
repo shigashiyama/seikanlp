@@ -15,6 +15,16 @@ WORD_CLM_TXT = '#WORD_COLUMN'
 LAB1_CLM_TXT = '#POS_COLUMN'
 
 
+class Data(object):
+    def __init__(self, instances, labels):
+        self.instances = instances
+        self.labels = labels
+        self.features = None
+
+    def set_features(self, features):
+        self.features = features
+
+
 def load_raw_text_for_segmentation(path, indices):
     instances = []
     ins_cnt = 0
@@ -81,11 +91,11 @@ def load_data_SL(path, segmentation=True, tagging=False,
     word_cnt = 0
     token_cnt = 0
 
-    instance_list = []
-    slab_seq_list = []        # list of segmentation label sequences
-    lab1_seq_list = []        # list of 1st label sequences (typically POS label)
-    lab2_seq_list = []        # list of 1st label sequences (typically modifier index)
-    lab3_seq_list = []        # list of 1st label sequences (typically arc label)
+    instances = []
+    slab_seqs = []        # list of segmentation label sequences
+    lab1_seqs = []        # list of 1st label sequences (typically POS label)
+    lab2_seqs = []        # list of 1st label sequences (typically modifier index)
+    lab3_seqs = []        # list of 1st label sequences (typically arc label)
 
     with open(path) as f:
 
@@ -140,19 +150,21 @@ def load_data_SL(path, segmentation=True, tagging=False,
 
             ins_cnt += 1
 
-            instance_list.append(ins)
+            instances.append(ins)
             if slab_seq:
-                slab_seq_list.append(slab_seq)
+                slab_seqs.append(slab_seq)
             if lab1_seq:
-                lab1_seq_list.append(lab1_seq)
+                lab1_seqs.append(lab1_seq)
 
             if ins_cnt % 100000 == 0:
                 print('Read', ins_cnt, 'instances', file=sys.stderr)
 
     if segmentation:
-        return instance_list, slab_seq_list, indices
+        label_seqs_list = [slab_seqs]
     else:
-        return instance_list, lab1_seq_list, indices
+        label_seqs_list = [lab1_seqs]
+
+    return Data(instances, label_seqs_list), indices
 
 
 """
@@ -186,11 +198,11 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False,
     word_cnt = 0
     token_cnt = 0
 
-    instance_list = []
-    slab_seq_list = []        # list of segmentation label sequences
-    lab1_seq_list = []        # list of 1st label sequences (typically POS label)
-    lab2_seq_list = []        # list of 1st label sequences (typically modifier index)
-    lab3_seq_list = []        # list of 1st label sequences (typically arc label)
+    instances = []
+    slab_seqs = []        # list of segmentation label sequences
+    lab1_seqs = []        # list of 1st label sequences (typically POS label)
+    lab2_seqs = []        # list of 1st label sequences (typically modifier index)
+    lab3_seqs = []        # list of 1st label sequences (typically arc label)
 
     with open(path) as f:
         ins = []
@@ -204,19 +216,19 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False,
 
             if len(line) < 1:
                 if ins:
-                    instance_list.append(ins)
+                    instances.append(ins)
                     ins = []
                     if slab_seq:
-                        slab_seq_list.append(slab_seq)
+                        slab_seqs.append(slab_seq)
                         slab_seq = []
                     if lab1_seq:
-                        lab1_seq_list.append(lab1_seq)
+                        lab1_seqs.append(lab1_seq)
                         lab1_seq = []
                     if lab2_seq:
-                        lab2_seq_list.append(lab2_seq)
+                        lab2_seqs.append(lab2_seq)
                         lab2_seq = []
                     if lab3_seq:
-                        lab3_seq_list.append(lab3_seq)
+                        lab3_seqs.append(lab3_seq)
                         lab3_seq = []
 
                     ins_cnt += 1
@@ -280,22 +292,22 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False,
             token_cnt += len(word)
 
         if ins:
-            instance_list.append(ins)
+            instances.append(ins)
             if slab_seq:
-                slab_seq_list.append(slab_seq)
+                slab_seqs.append(slab_seq)
             if lab1_seq:
-                lab1_seq_list.append(lab1_seq)
+                lab1_seqs.append(lab1_seq)
             if lab2_seq:
-                lab2_seq_list.append(lab2_seq)
+                lab2_seqs.append(lab2_seq)
             if lab3_seq:
-                lab3_seq_list.append(lab3_seq)
+                lab3_seqs.append(lab3_seq)
 
     if segmentation:
-        return instance_list, slab_seq_list, indices
+        label_seqs_list = [slab_seqs]
     elif tagging:
-        return instance_list, lab1_seq_list, indices
-    else:
-        return None
+        label_seqs_list = [lab1_seqs]
+
+    return Data(instances, label_seqs_list), indices
 
 
 def get_label_BI(index, cate=None):
@@ -327,14 +339,14 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
     tagging = True if 'tag' in data_format else False
 
     if data_format == 'wl_seg' or data_format == 'wl_seg_tag' or data_format == 'wl_tag':
-        instances, label_seqs, indices = load_data_WL(
+        data, indices = load_data_WL(
             path, segmentation=segmentation, tagging=tagging,
             update_token=update_token, update_label=update_label, 
             subpos_depth=subpos_depth, ws_dict_feat=ws_dict_feat,
             indices=indices, refer_vocab=refer_vocab)
 
     elif data_format == 'sl_seg' or data_format == 'sl_seg_tag' or data_format == 'sl_tag':
-        instances, label_seqs, indices = load_data_SL(
+        data, indices = load_data_SL(
             path, segmentation=segmentation, tagging=tagging, 
             update_token=update_token, update_label=update_label,
             subpos_depth=subpos_depth, ws_dict_feat=ws_dict_feat, 
@@ -360,7 +372,7 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
         print('Error: invalid data format: {}'.format(data_format), file=sys.stderr)
         sys.exit()
 
-    return instances, label_seqs, pos_seqs, indices
+    return data, indices
 
 
 def load_pickled_data(filename_wo_ext, load_indices=True):
@@ -370,15 +382,14 @@ def load_pickled_data(filename_wo_ext, load_indices=True):
         obj = pickle.load(f)
         instances = obj[0]
         labels = obj[1]
-        pos_labels = obj[2]
 
-    return instances, labels, pos_labels
+    return Data(instances, [labels])
 
 
-def dump_pickled_data(filename_wo_ext, instances, labels, pos_labels=None):
+def dump_pickled_data(filename_wo_ext, data, pos_labels=None):
     dump_path = filename_wo_ext + '.pickle'
 
     with open(dump_path, 'wb') as f:
-        obj = (instances, labels, pos_labels)
+        obj = (data.instances, data.labels)
         pickle.dump(obj, f)
 
