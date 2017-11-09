@@ -4,22 +4,20 @@ import pickle
 import argparse
 import copy
 
-import lattice
-import models
-
-
-NUM_SYMBOL = '<NUM>'
-
-DELIM_TXT = '#DELIMITER'
-WORD_CLM_TXT = '#WORD_COLUMN'
-LAB1_CLM_TXT = '#POS_COLUMN'
+import constants
+import dictionary
 
 
 class Data(object):
     def __init__(self, instances, labels):
         self.instances = instances
-        self.labels = labels
+        self.labels = labels    # list of label sequences (e.g. seg, pos, dep and arc)
         self.features = None
+
+        # self.seg_labels = seg_labels
+        # self.pos_labels = pos_labels
+        # self.dep_labels = dep_labels
+        # self.arc_labels = arc_labesl
 
     def set_features(self, features):
         self.features = features
@@ -76,26 +74,20 @@ otherwise, the following format is expected for segmentation:
 """
 def load_data_SL(path, segmentation=True, tagging=False,
                  update_token=True, update_label=True, 
-                 subpos_depth=-1, ws_dict_feat=False, indices=None, refer_vocab=set()):
+                 subpos_depth=-1, create_word_trie=False, indices=None, refer_vocab=set()):
     if not indices:
-        if ws_dict_feat:
-            indices = lattice.MorphologyDictionary()
-        else:
-            indices = lattice.IndicesPair()
-            if not tagging:
-                indices.init_label_indices('BIES')
+        indices = dictionary.Dictionary(
+            use_seg_label=segmentation, use_pos_label=tagging, use_word_trie=create_word_trie)
 
-    delim = '_'
+    delim = constants.DELIM1_SYMBOL
 
     ins_cnt = 0
     word_cnt = 0
     token_cnt = 0
 
     instances = []
-    slab_seqs = []        # list of segmentation label sequences
-    lab1_seqs = []        # list of 1st label sequences (typically POS label)
-    lab2_seqs = []        # list of 1st label sequences (typically modifier index)
-    lab3_seqs = []        # list of 1st label sequences (typically arc label)
+    seg_seqs = []        # list of segmentation label sequences
+    pos_seqs = []         # list of POS label sequences
 
     with open(path) as f:
 
@@ -104,65 +96,67 @@ def load_data_SL(path, segmentation=True, tagging=False,
             if len(line) < 1:
                 continue
 
-            elif line.startswith(DELIM_TXT):
-                delim = line.split('=')[1]
+            elif line.startswith(constants.DELIM_TXT):
+                delim = line.split(constants.KEY_VALUE_SEPARATOR)[1]
                 print('Read delimiter:', delim, file=sys.stderr)
                 continue
             
             entries = re.sub(' +', ' ', line).split()
             ins = []
-            slab_seq = []
-            lab1_seq = []
+            seg_seq = []
+            pos_seq = []
 
             for entry in entries:
                 attrs = entry.split(delim)
                 word = attrs[0]
                 
                 if tagging:
-                    lab1 = attrs[1]
+                    pos = attrs[1]
                     if subpos_depth == 1:
-                        lab1 = lab1.split('-')[0]
+                        pos = pos.split(constants.POS_SEPARATOR)[0]
                     elif subpos_depth > 1:
-                        lab1 = '_'.join(lab1.split('-')[0:subpos_depth])
+                        pos = constants.POS_SEPARATOR.join(
+                            pos.split(constants.POS_SEPARATOR)[0:subpos_depth])
 
-                    if update_label and segmentation:
-                        for seg_lab in 'BIES':
-                            indices.label_indices.get_id('{}-{}'.format(seg_lab, lab1) , True)
+                    if segmentation and update_label:
+                        for seg_lab in constants.SEG_LABELS:
+                            indices.seg_label_indices.get_id('{}-{}'.format(seg_lab, pos) , True)
                 else:
-                    lab1 = None    
+                    pos = None    
                         
                 wlen = len(word)
                 update_this_token = update_token or word in refer_vocab
 
                 if segmentation:
                     ins.extend([indices.token_indices.get_id(word[i], update_this_token) for i in range(wlen)])
-                    slab_seq.extend(
-                        [indices.label_indices.get_id(
-                            get_label_BIES(i, wlen-1, cate=lab1), update=update_label) for i in range(wlen)])
+                    seg_seq.extend(
+                        [indices.seg_label_indices.get_id(
+                            get_label_BIES(i, wlen-1, cate=pos), update=update_label) for i in range(wlen)])
 
-                    if update_this_token and ws_dict_feat: # update indices
+                    if update_this_token and create_word_trie: # update word trie
                         ids = chars[-wlen:]
-                        indices.chunk_trie.get_word_id(ids, True)
+                        indices.word_trie.get_word_id(ids, True)
 
                 else:
                     ins.append(indices.token_indices.get_id(word, update=update_this_token))
-                    lab1_seq.append(indices.label_indices.get_id(lab1, update=update_label))
+                    pos_seq.append(indices.pos_label_indices.get_id(pos, update=update_label))
 
             ins_cnt += 1
 
             instances.append(ins)
-            if slab_seq:
-                slab_seqs.append(slab_seq)
-            if lab1_seq:
-                lab1_seqs.append(lab1_seq)
+            if seg_seq:
+                seg_seqs.append(seg_seq)
+            if pos_seq:
+                pos_seqs.append(pos_seq)
 
             if ins_cnt % 100000 == 0:
                 print('Read', ins_cnt, 'instances', file=sys.stderr)
 
-    if segmentation:
-        label_seqs_list = [slab_seqs]
-    else:
-        label_seqs_list = [lab1_seqs]
+    label_seqs_list = []
+    if seg_seqs:
+        label_seqs_list.append(seg_seqs)
+    if pos_seqs:
+        label_seqs_list.append(pos_seqs)
 
     return Data(instances, label_seqs_list), indices
 
@@ -179,37 +173,37 @@ otherwise, the following format is expected for segmentation:
   word2 \t otther attributes ...
   ...
 """
-def load_data_WL(path, segmentation=True, tagging=False, parsing=False,
-                  update_token=True, update_label=True, subpos_depth=-1, ws_dict_feat=False,
+def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_parsing=False,
+                  update_token=True, update_label=True, subpos_depth=-1, create_word_trie=False,
                   indices=None, refer_vocab=set()):
     if not indices:
-        if ws_dict_feat:
-            indices = lattice.MorphologyDictionary()
-        else:
-            indices = lattice.IndicesPair()
+        indices = dictionary.Dictionary(
+            use_seg_label=segmentation, use_pos_label=(tagging or parsing), 
+            use_arc_label=typed_parsing, use_word_trie=create_word_trie, use_root=parsing)
 
-    delim = '\t'
+    delim = constants.DELIM2_SYMBOL
+
     word_clm = 0
-    lab1_clm = 1
-    lab2_clm = 2
-    lab3_clm = 3
+    pos_clm = 1
+    dep_clm = 2
+    arc_clm = 3
 
     ins_cnt = 0
     word_cnt = 0
     token_cnt = 0
 
     instances = []
-    slab_seqs = []        # list of segmentation label sequences
-    lab1_seqs = []        # list of 1st label sequences (typically POS label)
-    lab2_seqs = []        # list of 1st label sequences (typically modifier index)
-    lab3_seqs = []        # list of 1st label sequences (typically arc label)
+    seg_seqs = []        # list of segmentation label sequences
+    pos_seqs = []        # list of POS label sequences
+    dep_seqs = []        # list of dependency label sequences
+    arc_seqs = []        # list of arc label sequences
 
     with open(path) as f:
-        ins = []
-        slab_seq = []
-        lab1_seq = []
-        lab2_seq = []
-        lab3_seq = []
+        ins = [indices.root_id] if parsing else []
+        seg_seq = []
+        pos_seq = [indices.root_id] if parsing else []
+        dep_seq = [-1] if parsing else []
+        arc_seq = [-1] if parsing else []
 
         for line in f:
             line = line.strip()
@@ -217,95 +211,119 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False,
             if len(line) < 1:
                 if ins:
                     instances.append(ins)
-                    ins = []
-                    if slab_seq:
-                        slab_seqs.append(slab_seq)
-                        slab_seq = []
-                    if lab1_seq:
-                        lab1_seqs.append(lab1_seq)
-                        lab1_seq = []
-                    if lab2_seq:
-                        lab2_seqs.append(lab2_seq)
-                        lab2_seq = []
-                    if lab3_seq:
-                        lab3_seqs.append(lab3_seq)
-                        lab3_seq = []
+                    ins = [indices.root_id] if parsing else []
+                    if seg_seq:
+                        seg_seqs.append(seg_seq)
+                        seg_seq = []
+                    if pos_seq:
+                        pos_seqs.append(pos_seq)
+                        pos_seq = [indices.root_id] if parsing else []
+                    if dep_seq:
+                        dep_seqs.append(dep_seq)
+                        dep_seq = [-1] if parsing else []
+                    if arc_seq:
+                        arc_seqs.append(arc_seq)
+                        arc_seq = [-1] if parsing else []
 
                     ins_cnt += 1
                     if ins_cnt % 100000 == 0:
                         print('Read', ins_cnt, 'instances', file=sys.stderr)
                 continue
 
-            elif line[0] == '#':
-                if line.startswith(DELIM_TXT):
-                    delim = line.split('=')[1]
+            elif line[0] == constants.COMMENT_SYM:
+                if line.startswith(constants.DELIM_TXT):
+                    delim = line.split(constants.KEY_VALUE_SEPARATOR)[1]
                     print('Read delimiter:', delim, file=sys.stderr)
 
-                elif line.startswith(WORD_CLM_TXT):
+                elif line.startswith(constants.WORD_CLM_TXT):
                     word_clm = int(line.split('=')[1]) - 1
                     print('Read word column id:', word_clm+1, file=sys.stderr)
 
-                elif line.startswith(LAB1_CLM_TXT):
-                    lab1_clm = int(line.split('=')[1]) - 1
-                    print('Read 1st label column id:', lab1_clm+1, file=sys.stderr)
+                elif line.startswith(constants.POS_CLM_TXT):
+                    pos_clm = int(line.split('=')[1]) - 1
+                    print('Read 1st label column id:', pos_clm+1, file=sys.stderr)
+
+                elif line.startswith(constants.DEP_CLM_TXT):
+                    dep_clm = int(line.split('=')[1]) - 1
+                    print('Read 2nd label column id:', dep_clm+1, file=sys.stderr)
+
+                elif line.startswith(constants.ARC_CLM_TXT):
+                    arc_clm = int(line.split('=')[1]) - 1
+                    print('Read 3rd label column id:', arc_clm+1, file=sys.stderr)
 
                 continue
 
             array = line.split(delim)
             word = array[word_clm]
-            if parsing:
-                pass
 
             if tagging or parsing:
-                lab1 = array[lab1_clm]
+                pos = array[pos_clm]
                 if subpos_depth == 1:
-                    lab1 = lab1.split('-')[0]
+                    pos = pos.split(constants.POS_SEPARATOR)[0]
                 elif subpos_depth > 1:
-                    lab1 = '-'.join(lab1.split('-')[0:subpos_depth])
+                    pos = constants.POS_SEPARATOR.join(
+                        pos.split(constants.POS_SEPARATOR)[0:subpos_depth])
 
-                if update_label and segmentation:
-                    for seg_lab in 'BIES':
-                        indices.label_indices.get_id('{}-{}'.format(seg_lab, lab1) , True)
+                if segmentation and update_label:
+                    for seg_lab in constants.SEG_LABELS:
+                        indices.seg_label_indices.get_id('{}-{}'.format(seg_lab, pos) , True)
             else:
-                lab1 = None
+                pos = None
+
+            if parsing:
+                dep = array[dep_clm]
+
+            if typed_parsing:
+                arc = array[arc_clm]
 
             wlen = len(word)
             update_this_token = update_token or word in refer_vocab
             if segmentation:
                 ins.extend([indices.token_indices.get_id(word[i], update_this_token) for i in range(wlen)])
-                slab_seq.extend(
-                    [indices.label_indices.get_id(
-                        get_label_BIES(i, wlen-1, cate=lab1), update=update_label) for i in range(wlen)])
+                seg_seq.extend(
+                    [indices.seg_label_indices.get_id(
+                        get_label_BIES(i, wlen-1, cate=pos), update=update_label) for i in range(wlen)])
 
-                if update_this_token and ws_dict_feat: # update indices
+                if update_this_token and create_word_trie: # update word trie
                     ids = ins[-wlen:]
-                    indices.chunk_trie.get_word_id(ids, True)
-
-            elif tagging:
-                ins.append(indices.token_indices.get_id(word, update=update_this_token))
-                lab1_seq.append(indices.label_indices.get_id(lab1, update=update_label))
+                    indices.word_trie.get_word_id(ids, True)
 
             else:
-                pass
+                ins.append(indices.token_indices.get_id(word, update=update_this_token))
+
+            if tagging or parsing:
+                pos_seq.append(indices.pos_label_indices.get_id(pos, update=update_label))
+
+            if parsing:
+                dep_seq.append(int(dep))
+
+            if typed_parsing:
+                arc_seq.append(indices.arc_label_indices.get_id(arc, update=update_label))
+                
 
             word_cnt += 1
             token_cnt += len(word)
 
         if ins:
             instances.append(ins)
-            if slab_seq:
-                slab_seqs.append(slab_seq)
-            if lab1_seq:
-                lab1_seqs.append(lab1_seq)
-            if lab2_seq:
-                lab2_seqs.append(lab2_seq)
-            if lab3_seq:
-                lab3_seqs.append(lab3_seq)
+            if seg_seq:
+                seg_seqs.append(seg_seq)
+            if pos_seq:
+                pos_seqs.append(pos_seq)
+            if dep_seq:
+                dep_seqs.append(dep_seq)
+            if arc_seq:
+                arc_seqs.append(arc_seq)
 
-    if segmentation:
-        label_seqs_list = [slab_seqs]
-    elif tagging:
-        label_seqs_list = [lab1_seqs]
+    label_seqs_list = []
+    if seg_seqs:
+        label_seqs_list.append(seg_seqs)
+    if pos_seqs:
+        label_seqs_list.append(pos_seqs)
+    if dep_seqs:
+        label_seqs_list.append(dep_seqs)
+    if arc_seqs:
+        label_seqs_list.append(arc_seqs)
 
     return Data(instances, label_seqs_list), indices
 
@@ -330,26 +348,29 @@ def get_label_BIES(index, last, cate=None):
     return '{}{}'.format(prefix, suffix)
 
 
-def load_data(data_format, path, read_pos=True, update_token=True, update_label=True, ws_dict_feat=False,
+def load_data(data_format, path, read_pos=True, update_token=True, update_label=True, create_word_trie=False,
               subpos_depth=-1, lowercase=False, normalize_digits=False, 
               indices=None, refer_vocab=set(), limit=-1):
     pos_seqs = []
 
     segmentation = True if 'seg' in data_format else False
     tagging = True if 'tag' in data_format else False
+    parsing = True if 'dep' in data_format else False
+    typed_parsing = True if 'tdep' in data_format else False
 
-    if data_format == 'wl_seg' or data_format == 'wl_seg_tag' or data_format == 'wl_tag':
+    if (data_format == 'wl_seg' or data_format == 'wl_seg_tag' or data_format == 'wl_tag' or
+        data_format == 'wl_dep' or data_format == 'wl_tdep'):
         data, indices = load_data_WL(
-            path, segmentation=segmentation, tagging=tagging,
+            path, segmentation=segmentation, tagging=tagging, parsing=parsing, typed_parsing=typed_parsing,
             update_token=update_token, update_label=update_label, 
-            subpos_depth=subpos_depth, ws_dict_feat=ws_dict_feat,
+            subpos_depth=subpos_depth, create_word_trie=create_word_trie,
             indices=indices, refer_vocab=refer_vocab)
 
     elif data_format == 'sl_seg' or data_format == 'sl_seg_tag' or data_format == 'sl_tag':
         data, indices = load_data_SL(
             path, segmentation=segmentation, tagging=tagging, 
             update_token=update_token, update_label=update_label,
-            subpos_depth=subpos_depth, ws_dict_feat=ws_dict_feat, 
+            subpos_depth=subpos_depth, create_word_trie=create_word_trie, 
             indices=indices, refer_vocab=refer_vocab)
         
     # if data_format == 'bccwj_seg_lattice':
@@ -369,8 +390,7 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
     #         lowercase=lowercase, normalize_digits=normalize_digits, 
     #         indices=indices, refer_vocab=refer_vocab, limit=limit)
     else:
-        print('Error: invalid data format: {}'.format(data_format), file=sys.stderr)
-        sys.exit()
+        data = None
 
     return data, indices
 

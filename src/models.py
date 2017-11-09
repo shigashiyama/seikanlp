@@ -1,10 +1,3 @@
-"""
-This code is implemented by (drastically) remodeling the implementation of (Zaremba 2015) by developers at PFN.
-
-(Zaremba 2015) RECURRENT NEURAL NETWORK REGULARIZATION, ICLR, 2015, https://github.com/tomsercu/lstm
-
-"""
-
 import sys
 import copy
 import enum
@@ -18,94 +11,45 @@ import chainer.functions as F
 import chainer.links as L
 from chainer import cuda
 from chainer.functions.loss import softmax_cross_entropy
+from chainer.functions.math import minmax
 from chainer.links.connection.n_step_rnn import argsort_list_descent, permutate_list
-from chainer.functions.math import minmax, exponential, logsumexp
-from chainer import initializers
-from chainer import Variable
+
+#from chainer import cuda
+#from chainer import Variable
+#from util import Timer
 
 
-from tools import conlleval
-import lattice
-import features
-from util import Timer
-
-
-"""
-Base model that consists of embedding layer, recurrent network (RNN) layers and affine layer.
-
-Args:
-    n_rnn_layers:
-        the number of (vertical) layers of recurrent network
-    n_vocab:
-        size of vocabulary
-    n_embed_dim:
-        dimention of word embedding
-    n_rnn_units:
-        the number of units of RNN
-    n_labels:
-        the number of labels that input instances will be classified into
-    dropout:
-        dropout ratio of RNN
-    rnn_unit_type:
-        unit type of RNN: lstm, gru or plain
-    rnn_bidirection:
-        use bi-directional RNN or not
-    affine_activation:
-        activation function of affine layer: identity, relu, tanh, sigmoid
-    init_embed:
-        pre-trained embedding matrix
-"""
-class RNNBase(chainer.Chain):
+# Base model that consists of embedding layer, recurrent network (RNN) layers and affine layer.
+class RNNTaggerBase(chainer.Chain):
     def __init__(
-            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, feat_dim=0, dropout=0, 
-            rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
-            init_embed=None, stream=sys.stderr):
-        super(RNNBase, self).__init__()
+            self, n_vocab, embed_dim, rnn_unit_type, rnn_bidirection, n_rnn_layers, n_rnn_units, 
+            n_labels, feat_dim=0, dropout=0, initial_embed=None, stream=sys.stderr):
+        super(RNNTaggerBase, self).__init__()
 
         with self.init_scope():
-            self.act = get_activation(affine_activation)
-            if not self.act:
-                print('Unsupported activation function', file=stream)
-                sys.exit()
-
-            if init_embed:
-                n_vocab = init_embed.W.shape[0]
-                embed_dim = init_embed.W.shape[1]
-
-            # init fields
-            self.embed_dim = embed_dim
-            self.feat_dim = feat_dim
-            self.input_vec_size = self.embed_dim + self.feat_dim
-
-            # init layers
-            self.embed = L.EmbedID(n_vocab, self.embed_dim) if init_embed == None else init_embed
+            if initial_embed:
+                self.embed = initial_embed
+                #n_vocab = initial_embed.W.shape[0]
+                embed_dim = initial_embed.W.shape[1]
+            else:
+                self.embed = L.EmbedID(n_vocab, self.embed_dim)
+            input_vec_size = embed_dim + feat_dim
 
             self.rnn_unit_type = rnn_unit_type
-            if rnn_unit_type == 'lstm':
-                if rnn_bidirection:
-                    self.rnn_unit = L.NStepBiLSTM(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout)
-                else:
-                    self.rnn_unit = L.NStepLSTM(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout)
-            elif rnn_unit_type == 'gru':
-                if rnn_bidirection:
-                    self.rnn_unit = L.NStepBiGRU(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout) 
-                else:
-                    self.rnn_unit = L.NStepGRU(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout)
-            else:
-                if rnn_bidirection:
-                    self.rnn_unit = L.NStepBiRNNTanh(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout) 
-                else:
-                    self.rnn_unit = L.NStepRNNTanh(n_rnn_layers, self.input_vec_size, n_rnn_units, dropout)
+            self.rnn = construct_RNN(
+                rnn_unit_type, rnn_bidirection, n_rnn_layers, input_vec_size, n_rnn_units, dropout, 
+                stream=stream)
+            rnn_output_dim = n_rnn_units * (2 if rnn_bidirection else 1)
 
-            self.affine = L.Linear(n_rnn_units * (2 if rnn_bidirection else 1), n_labels)
+            self.affine = L.Linear(rnn_output_dim, n_labels)
 
             print('### Parameters', file=stream)
             print('# Embedding layer: {}'.format(self.embed.W.shape), file=stream)
-            print('# Additional features dimension: {}'.format(self.feat_dim), file=stream)
-            print('# RNN unit: {}'.format(self.rnn_unit), file=stream)
-            if self.rnn_unit_type == 'lstm':
+            print('# Additional features dimension: {}'.format(feat_dim), file=stream)
+            print('# RNN unit: {}'.format(self.rnn), file=stream)
+            if rnn_unit_type == 'lstm':
                 i = 0
-                for c in self.rnn_unit._children:
+                for c in self.rnn._children:
                     print('#   LSTM {}-th param'.format(i), file=stream)
                     print('#      0 - {}, {}'.format(c.w0.shape, c.b0.shape), file=stream) 
                     print('#      1 - {}, {}'.format(c.w1.shape, c.b1.shape), file=stream) 
@@ -119,33 +63,36 @@ class RNNBase(chainer.Chain):
             print('# Affine layer: {}, {}'.format(self.affine.W.shape, self.affine.b.shape), file=stream)
 
 
-class RNN(RNNBase):
+    def rnn_output(self, xs):
+        if self.rnn_unit_type == 'lstm':
+            hy, cy, hs = self.rnn(None, None, xs)
+        else:
+            hy, hs = self.rnn(None, xs)
+        return hs
+
+
+class RNNTagger(RNNTaggerBase):
     def __init__(
-            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, feat_dim=0, dropout=0, 
-            rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
-            init_embed=None, stream=sys.stderr):
-        super(RNN, self).__init__(
-            n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, feat_dim, dropout, rnn_unit_type, 
-            rnn_bidirection, affine_activation, init_embed, stream)
+            self, n_vocab, embed_dim, rnn_unit_type, rnn_bidirection, n_rnn_layers, n_rnn_units, 
+            n_labels, feat_dim=0, dropout=0, initial_embed=None, stream=sys.stderr):
+        super(RNNTagger, self).__init__(
+            n_vocab, embed_dim, rnn_unit_type, rnn_bidirection, n_rnn_layers, n_rnn_units, 
+            n_labels, feat_dim, dropout, initial_embed, stream)
 
         self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
 
 
-    def __call__(self, xs, ts):
-        #with chainer.using_config('train', train):
-        if self.rnn_unit_type == 'lstm':
-            hy, cy, hs = self.rnn_unit(None, None, xs)
-        else:
-            hy, hs = self.rnn_unit(None, xs)
-        ys = [self.act(self.affine(h)) for h in hs]
+    def __call__(self, xs, ls):
+        rs = self.rnn_output(xs)
+        ys = [self.affine(r) for r in rs]
 
         loss = None
         ps = []
-        for y, t in zip(ys, ts):
+        for y, l in zip(ys, ls):
             if loss is not None:
-                loss += self.loss_fun(y, t)
+                loss += self.loss_fun(y, l)
             else:
-                loss = self.loss_fun(y, t)
+                loss = self.loss_fun(y, l)
                 ps.append([np.argmax(yi.data) for yi in y])
 
         return loss, ps
@@ -153,23 +100,18 @@ class RNN(RNNBase):
 
     def decode(self, xs):
         with chainer.no_backprop_mode():
-            if self.rnn_unit_type == 'lstm':
-                hy, cy, hs = self.rnn_unit(None, None, xs)
-            else:
-                hy, hs = self.rnn_unit(None, xs)
-            ys = [self.act(self.affine(h)) for h in hs]
-
+            rs = self.rnn_output(xs)
+            ys = [self.affine(h) for r in rs]
         return ys
 
 
-class RNN_CRF(RNNBase):
+class RNNCRFTagger(RNNTaggerBase):
     def __init__(
-            self, n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, feat_dim=0, dropout=0, 
-            rnn_unit_type='lstm', rnn_bidirection=True, affine_activation='identity', 
-            init_embed=None, stream=sys.stderr):
-        super(RNN_CRF, self).__init__(
-            n_rnn_layers, n_vocab, embed_dim, n_rnn_units, n_labels, feat_dim, dropout, rnn_unit_type, 
-            rnn_bidirection, affine_activation, init_embed, stream=sys.stderr)
+            self, n_vocab, embed_dim, rnn_unit_type, rnn_bidirection, n_rnn_layers, n_rnn_units, 
+            n_labels, feat_dim=0, dropout=0, initial_embed=None, stream=sys.stderr):
+        super(RNNTagger, self).__init__(
+            n_vocab, embed_dim, rnn_unit_type, rnn_bidirection, n_rnn_layers, n_rnn_units, 
+            n_labels, feat_dim, dropout, initial_embed, stream)
 
         with self.init_scope():
             self.crf = L.CRF1d(n_labels)
@@ -177,26 +119,18 @@ class RNN_CRF(RNNBase):
             print('# CRF cost: {}\n'.format(self.crf.cost.shape), file=stream)
 
 
-    def __call__(self, xs, ts):
-        #with chainer.using_config('train', train):
-
+    def __call__(self, xs, ls):
         # rnn layers
-        if self.rnn_unit_type == 'lstm':
-            hy, cy, hs = self.rnn_unit(None, None, xs)
-        else:
-            hy, hs = self.rnn_unit(None, xs)
+        rs = self.rnn_output(xs)
 
         # affine layer
-        if not self.act or self.act == 'identity':
-            hs = [self.affine(h) for h in hs]                
-        else:
-            hs = [self.act(self.affine(h)) for h in hs]
+        hs = [self.affine(r) for r in rs]
 
         # crf layer
         indices = argsort_list_descent(hs)
         trans_hs = F.transpose_sequence(permutate_list(hs, indices, inv=False))
-        trans_ts = F.transpose_sequence(permutate_list(ts, indices, inv=False))
-        loss = self.crf(trans_hs, trans_ts)
+        trans_ls = F.transpose_sequence(permutate_list(ls, indices, inv=False))
+        loss = self.crf(trans_hs, trans_ls)
         score, trans_ys = self.crf.argmax(trans_hs)
         ys = permutate_list(F.transpose_sequence(trans_ys), indices, inv=True)
         ys = [y.data for y in ys]
@@ -229,16 +163,10 @@ class RNN_CRF(RNNBase):
     def decode(self, xs):
         with chainer.no_backprop_mode():
             # rnn layers
-            if self.rnn_unit_type == 'lstm':
-                hy, cy, hs = self.rnn_unit(None, None, xs)
-            else:
-                hy, hs = self.rnn_unit(None, xs)
+            rs = self.rnn_output(xs)
 
             # affine layer
-            if not self.act or self.act == 'identity':
-                hs = [self.affine(h) for h in hs]                
-            else:
-                hs = [self.act(self.affine(h)) for h in hs]
+            hs = [self.affine(r) for r in rs]                
 
             # crf layer
             indices = argsort_list_descent(hs)
@@ -250,198 +178,230 @@ class RNN_CRF(RNNBase):
         return ys
 
 
-class SequenceTagger(chainer.link.Chain):
-    compute_fscore = True
+class RNNBiaffineParser(chainer.Chain):
+    def __init__(
+            self, n_words, word_embed_dim, n_pos, pos_embed_dim, 
+            rnn_unit_type, rnn_bidirection, n_rnn_layers, n_rnn_units, affine_dim, n_labels=0,
+            dropout=0, initial_word_embed=None, initial_pos_embed=None,
+            stream=sys.stderr):
+        super(RNNBiaffineParser, self).__init__()
 
-    def __init__(self, indices, predictor):
-        super(SequenceTagger, self).__init__(predictor=predictor)
-        self.indices = indices
+        with self.init_scope():
+            if initial_word_embed:
+                self.word_embed = initial_word_embed
+                word_embed_dim = initial_word_embed.W.shape[1]
+            else:
+                self.word_embed = L.EmbedID(n_words, word_embed_dim)
 
-        
-    def __call__(self, xs, fs, ts):
-        exs = self.merge_features(xs, fs)
-        loss, ys = self.predictor(exs, ts)
+            if initial_pos_embed:
+                self.pos_embed = initial_pos_embed
+                pos_embed_dim = initial_word_embed.W.shape[1]
+            else:
+                self.pos_embed = L.EmbedID(n_pos, pos_embed_dim)
+            embed_dim = word_embed_dim + pos_embed_dim
 
-        eval_counts = None
-        if self.compute_fscore:
-            for x, t, y in zip(xs, ts, ys):
-                generator = self.generate_lines(x, t, y)
-                eval_counts = conlleval.merge_counts(eval_counts, conlleval.evaluate(generator))
+            self.rnn_unit_type = rnn_unit_type
+            self.rnn = construct_RNN(
+                rnn_unit_type, rnn_bidirection, n_rnn_layers, embed_dim, n_rnn_units, dropout, 
+                stream=stream)
+            rnn_output_dim = n_rnn_units * (2 if rnn_bidirection else 1)
 
-        return loss, eval_counts
+            self.affine_head = L.Linear(rnn_output_dim, affine_dim)
+            self.affine_mod = L.Linear(rnn_output_dim, affine_dim)
+
+            self.biaffine_arc = L.Bilinear(affine_dim, affine_dim, 1, nobias=True)
+            self.n_labels = n_labels
+            if n_labels > 0:
+                self.biaffine_label = L.Bilinear(affine_dim, affine_dim, n_labels, nobias=True)
+
+            self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
+
+            print('### Parameters', file=stream)
+            print('# Word embedding matrix: {}'.format(self.word_embed.W.shape), file=stream)
+            print('# POS embedding matrix: {}'.format(self.pos_embed.W.shape), file=stream)
+            print('# RNN unit: {}'.format(self.rnn), file=stream)
+            if rnn_unit_type == 'lstm':
+                i = 0
+                for c in self.rnn._children:
+                    print('#   LSTM {}-th param'.format(i), file=stream)
+                    print('#      0 - {}, {}'.format(c.w0.shape, c.b0.shape), file=stream) 
+                    print('#      1 - {}, {}'.format(c.w1.shape, c.b1.shape), file=stream) 
+                    print('#      2 - {}, {}'.format(c.w2.shape, c.b2.shape), file=stream) 
+                    print('#      3 - {}, {}'.format(c.w3.shape, c.b3.shape), file=stream) 
+                    print('#      4 - {}, {}'.format(c.w4.shape, c.b4.shape), file=stream) 
+                    print('#      5 - {}, {}'.format(c.w5.shape, c.b5.shape), file=stream) 
+                    print('#      6 - {}, {}'.format(c.w6.shape, c.b6.shape), file=stream) 
+                    print('#      7 - {}, {}'.format(c.w7.shape, c.b7.shape), file=stream) 
+                    i += 1
+            print('# Affine layer for heads: {}, {}'.format(
+                self.affine_head.W.shape, self.affine_head.b.shape), file=stream)
+            print('# Affine layer for modifiers: {}, {}'.format(
+                self.affine_mod.W.shape, self.affine_mod.b.shape), file=stream)
+            print('# Biaffine layer for arc prediction: {}'.format(
+                self.biaffine_arc.W.shape), file=stream)
+            print('# Biaffine layer for label prediction: {}\n'.format(
+                self.biaffine_label.W.shape), file=stream)
 
 
-    def decode(self, xs, fs):
-        exs = self.merge_features(xs, fs)
-        ys = self.predictor.decode(exs)
-        return ys
+    def embed(self, ws, ps):
+        xs = []
+        # TODO use assarray
+        for w, p in zip(ws, ps):
+            wemb = self.word_embed(w)
+            pemb = self.pos_embed(p)
+            xemb = F.concat((wemb, pemb), 1)
+            xs.append(xemb)
+        return xs
 
 
-    def merge_features(self, xs, fs=None):
-        exs = []
-        if fs:
-            for x, feat in zip(xs, fs):
-                emb = self.predictor.embed(x)
-                ex = F.concat((emb, feat), 1)
-                exs.append(ex)
-
+    def rnn_output(self, xs):
+        if self.rnn_unit_type == 'lstm':
+            hy, cy, hs = self.rnn(None, None, xs)
         else:
-            for x in xs:
-                ex = self.predictor.embed(x)
-                exs.append(ex)
-
-        return exs
+            hy, hs = self.rnn(None, xs)
+        return hs
 
 
-    def generate_lines(self, x, t, y, is_str=False):
-        i = 0
-        while True:
-            if i == len(x):
-                raise StopIteration
-            x_str = str(x[i])
-            t_str = t[i] if is_str else self.indices.get_label(int(t[i]))
-            y_str = y[i] if is_str else self.indices.get_label(int(y[i]))
+    # arguments: mini-batch of sequences for word, pos, head label and arc label, respectively
+    def __call__(self, ws, ps, ths, tls):
+        phs = []                # predicted head
+        pls = []                # predicted arc label
+        loss = None
 
-            yield [x_str, t_str, y_str]
+        # embed
+        xs = self.embed(ws, ps)
 
-            i += 1
+        # rnn layers
+        rs = self.rnn_output(xs)
 
+        # affine layers
+        hs = [self.affine_head(r) for r in rs] # head representations
+        ms = [self.affine_mod(r) for r in rs]  # modifier representations
 
-    # def grow_embedding_layer(self, token2id_new):
-    #     weight1 = self.predictor.embed.W
-    #     diff = len(token2id_new) - len(weight1)
-    #     weight2 = chainer.variable.Parameter(initializers.normal.Normal(1.0), (diff, weight1.shape[1]))
-    #     weight = F.concat((weight1, weight2), 0)
-    #     embed = L.EmbedID(0, 0)
-    #     embed.W = chainer.Parameter(initializer=weight.data)
-    #     self.predictor.embed = embed
+        xp = cuda.get_array_module(xs[0])
+        dim = self.affine_head.W.shape[0]
 
+        # biaffine layers
+        for h, m, th, tl in zip(hs, ms, ths, tls): # for each sentence in mini-batch
+            n = len(h) - 1      # actual number of words except root
+            arc_scores = [None] * n
+            #chainer.Variable(xp.zeros((n,n), dtype='f'))
 
-    def grow_embedding_layer(self, id2token_all, id2token_trained={}, embed_model=None, stream=sys.stderr):
-        diff = len(id2token_all) - len(id2token_trained)
-        weight1 = self.predictor.embed.W
-        weight2 = []
+            # predict arcs
+            for i in range(1, n+1):  # for each head in the sentence
+                mis = F.reshape(
+                    F.concat([m[i] for j in range(n+1)], axis=0),
+                    (n+1, dim))
+                # print('h', h.shape, h.__dict__)
+                # print('mi', mis.shape, type(mis))
 
-        dim = self.predictor.embed_dim
-        initialW = initializers.normal.Normal(1.0)
-
-        count = 0
-        if embed_model:
-            start_i = len(id2token_trained)
-            for i in range(start_i, len(id2token_all)):
-                key = id2token_all[i]
-                    
-                if key in embed_model.wv.vocab:
-                    vec = embed_model.wv[key]
-                    weight.append(vec)
-                    count += 1
-                else:
-                    vec = initializers.generate_array(initialW, (dim, ), np)
-                    weight.append(vec)
-
-            weight2 = np.reshape(weight2, (diff, dim))
-            #TODO type check
-
-        else:
-            weight2 = chainer.variable.Parameter(initialW, (diff, dim))
-
-        if id2token_trained:
-            weight = F.concat((weight1, weight2), 0)
-        else:
-            wieght = weight2
-
-        self.predictor.embed = L.EmbedID(0, 0)
-        self.predictor.embed.W = chainer.Parameter(initializer=weight.data)
-
-        print('Grow embedding layer: {} -> {}'.format(weight1.shape, weight.shape), file=stream)
-        if count >= 1:
-            print('Use %d pretrained embedding vectors'.format(count), file=stream)
-        print('', file=stream)
-
-        
-    def grow_inference_layers(self, id2label_all, id2label_trained, stream=sys.stderr):
-        org_len = len(id2label_trained)
-        new_len = len(id2label_all)
-        diff = new_len - org_len
-
-
-        # affine layer
-        w_org = self.predictor.affine.W
-        b_org = self.predictor.affine.b
-        w_org_shape = w_org.shape
-        b_org_shape = b_org.shape
-
-        dim = w_org.shape[1]
-        initialW = initializers.normal.Normal(1.0)
-
-        w_diff = chainer.variable.Parameter(initialW, (diff, dim))
-        w_new = F.concat((w_org, w_diff), 0)
-
-        b_diff = chainer.variable.Parameter(initialW, (diff,))
-        b_new = F.concat((b_org, b_diff), 0)
+                # Biaffine transformation: [h(0), ..., h(n-1)] * W * [m(i), ..., m(i)]
+                arc_scores_i = F.reshape(self.biaffine_arc(h, mis), (n+1,))
+                arc_scores[i-1] = F.expand_dims(arc_scores_i, axis=0)
             
-        self.predictor.affine.W = chainer.Parameter(initializer=w_new.data)
-        self.predictor.affine.b = chainer.Parameter(initializer=b_new.data)
+            arc_scores = F.concat(arc_scores, axis=0)
+            mask = gen_masking_matrix(n, xp=xp)
+            arc_scores = arc_scores + mask
 
-        print('Grow affine layer: {}, {} -> {}, {}'.format(
-            w_org_shape, b_org_shape, self.predictor.affine.W.shape, 
-            self.predictor.affine.b.shape), file=stream)
+            # predict labels. th does not contain ROOT's label
+            heads = F.reshape(
+                F.concat([h[th[i-1]] for i in range(1, n+1)], axis=0), 
+                (n, dim))
+            
+            # Biaffine transformation: [head(m(0)), ..., head(m(n-1))] * W * [m(0), ..., m(n-1)]
+            label_scores = self.biaffine_label(heads, m[1:])
+            # print('as',arc_scores)
+            # print('ls',label_scores)
 
-        # crf layer
-        if isinstance(self.predictor, RNN_CRF):
-            c_org = self.predictor.crf.cost
-            c_diff1 = chainer.variable.Parameter(0, (org_len, diff))
-            c_diff2 = chainer.variable.Parameter(0, (diff, new_len))
-            c_tmp = F.concat((c_org, c_diff1), 1)
-            c_new = F.concat((c_tmp, c_diff2), 0)
-            self.predictor.crf.cost = chainer.Parameter(initializer=c_new.data)
+            # calculate loss
+            loss_arc = self.loss_fun(arc_scores, th[1:])
+            loss_label = self.loss_fun(label_scores, tl[1:])
+            if loss is not None:
+                loss += loss_arc + loss_label
+            else:
+                loss = loss_arc + loss_label
 
-            print('Grow crf layer: {} -> {}'.format(
-                c_org.shape, self.predictor.crf.cost.shape, file=stream))
+            ph = minmax.argmax(arc_scores, axis=1).data
+            pl = minmax.argmax(label_scores, axis=1).data
+            if xp is cuda.cupy:
+                ph = cuda.to_cpu(ph)
+                pl = cuda.to_cpu(pl)
+            ph = np.insert(ph, 0, np.int32(-1))
+            pl = np.insert(pl, 0, np.int32(-1))
+            phs.append(ph)
+            pls.append(pl)
+            # print('ph',ph)
+            # print('th',th)
+            # print('pl',pl)
+            # print('tl',tl)
+            # print()
 
-        print('', file=stream)
-        
+        return loss, phs, pls
 
-
-def init_tagger(indices, hparams, use_gpu=False):
-    n_vocab = len(indices.token_indices)
-    n_labels = len(indices.label_indices)
-
-    if hparams['inference_layer'] == 'crf':
-        rnn = RNN_CRF(
-            hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
-            hparams['rnn_hidden_units'], n_labels, feat_dim=hparams['add_feat_dimension'], 
-            dropout=hparams['dropout'], 
-            rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'])
-        
-    else:
-        rnn = RNN(
-            hparams['rnn_layers'], n_vocab, hparams['embed_dimension'], 
-            hparams['rnn_hidden_units'], n_labels, feat_dim=hparams['add_feat_dimension'],
-            dropout=hparams['dropout'], 
-            rnn_unit_type=hparams['rnn_unit_type'], rnn_bidirection=hparams['rnn_bidirection'])
-
-    tagger = SequenceTagger(indices, rnn)
-
-    return tagger
     
+    def decode(self, ws, ps):
+        xs = self.embed(ws, ps)
+        xp = cuda.get_array_module(xs)
 
-def get_activation(activation):
-    if not activation  or activation == 'identity':
-        return F.identity
-    elif activation == 'relu':
-        return F.relu
-    elif activation == 'tanh':
-        return F.tanh
-    elif activation == 'sigmoid':
-        return F.sigmoid
+        with chainer.no_backprop_mode():
+            # predict labels
+            # if xp is numpy:
+            #     heads = xp.asarray([h[head_ids[i]].data for i in range(n)], dtype='f')
+            # else:
+            #     heads = xp.array([h[head_ids[i]] for i in range(n)], dtype='f')
+
+            #head_ids = [None] * n
+            pass
+
+
+def gen_masking_matrix(sen_len, xp=np):
+    mat = xp.array([[get_mask_value(i, j) for j in range(sen_len+1)] for i in range(sen_len+1)])
+    return chainer.Variable(mat[1:])
+
+
+def get_mask_value(i, j):
+    return -np.float32(np.infty) if i == j else np.float32(0)
+
+
+def construct_RNN(unit_type, bidirection, n_layers, n_input, n_units, dropout, stream=sys.stderr):
+    rnn = None
+    if unit_type == 'lstm':
+        if bidirection:
+            rnn = L.NStepBiLSTM(n_layers, n_input, n_units, dropout)
+        else:
+            rnn = L.NStepLSTM(n_layers, n_input, n_units, dropout)
+    elif unit_type == 'gru':
+        if bidirection:
+            rnn = L.NStepBiGRU(n_layers, n_input, n_units, dropout) 
+        else:
+            rnn = L.NStepGRU(n_layers, n_input, n_units, dropout)
     else:
-        return
+        if bidirection:
+            rnn = L.NStepBiRNNTanh(n_layers, n_input, n_units, dropout) 
+        else:
+            rnn = L.NStepRNNTanh(n_layers, n_input, n_units, dropout)
+
+    return rnn
 
 
-def add(var_list1, var_list2):
-    len_list = len(var_list1)
-    ret = [None] * len_list
-    for i, var1, var2 in zip(range(len_list), var_list1, var_list2):
-        ret[i] = var1 + var2
-    return ret
+# def get_activation(activation):
+#     if not activation  or activation == 'identity':
+#         return F.identity
+#     elif activation == 'relu':
+#         return F.relu
+#     elif activation == 'tanh':
+#         return F.tanh
+#     elif activation == 'sigmoid':
+#         return F.sigmoid
+#     else:
+#         print('Unsupported activation function', file=stream)
+#         sys.exit()
+#         return
+
+
+# def add(var_list1, var_list2):
+#     len_list = len(var_list1)
+#     ret = [None] * len_list
+#     for i, var1, var2 in zip(range(len_list), var_list1, var_list2):
+#         ret[i] = var1 + var2
+#     return ret

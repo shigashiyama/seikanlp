@@ -21,9 +21,9 @@ ANY_SPACE = '<SPACE>'
 class FormatError(Exception):
     pass
 
-Metrics = namedtuple('Metrics', 'tp fp fn prec rec fscore')
+Metrics = namedtuple('Metrics', 'tp fp fn acc prec rec fscore')
 
-class EvalCounts(object):
+class FCounts(object):
     def __init__(self):
         self.correct_chunk = 0    # number of correctly identified chunks
         self.correct_tags = 0     # number of correct chunk tags
@@ -43,23 +43,6 @@ class EvalCounts(object):
                                          str(self.found_guessed),
                                          str(self.token_counter))
     
-def merge_counts(c1, c2):
-    if c1 is None:
-        return c2
-    if c2 is None:
-        return c1
-
-    c = EvalCounts()
-    c.correct_chunk = c1.correct_chunk + c2.correct_chunk
-    c.correct_tags = c1.correct_tags + c2.correct_tags
-    c.found_correct = c1.found_correct + c2.found_correct
-    c.found_guessed = c1.found_guessed + c2.found_guessed
-    c.token_counter = c1.token_counter + c2.token_counter
-
-    #TODO type別もマージする
-
-    return c
-
 def parse_args(argv):
     import argparse
     parser = argparse.ArgumentParser(
@@ -85,7 +68,7 @@ def evaluate(iterable, counts=None, options=None):
         options = parse_args([])    # use defaults
 
     if counts is None:
-        counts = EvalCounts()
+        counts = FCounts()
 
     num_features = None       # number of features per line
     in_correct = False        # currently processed chunks is correct until now
@@ -173,16 +156,13 @@ def uniq(iterable):
   seen = set()
   return [i for i in iterable if not (i in seen or seen.add(i))]
 
-def calculate_accuracy(correct, total):
-    a = 1.*correct/total
-    return a
-
 def calculate_metrics(correct, guessed, total):
     tp, fp, fn = correct, guessed-correct, total-correct
+    a = 1.*correct / total
     p = 0 if tp + fp == 0 else 1.*tp / (tp + fp)
     r = 0 if tp + fn == 0 else 1.*tp / (tp + fn)
     f = 0 if p + r == 0 else 2 * p * r / (p + r)
-    return Metrics(tp, fp, fn, p, r, f)
+    return Metrics(tp, fp, fn, a, p, r, f)
 
 def metrics(counts):
     c = counts
