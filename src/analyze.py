@@ -1,5 +1,6 @@
 import sys
 import os
+import copy
 
 import chainer
 from chainer import cuda
@@ -49,7 +50,7 @@ def run(process_name):
     if args.model_path:
         trainer.load_model(args.model_path)
         id2token_org = copy.deepcopy(trainer.indices.token_indices.id2str)
-        id2label_org = copy.deepcopy(trainer.indices.xxx_indices.id2str) # TODO modify
+        id2label_org = copy.deepcopy(trainer.indices.arc_label_indices.id2str) # TODO modify
     else:
         trainer.init_hyperparameters(args)
         id2token_org = {}

@@ -139,16 +139,14 @@ class DependencyParser(Classifier):
         super(DependencyParser, self).__init__(predictor=predictor)
 
         
-    def __call__(self, ws, ps, ths, tls):
-        loss, phs, pls = self.predictor(ws, ps, ths, tls)
-        return loss, phs, pls
+    def __call__(self, ws, ps, ths=None, tls=None, train=True):
+        ret = self.predictor(ws, ps, ths, tls, train=train)
+        return ret
 
 
     def decode(self, ws, ps):
-        pass
-        # exs = self.merge_features(xs, fs)
-        # ys = self.predictor.decode(exs)
-        # return ys
+        ret = self.predictor.decode(ws, ps)
+        return ret
 
 
 # TODO init_embed

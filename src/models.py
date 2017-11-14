@@ -1,7 +1,7 @@
 import sys
 import copy
 import enum
-from collections import Counter
+from collections import Counter, deque
 from datetime import datetime
 
 import numpy as np
@@ -10,6 +10,8 @@ import chainer
 import chainer.functions as F
 import chainer.links as L
 from chainer import cuda
+from chainer import initializers
+from chainer import variable
 from chainer.functions.loss import softmax_cross_entropy
 from chainer.functions.math import minmax
 from chainer.links.connection.n_step_rnn import argsort_list_descent, permutate_list
@@ -119,7 +121,8 @@ class RNNCRFTagger(RNNTaggerBase):
             print('# CRF cost: {}\n'.format(self.crf.cost.shape), file=stream)
 
 
-    def __call__(self, xs, ls):
+    # train is unused
+    def __call__(self, xs, ls=None, train=True, calculate_loss=True):
         # rnn layers
         rs = self.rnn_output(xs)
 
@@ -129,59 +132,75 @@ class RNNCRFTagger(RNNTaggerBase):
         # crf layer
         indices = argsort_list_descent(hs)
         trans_hs = F.transpose_sequence(permutate_list(hs, indices, inv=False))
-        trans_ls = F.transpose_sequence(permutate_list(ls, indices, inv=False))
-        loss = self.crf(trans_hs, trans_ls)
         score, trans_ys = self.crf.argmax(trans_hs)
         ys = permutate_list(F.transpose_sequence(trans_ys), indices, inv=True)
         ys = [y.data for y in ys]
 
-        ################
-        # loss = chainer.Variable(cuda.cupy.array(0, dtype=np.float32))
-        # trans_ys = []
-        # for i in range(len(hs)):
-        #     hs_tmp = hs[i:i+1]
-        #     ts_tmp = ts[i:i+1]
-        #     t0 = datetime.now()
-        #     indices = argsort_list_descent(hs_tmp)
-        #     trans_hs = F.transpose_sequence(permutate_list(hs_tmp, indices, inv=False))
-        #     trans_ts = F.transpose_sequence(permutate_list(ts_tmp, indices, inv=False))
-        #     t1 = datetime.now()
-        #     loss += self.crf(trans_hs, trans_ts)
-        #     t2 = datetime.now()
-        #     score, trans_y = self.crf.argmax(trans_hs)
-        #     t3 = datetime.now()
-        #     #trans_ys.append(trans_y)
-        #     # print('  transpose     : {}'.format((t1-t0).seconds+(t1-t0).microseconds/10**6))
-        #     # print('  crf forward   : {}'.format((t2-t1).seconds+(t2-t1).microseconds/10**6))
-        #     # print('  crf argmax    : {}'.format((t3-t2).seconds+(t3-t2).microseconds/10**6))
-        # ys = [None]
-        ################
+        if calculate_loss:
+            trans_ls = F.transpose_sequence(permutate_list(ls, indices, inv=False))
+            loss = self.crf(trans_hs, trans_ls)
+        else:
+            loss = chainer.Variable(xp.array(0, dtype='f'))
 
         return loss, ys
         
 
     def decode(self, xs):
         with chainer.no_backprop_mode():
-            # rnn layers
-            rs = self.rnn_output(xs)
-
-            # affine layer
-            hs = [self.affine(r) for r in rs]                
-
-            # crf layer
-            indices = argsort_list_descent(hs)
-            trans_hs = F.transpose_sequence(permutate_list(hs, indices, inv=False))
-            score, trans_ys = self.crf.argmax(trans_hs)
-            ys = permutate_list(F.transpose_sequence(trans_ys), indices, inv=True)
-            ys = [y.data for y in ys]
+            _, ys = self.__call__(xs, calculate_loss=False)
 
         return ys
+
+
+class BiaffineCombination(chainer.Chain):
+    # e1 * W * e2 + U * e1 + V * e2 + b
+    def __init__(self, left_size, right_size, out_size, 
+                 use_U=False, use_V=False, use_b=False):
+        super(BiaffineCombination, self).__init__()
+        # self.left_size = left_size
+        # self.right_size = right_size 
+        self.out_size = out_size
+        
+        initialW = None
+        initialU = None
+        initialV = None
+        initialb = 0
+
+        if self.out_size > 1:
+            w_shape = (out_size, left_size, right_size)
+        else:
+            w_shape = (left_size, right_size)
+            
+        with self.init_scope():
+            self.W = variable.Parameter(
+                initializers._get_initializer(initialW), w_shape)
+            self.b = variable.Parameter(initialb, out_size)
+
+
+    # TODO chainer 3 -> F.matmul
+    def __call__(self, x1, x2):
+        # inputs: x1 = [x1_1 ... x1_n1]; dim(x1_i)=d1=left_size
+        #         x2 = [x1_1 ... x2_n2]; dim(x2_i)=d2=right_size
+        # output: o[l] = gi * W^(l) * hi (l = 1 ... L=out_size)
+
+        if self.out_size > 1:                  # not validated
+            X1 = F.broadcast_to(self.out_size) # X1 = [x1 ... x1]
+            X2 = F.transpose(
+                F.broadcast_to(self.out_size)) # X2 = [x2 ... x2]^T
+            X1_W = F.batch_matmul(X1, self.W)  # (L, n1, d1) * (L, d1, d2) -> (L, n1, d2)
+            res = F.batch_matmul(X1_W, X2)     # (L, n1, d2) * (L, d2, n2) -> (L, n1, n2)
+        else:
+            x2t = F.transpose(x2)
+            x1_W = F.matmul(x1, self.W)        # (n1, d1) * (d1, d2) -> (n1, d2)
+            res = F.matmul(x1_W, x2t)           # (n1, d2) * (d2, n2) -> (n1, n2)
+
+        return res
 
 
 class RNNBiaffineParser(chainer.Chain):
     def __init__(
             self, n_words, word_embed_dim, n_pos, pos_embed_dim, 
-            rnn_unit_type, rnn_bidirection, n_rnn_layers, n_rnn_units, affine_dim, n_labels=0,
+            rnn_unit_type, rnn_bidirection, n_rnn_layers, n_rnn_units, affine_units, n_labels=0,
             dropout=0, initial_word_embed=None, initial_pos_embed=None,
             stream=sys.stderr):
         super(RNNBiaffineParser, self).__init__()
@@ -206,15 +225,17 @@ class RNNBiaffineParser(chainer.Chain):
                 stream=stream)
             rnn_output_dim = n_rnn_units * (2 if rnn_bidirection else 1)
 
-            self.affine_head = L.Linear(rnn_output_dim, affine_dim)
-            self.affine_mod = L.Linear(rnn_output_dim, affine_dim)
+            self.affine_head = L.Linear(rnn_output_dim, affine_units)
+            self.affine_mod = L.Linear(rnn_output_dim, affine_units)
 
-            self.biaffine_arc = L.Bilinear(affine_dim, affine_dim, 1, nobias=True)
-            self.n_labels = n_labels
-            if n_labels > 0:
-                self.biaffine_label = L.Bilinear(affine_dim, affine_dim, n_labels, nobias=True)
+            # self.biaffine_arc = L.Bilinear(affine_units, affine_units, 1, nobias=True)
+            self.biaffine_arc = BiaffineCombination(affine_units, affine_units, 1)
 
-            self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
+            self.label_prediction = n_labels > 0
+            if self.label_prediction > 0:
+                self.biaffine_label = L.Bilinear(affine_units, affine_units, n_labels, nobias=True)
+
+            self.softmax_cross_entropy = softmax_cross_entropy.softmax_cross_entropy
 
             print('### Parameters', file=stream)
             print('# Word embedding matrix: {}'.format(self.word_embed.W.shape), file=stream)
@@ -244,8 +265,8 @@ class RNNBiaffineParser(chainer.Chain):
 
 
     def embed(self, ws, ps):
+        xp = cuda.get_array_module(ws[0])
         xs = []
-        # TODO use assarray
         for w, p in zip(ws, ps):
             wemb = self.word_embed(w)
             pemb = self.pos_embed(p)
@@ -262,11 +283,33 @@ class RNNBiaffineParser(chainer.Chain):
         return hs
 
 
-    # arguments: mini-batch of sequences for word, pos, head label and arc label, respectively
-    def __call__(self, ws, ps, ths, tls):
-        phs = []                # predicted head
-        pls = []                # predicted arc label
-        loss = None
+    def predict_arcs(self, m, h, xp=np):
+        scores = self.biaffine_arc(m, h) + gen_masking_matrix(len(m), xp=xp)
+        yh = minmax.argmax(scores, axis=1).data
+        if xp is cuda.cupy:
+            yh = cuda.to_cpu(yh)
+        yh = np.insert(yh, 0, np.int32(-1))
+
+        return scores, yh
+        
+
+    def predict_labels(self, m, h, xp=np):
+        scores = self.biaffine_label(m, h)
+        yl = minmax.argmax(scores, axis=1).data
+        if xp is cuda.cupy:
+            yl = cuda.to_cpu(yl)
+        yl = np.insert(yl, 0, np.int32(-1))
+
+        return scores, yl
+
+
+    def __call__(self, ws, ps, ths=None, tls=None, train=True, calculate_loss=True):
+        if train:
+            calclulate_loss = True
+        if not ths:
+            ths = [None] * len(ws)
+        if not tls:
+            tls = [None] * len(ws)
 
         # embed
         xs = self.embed(ws, ps)
@@ -275,83 +318,43 @@ class RNNBiaffineParser(chainer.Chain):
         rs = self.rnn_output(xs)
 
         # affine layers
-        hs = [self.affine_head(r) for r in rs] # head representations
-        ms = [self.affine_mod(r) for r in rs]  # modifier representations
+        hs = [F.relu(self.affine_head(r)) for r in rs] # head representations
+        ms = [F.relu(self.affine_mod(r[1:])) for r in rs] # modifier representations
 
         xp = cuda.get_array_module(xs[0])
         dim = self.affine_head.W.shape[0]
+        loss = chainer.Variable(xp.array(0, dtype='f'))
+        yhs = []                # predicted head
+        yls = []                # predicted arc label
 
         # biaffine layers
         for h, m, th, tl in zip(hs, ms, ths, tls): # for each sentence in mini-batch
-            n = len(h) - 1      # actual number of words except root
-            arc_scores = [None] * n
-            #chainer.Variable(xp.zeros((n,n), dtype='f'))
+            scores_a, yh = self.predict_arcs(m, h, xp)
+            yhs.append(yh)
 
-            # predict arcs
-            for i in range(1, n+1):  # for each head in the sentence
-                mis = F.reshape(
-                    F.concat([m[i] for j in range(n+1)], axis=0),
-                    (n+1, dim))
-                # print('h', h.shape, h.__dict__)
-                # print('mi', mis.shape, type(mis))
+            if self.label_prediction:
+                n = len(m)      # the number of words except root
+                heads = th if train else yh
+                h_m = F.reshape(F.concat([h[heads[i]] for i in range(1, n+1)], axis=0), (n, dim))
+                scores_l, yl = self.predict_labels(m, h_m, xp)
+                yls.append(yl)
 
-                # Biaffine transformation: [h(0), ..., h(n-1)] * W * [m(i), ..., m(i)]
-                arc_scores_i = F.reshape(self.biaffine_arc(h, mis), (n+1,))
-                arc_scores[i-1] = F.expand_dims(arc_scores_i, axis=0)
-            
-            arc_scores = F.concat(arc_scores, axis=0)
-            mask = gen_masking_matrix(n, xp=xp)
-            arc_scores = arc_scores + mask
+            if calculate_loss:
+                loss += self.softmax_cross_entropy(scores_a, th[1:])
+                if self.label_prediction:
+                    loss += self.softmax_cross_entropy(scores_l, tl[1:])
 
-            # predict labels. th does not contain ROOT's label
-            heads = F.reshape(
-                F.concat([h[th[i-1]] for i in range(1, n+1)], axis=0), 
-                (n, dim))
-            
-            # Biaffine transformation: [head(m(0)), ..., head(m(n-1))] * W * [m(0), ..., m(n-1)]
-            label_scores = self.biaffine_label(heads, m[1:])
-            # print('as',arc_scores)
-            # print('ls',label_scores)
+        if self.label_prediction:
+            return loss, yhs, yls
+        else:
+            return loss, yhs
 
-            # calculate loss
-            loss_arc = self.loss_fun(arc_scores, th[1:])
-            loss_label = self.loss_fun(label_scores, tl[1:])
-            if loss is not None:
-                loss += loss_arc + loss_label
-            else:
-                loss = loss_arc + loss_label
 
-            ph = minmax.argmax(arc_scores, axis=1).data
-            pl = minmax.argmax(label_scores, axis=1).data
-            if xp is cuda.cupy:
-                ph = cuda.to_cpu(ph)
-                pl = cuda.to_cpu(pl)
-            ph = np.insert(ph, 0, np.int32(-1))
-            pl = np.insert(pl, 0, np.int32(-1))
-            phs.append(ph)
-            pls.append(pl)
-            # print('ph',ph)
-            # print('th',th)
-            # print('pl',pl)
-            # print('tl',tl)
-            # print()
-
-        return loss, phs, pls
-
-    
     def decode(self, ws, ps):
-        xs = self.embed(ws, ps)
-        xp = cuda.get_array_module(xs)
-
         with chainer.no_backprop_mode():
-            # predict labels
-            # if xp is numpy:
-            #     heads = xp.asarray([h[head_ids[i]].data for i in range(n)], dtype='f')
-            # else:
-            #     heads = xp.array([h[head_ids[i]] for i in range(n)], dtype='f')
+            ret = self.__call__(ws, ps, train=False, calculate_loss=False)
 
-            #head_ids = [None] * n
-            pass
+        return ret[1:]
 
 
 def gen_masking_matrix(sen_len, xp=np):
@@ -402,6 +405,7 @@ def construct_RNN(unit_type, bidirection, n_layers, n_input, n_units, dropout, s
 # def add(var_list1, var_list2):
 #     len_list = len(var_list1)
 #     ret = [None] * len_list
+
 #     for i, var1, var2 in zip(range(len_list), var_list1, var_list2):
 #         ret[i] = var1 + var2
 #     return ret

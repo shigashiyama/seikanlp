@@ -209,7 +209,7 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
             line = line.strip()
 
             if len(line) < 1:
-                if ins:
+                if len(ins) - (1 if parsing else 0) > 0:
                     instances.append(ins)
                     ins = [indices.root_id] if parsing else []
                     if seg_seq:
@@ -304,7 +304,7 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
             word_cnt += 1
             token_cnt += len(word)
 
-        if ins:
+        if len(ins) - (1 if parsing else 0) > 0:
             instances.append(ins)
             if seg_seq:
                 seg_seqs.append(seg_seq)

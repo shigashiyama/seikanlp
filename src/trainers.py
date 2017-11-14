@@ -11,6 +11,7 @@ import chainer
 from chainer import serializers
 from chainer import cuda
 
+import util
 import constants
 import data_io
 import classifiers
@@ -136,10 +137,10 @@ class Trainer(object):
         with open(indices_path, 'rb') as f:
             self.indices = pickle.load(f)
         self.log('Load indices: {}'.format(indices_path))
-        self.log('Vocab size: {}\n'.format(len(indices.token_indices)))
+        self.log('Vocab size: {}\n'.format(len(self.indices.token_indices)))
 
         # hyper parameters
-        self.hparams = load_hyperparameters(hparam_path)
+        self.hparams = self.load_hyperparameters(hparam_path)
         self.log('Load hyperparameters: {}\n'.format(hparam_path))
         self.log('### arguments')
         for k, v in self.args.__dict__.items():
@@ -316,7 +317,7 @@ class Trainer(object):
 
             indices_path = '{}/{}.s2i'.format(constants.MODEL_DIR, self.start_time)
             with open(indices_path, 'wb') as f:
-                pickle.dump(self.classifier.indices, f)
+                pickle.dump(self.indices, f)
             self.log('save string2index table: {}'.format(indices_path))
 
         for e in range(max(1, self.args.epoch_begin), self.args.epoch_end+1):
@@ -420,19 +421,28 @@ class Trainer(object):
             inputs = self.gen_inputs(data, ids)
             xs = inputs[0]
             golds = inputs[2:]
+            # timer = util.Timer()
+            # timer.start()
             if train:
-                ret = self.classifier(*inputs)
+                ret = self.classifier(*inputs, train=True)
             else:
                 with chainer.no_backprop_mode():
                     ret = self.classifier(*inputs)
             loss = ret[0]
             outputs = ret[1:]
+            # timer.stop()
+            # print('time: predict:', timer.elapsed)
+            # timer.reset()
 
             if train:
+                # timer.start()
                 self.optimizer.target.cleargrads() # Clear the parameter gradients
                 loss.backward()                    # Backprop
                 loss.unchain_backward()            # Truncate the graph
                 self.optimizer.update()            # Update the parameters
+                # timer.stop()
+                # print('time: backprop', timer.elapsed)
+                # timer.reset()
 
                 i_max = min(i + self.args.batchsize, n_ins)
                 self.log('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
@@ -441,8 +451,6 @@ class Trainer(object):
 
             n_sen += len(xs)
             total_loss += loss.data
-            #print(len(xs), len(golds[0]), len(golds[1]), len(outputs[0]), len(outputs[1]))
-
             counts = self.evaluator.calculate(*[xs], *golds, *outputs)
             total_counts = evaluators.merge_counts(total_counts, counts)
 
@@ -518,7 +526,7 @@ class TaggerTrainer(Trainer):
 
     def load_hyperparameters(self, hparams_path):
         hparams = {}
-        with open(hparam_path, 'r') as f:
+        with open(hparams_path, 'r') as f:
             for line in f:
                 line = line.strip()
                 if line.startswith('#'):
@@ -528,7 +536,7 @@ class TaggerTrainer(Trainer):
                 key = kv[0]
                 val = kv[1]
 
-                if (key == 'embed_dim' or
+                if (key == 'unit_embed_dim' or
                     key == 'additional_feat_dim' or
                     key == 'rnn_layers' or
                     key == 'rnn_hidden_units' or
@@ -547,7 +555,7 @@ class TaggerTrainer(Trainer):
 
                 hparams[key] = val
 
-        self.check_data_format(self.hparams['data_format'])
+        self.check_data_format(hparams['data_format'])
 
         return hparams
 
@@ -609,7 +617,7 @@ class TaggerTrainer(Trainer):
 
         n_ins = len(data.instances)
         for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=False):
-            xs = [xp.asarray(data.instances[j], dtype=np.int32) for j in ids]
+            xs = [xp.asarray(data.instances[j], dtype='i') for j in ids]
             if self.hparams['feature_template']:
                 fs = [data.features[j] for j in ids]
             else:
@@ -680,7 +688,7 @@ class ParserTrainer(Trainer):
 
     def load_hyperparameters(self, hparams_path):
         hparams = {}
-        with open(hparam_path, 'r') as f:
+        with open(hparams_path, 'r') as f:
             for line in f:
                 line = line.strip()
                 if line.startswith('#'):
@@ -690,10 +698,11 @@ class ParserTrainer(Trainer):
                 key = kv[0]
                 val = kv[1]
 
-                if (key == 'embed_dim' or
-                    key == 'additional_feat_dim' or
+                if (key == 'unit_embed_dim' or
+                    key == 'pos_embed_dim' or
                     key == 'rnn_layers' or
                     key == 'rnn_hidden_units' or
+                    key == 'affine_dim' or
                     key == 'subpos_depth'
                 ):
                     val = int(val)
@@ -709,7 +718,7 @@ class ParserTrainer(Trainer):
 
                 hparams[key] = val
 
-        self.check_data_format(self.hparams['data_format'])
+        self.check_data_format(hparams['data_format'])
 
         return hparams
 
@@ -767,6 +776,6 @@ def batch_generator(len_data, batchsize=100, shuffle=True):
     perm = np.random.permutation(len_data) if shuffle else list(range(0, len_data))
     for i in range(0, len_data, batchsize):
         i_max = min(i + batchsize, len_data)
-        yield perm[i:i_max+1]
+        yield perm[i:i_max]
 
     raise StopIteration
