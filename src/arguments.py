@@ -94,9 +94,9 @@ class Arguments(object):
     def parse_arguments(self):
         args = self.parser.parse_args()
         if args.lrdecay:
-            parser.add_argument('lrdecay_start')
-            parser.add_argument('lrdecay_width')
-            parser.add_argument('lrdecay_rate')
+            self.parser.add_argument('lrdecay_start')
+            self.parser.add_argument('lrdecay_width')
+            self.parser.add_argument('lrdecay_rate')
             array = args.lrdecay.split(':')
             args.lrdecay_start = int(array[0])
             args.lrdecay_width = int(array[1])

@@ -327,9 +327,10 @@ class Trainer(object):
 
             # learning rate decay
             if self.args.lrdecay and self.args.optimizer == 'sgd':
-                if (e - lrdecay_start) % lrdecay_width == 0:
+                if (e >= self.args.lrdecay_start and
+                    (e - self.args.lrdecay_start) % self.args.lrdecay_width == 0):
                     lr_tmp = self.optimizer.lr
-                    self.optimizer.lr = self.optimizer.lr * lrdecay_rate
+                    self.optimizer.lr = self.optimizer.lr * self.args.lrdecay_rate
                     self.log('Learning rate decay: {} -> {}\n'.format(lr_tmp, self.optimizer.lr))
                     self.report('Learning rate decay: {} -> {}'.format(lr_tmp, self.optimizer.lr))
 
