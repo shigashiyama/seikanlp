@@ -154,45 +154,58 @@ class RNNCRFTagger(RNNTaggerBase):
 
 class BiaffineCombination(chainer.Chain):
     # e1 * W * e2 + U * e1 + V * e2 + b
-    def __init__(self, left_size, right_size, out_size, 
+    def __init__(self, left_size, right_size, out_size=1, 
                  use_U=False, use_V=False, use_b=False):
         super(BiaffineCombination, self).__init__()
-        # self.left_size = left_size
-        # self.right_size = right_size 
         self.out_size = out_size
         
         initialW = None
         initialU = None
-        initialV = None
-        initialb = 0
+        #initialV = None
 
         if self.out_size > 1:
+            #initialb = xp.array([[0]])
             w_shape = (out_size, left_size, right_size)
+            u_shape = (out_size, left_size, 1)
+            b_shape = (out_size, 1)
         else:
+            initialb = 0
             w_shape = (left_size, right_size)
+            u_shape = (left_size, 1)
+            b_shape = 1
             
         with self.init_scope():
-            self.W = variable.Parameter(
-                initializers._get_initializer(initialW), w_shape)
-            self.b = variable.Parameter(initialb, out_size)
-
+            self.W = variable.Parameter(initializers._get_initializer(initialW), w_shape)
+            self.U = variable.Parameter(initializers._get_initializer(initialU), u_shape)
+            self.b = variable.Parameter(initialb, b_shape)
 
     # TODO chainer 3 -> F.matmul
     def __call__(self, x1, x2):
-        # inputs: x1 = [x1_1 ... x1_n1]; dim(x1_i)=d1=left_size
-        #         x2 = [x1_1 ... x2_n2]; dim(x2_i)=d2=right_size
-        # output: o[l] = gi * W^(l) * hi (l = 1 ... L=out_size)
+        # inputs: x1 = [x1_1 ... x1_i ... x1_n1]; dim(x1_i)=d1=left_size
+        #         x2 = [x1_1 ... x2_j ... x2_n2]; dim(x2_j)=d2=right_size
+        # output: o[k] = x1_i * W^(k) * x2_j (k = 1 ... K=out_size)
 
-        if self.out_size > 1:                  # not validated
-            X1 = F.broadcast_to(self.out_size) # X1 = [x1 ... x1]
-            X2 = F.transpose(
-                F.broadcast_to(self.out_size)) # X2 = [x2 ... x2]^T
-            X1_W = F.batch_matmul(X1, self.W)  # (L, n1, d1) * (L, d1, d2) -> (L, n1, d2)
-            res = F.batch_matmul(X1_W, X2)     # (L, n1, d2) * (L, d2, n2) -> (L, n1, n2)
+        n1 = x1.shape[0]
+        n2 = x2.shape[0]
+        K = self.out_size
+
+        if self.out_size > 1:      # TODO check to perform
+            X1 = F.broadcast_to(K)               # X1 = [x1 ... x1]
+            X2T = F.transpose(F.broadcast_to(K)) # X2 = [x2 ... x2]^T
+            X1_W = F.batch_matmul(X1, self.W)    # (K, n1, d1) * (K, d1, d2) => (L, n1, d2)
+            X1_W_X2 = F.batch_matmul(X1_W, X2T)  # (K, n1, d2) * (K, d2, n2) => (K, n1, n2)
+            x1_U = None
+            b = F.reshape(
+                F.concat([F.broadcast_to(self.b[l], (n1, n2)) for l in range(len(self.b))], axis=0), 
+                (self.out_size, (K, n1, n2)))
+            res = X1_W_X2 + b
         else:
-            x2t = F.transpose(x2)
-            x1_W = F.matmul(x1, self.W)        # (n1, d1) * (d1, d2) -> (n1, d2)
-            res = F.matmul(x1_W, x2t)           # (n1, d2) * (d2, n2) -> (n1, n2)
+            x2T = F.transpose(x2)
+            x1_W = F.matmul(x1, self.W)                           # (n1, d1) * (d1, d2) => (n1, d2)
+            x1_W_x2 = F.matmul(x1_W, x2T)                         # (n1, d2) * (d2, n2) => (n1, n2)
+            x1_U = F.broadcast_to(F.matmul(x1, self.U), (n1, n2)) # (n1, d1) * (d1, 1)  => (n1, 1) -> (n1, n2)
+            b = F.broadcast_to(self.b, (n1, n2))
+            res = x1_W_x2 + x1_U + b
 
         return res
 
@@ -200,7 +213,8 @@ class BiaffineCombination(chainer.Chain):
 class RNNBiaffineParser(chainer.Chain):
     def __init__(
             self, n_words, word_embed_dim, n_pos, pos_embed_dim, 
-            rnn_unit_type, rnn_bidirection, n_rnn_layers, n_rnn_units, affine_units, n_labels=0,
+            rnn_unit_type, rnn_bidirection, n_rnn_layers, n_rnn_units, 
+            affine_units_arc, affine_units_label, n_labels=0,
             dropout=0, initial_word_embed=None, initial_pos_embed=None,
             stream=sys.stderr):
         super(RNNBiaffineParser, self).__init__()
@@ -225,15 +239,16 @@ class RNNBiaffineParser(chainer.Chain):
                 stream=stream)
             rnn_output_dim = n_rnn_units * (2 if rnn_bidirection else 1)
 
-            self.affine_head = L.Linear(rnn_output_dim, affine_units)
-            self.affine_mod = L.Linear(rnn_output_dim, affine_units)
-
-            # self.biaffine_arc = L.Bilinear(affine_units, affine_units, 1, nobias=True)
-            self.biaffine_arc = BiaffineCombination(affine_units, affine_units, 1)
+            self.affine_arc_head = L.Linear(rnn_output_dim, affine_units_arc)
+            self.affine_arc_mod = L.Linear(rnn_output_dim, affine_units_arc)
+            self.biaffine_arc = BiaffineCombination(affine_units_arc, affine_units_arc, 1)
 
             self.label_prediction = n_labels > 0
             if self.label_prediction > 0:
-                self.biaffine_label = L.Bilinear(affine_units, affine_units, n_labels, nobias=True)
+                self.affine_label_head = L.Linear(rnn_output_dim, affine_units_label)
+                self.affine_label_mod = L.Linear(rnn_output_dim, affine_units_label)
+                self.biaffine_label = L.Bilinear(
+                    affine_units_label, affine_units_label, n_labels, nobias=True)
 
             self.softmax_cross_entropy = softmax_cross_entropy.softmax_cross_entropy
 
@@ -254,10 +269,14 @@ class RNNBiaffineParser(chainer.Chain):
                     print('#      6 - {}, {}'.format(c.w6.shape, c.b6.shape), file=stream) 
                     print('#      7 - {}, {}'.format(c.w7.shape, c.b7.shape), file=stream) 
                     i += 1
-            print('# Affine layer for heads: {}, {}'.format(
-                self.affine_head.W.shape, self.affine_head.b.shape), file=stream)
-            print('# Affine layer for modifiers: {}, {}'.format(
-                self.affine_mod.W.shape, self.affine_mod.b.shape), file=stream)
+            print('# Affine layer for arc heads: {}, {}'.format(
+                self.affine_arc_head.W.shape, self.affine_arc_head.b.shape), file=stream)
+            print('# Affine layer for arc modifiers: {}, {}'.format(
+                self.affine_arc_mod.W.shape, self.affine_arc_mod.b.shape), file=stream)
+            print('# Affine layer for label heads: {}, {}'.format(
+                self.affine_label_head.W.shape, self.affine_label_head.b.shape), file=stream)
+            print('# Affine layer for label modifiers: {}, {}'.format(
+                self.affine_label_mod.W.shape, self.affine_label_mod.b.shape), file=stream)
             print('# Biaffine layer for arc prediction: {}'.format(
                 self.biaffine_arc.W.shape), file=stream)
             print('# Biaffine layer for label prediction: {}\n'.format(
@@ -303,13 +322,16 @@ class RNNBiaffineParser(chainer.Chain):
         return scores, yl
 
 
-    def __call__(self, ws, ps, ths=None, tls=None, train=True, calculate_loss=True):
+    # batch of words, pos tags, gold head labels, gold arc labels
+    def __call__(self, ws, ps, ghs=None, gls=None, train=True, calculate_loss=True):
+        data_size = len(ws)
+
         if train:
             calclulate_loss = True
-        if not ths:
-            ths = [None] * len(ws)
-        if not tls:
-            tls = [None] * len(ws)
+        if not ghs:
+            ghs = [None] * data_size
+        if not gls:
+            gls = [None] * data_size
 
         # embed
         xs = self.embed(ws, ps)
@@ -317,32 +339,41 @@ class RNNBiaffineParser(chainer.Chain):
         # rnn layers
         rs = self.rnn_output(xs)
 
-        # affine layers
-        hs = [F.relu(self.affine_head(r)) for r in rs] # head representations
-        ms = [F.relu(self.affine_mod(r[1:])) for r in rs] # modifier representations
+        # affine layers for arc
+        hs_arc = [F.relu(self.affine_arc_head(r)) for r in rs] # head representations
+        ms_arc = [F.relu(self.affine_arc_mod(r[1:])) for r in rs] # modifier representations
 
+        # affine layers for label
+        if self.label_prediction:
+            hs_label = [F.relu(self.affine_label_head(r)) for r in rs] # head representations
+            ms_label = [F.relu(self.affine_label_mod(r[1:])) for r in rs] # modifier representations
+        else:
+            hs_label = [None] * data_size
+            ms_label = [None] * data_size            
+            
         xp = cuda.get_array_module(xs[0])
-        dim = self.affine_head.W.shape[0]
+        ldim = self.affine_label_head.W.shape[0]
         loss = chainer.Variable(xp.array(0, dtype='f'))
         yhs = []                # predicted head
         yls = []                # predicted arc label
 
         # biaffine layers
-        for h, m, th, tl in zip(hs, ms, ths, tls): # for each sentence in mini-batch
-            scores_a, yh = self.predict_arcs(m, h, xp)
+        for h_arc, m_arc, h_label, m_label, gh, gl in zip(
+                hs_arc, ms_arc, hs_label, ms_label, ghs, gls): # for each sentence in mini-batch
+            scores_a, yh = self.predict_arcs(m_arc, h_arc, xp)
             yhs.append(yh)
 
             if self.label_prediction:
-                n = len(m)      # the number of words except root
-                heads = th if train else yh
-                h_m = F.reshape(F.concat([h[heads[i]] for i in range(1, n+1)], axis=0), (n, dim))
-                scores_l, yl = self.predict_labels(m, h_m, xp)
+                n = len(m_label)      # ghe number of words except root
+                heads = gh if train else yh
+                hm_label = F.reshape(F.concat([h_label[heads[i]] for i in range(1, n+1)], axis=0), (n, ldim))
+                scores_l, yl = self.predict_labels(m_label, hm_label, xp)
                 yls.append(yl)
 
             if calculate_loss:
-                loss += self.softmax_cross_entropy(scores_a, th[1:])
+                loss += self.softmax_cross_entropy(scores_a, gh[1:])
                 if self.label_prediction:
-                    loss += self.softmax_cross_entropy(scores_l, tl[1:])
+                    loss += self.softmax_cross_entropy(scores_l, gl[1:])
 
         if self.label_prediction:
             return loss, yhs, yls

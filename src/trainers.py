@@ -668,7 +668,8 @@ class ParserTrainer(Trainer):
             'rnn_bidirection' : args.rnn_bidirection,
             'rnn_layers' : args.rnn_layers,
             'rnn_hidden_units' : args.rnn_hidden_units,
-            'affine_dim' : args.affine_dim,
+            'affine_units_arc' : args.affine_units_arc,
+            'affine_units_label' : args.affine_units_label,
             'dropout' : args.dropout,
             'data_format' : args.data_format,
             'subpos_depth' : args.subpos_depth,
@@ -702,7 +703,8 @@ class ParserTrainer(Trainer):
                     key == 'pos_embed_dim' or
                     key == 'rnn_layers' or
                     key == 'rnn_hidden_units' or
-                    key == 'affine_dim' or
+                    key == 'affine_units_arc' or
+                    key == 'affine_units_label' or                    
                     key == 'subpos_depth'
                 ):
                     val = int(val)

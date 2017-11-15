@@ -180,7 +180,8 @@ def init_classifier(classifier_type, hparams, indices):
             predictor = models.RNNBiaffineParser(
                 n_vocab, hparams['unit_embed_dim'], n_pos, hparams['pos_embed_dim'],
                 hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_layers'], 
-                hparams['rnn_hidden_units'], hparams['affine_dim'], n_labels=n_labels, 
+                hparams['rnn_hidden_units'], hparams['affine_units_arc'], hparams['affine_units_label'],
+                n_labels=n_labels, 
                 dropout=hparams['dropout'])
 
         else:

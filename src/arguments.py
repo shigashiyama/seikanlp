@@ -157,7 +157,7 @@ class ParserArguments(Arguments):
         super(ParserArguments, self).__init__()
         parser = self.parser
 
-        ### used letters: bcdegmopqtvx + aflsu
+        ### used letters: bcdegmopqtvx + flsu
 
         # model parameters
         parser.add_argument('--pos_embed_dim', type=int, default=100,
@@ -169,10 +169,12 @@ class ParserArguments(Arguments):
                             help='Use bidirectional RNN')
         parser.add_argument('--rnn_layers', '-l', type=int, default=1, 
                             help='The number of RNN layers (Default: 1)')
-        parser.add_argument('--rnn_hidden_units', '-u', type=int, default=800,
-                            help='The number of hidden units of RNN (Default: 800)')
-        parser.add_argument('--affine_dim', '-a', type=int, default=300,
-                            help='The number of dimension of affine layer (Default: 300)')
+        parser.add_argument('--rnn_hidden_units', '-u', type=int, default=400,
+                            help='The number of hidden units of RNN (Default: 400)')
+        parser.add_argument('--affine_units_arc', type=int, default=200,
+                            help='The number of dimension of affine layer (Default: 200)')
+        parser.add_argument('--affine_units_label', type=int, default=200,
+                            help='The number of dimension of affine layer (Default: 200)')
 
         # data paths and related options
         parser.add_argument('--data_format', '-f', 
