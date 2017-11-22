@@ -10,6 +10,9 @@ import numpy as np
 import chainer
 from chainer import serializers
 from chainer import cuda
+import gensim
+from gensim.models import keyedvectors
+from gensim.models import word2vec
 
 import util
 import constants
@@ -17,7 +20,6 @@ import data_io
 import classifiers
 import evaluators
 import features
-import embedding.read_embedding as emb
 from tools import conlleval
 
 
@@ -124,8 +126,7 @@ class Trainer(object):
     def init_model(self):
         self.log('Initialize model from hyperparameters\n')
         self.classifier = classifiers.init_classifier(
-            self.decode_type, self.hparams, self.indices)
-        self.evaluator = classifiers.init_evaluator(self.decode_type, self.indices)
+            self.decode_type, self.hparams, self.indices, train=(self.args.execute_mode=='train'))
 
 
     def load_model(self, model_path):
@@ -265,14 +266,14 @@ class Trainer(object):
             
         test, self.indices = data_io.load_data(
             data_format, test_path, read_pos=read_pos, update_token=False, update_label=False,
-            ws_dict_feat=hparams['feature_template'],
-            subpos_depth=hparams['subpos_depth'], lowercase=hparams['lowercase'],
-            normalize_digits=hparams['normalize_digits'], indices=self.indices, refer_vocab=refer_vocab)
+            create_word_trie=create_word_trie, subpos_depth=subpos_depth, 
+            lowercase=lowercase, normalize_digits=normalize_digits, 
+            indices=self.indices, refer_vocab=refer_vocab)
 
         self.log('Load test data: {}'.format(test_path))
         self.log('Data length: {}'.format(len(test.instances)))
         self.log('Vocab size: {}\n'.format(len(self.indices.token_indices)))
-        if self.hparams['feature_template']:
+        if 'featre_template' in self.hparams and self.hparams['feature_template']:
             self.log('Start feature extraction for test data\n')
             self.extract_features(test)
 
@@ -410,6 +411,7 @@ class Trainer(object):
             classifier = self.classifier
         else:
             classifier = self.classifier.copy()
+            classifier.turn_off_dropout()
 
         n_sen = 0
         total_loss = 0
@@ -428,7 +430,7 @@ class Trainer(object):
                 ret = self.classifier(*inputs, train=True)
             else:
                 with chainer.no_backprop_mode():
-                    ret = self.classifier(*inputs)
+                    ret = self.classifier(*inputs, train=False)
             loss = ret[0]
             outputs = ret[1:]
             # timer.stop()
@@ -600,6 +602,22 @@ class TaggerTrainer(Trainer):
             len(train.instances), len(val.instances) if val else 0))
 
 
+    # for ignore labels
+    def setup_evaluator(self):
+        if self.decode_type == 'tag' and self.args.ignore_labels:
+            tmp = self.args.ignore_labels
+            self.args.ignore_labels = set()
+
+            for label in tmp.split(','):
+                label_id = self.indices.get_pos_label_id(label)
+                if label_id >= 0:
+                    self.args.ignore_labels.add(label_id)
+
+            self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignore_labels))
+
+        self.evaluator = classifiers.init_evaluator(self.decode_type, self.indices, self.args.ignore_labels)
+
+
     def gen_inputs(self, data, ids):
         xp = cuda.cupy if self.args.gpu >= 0 else np
 
@@ -760,15 +778,35 @@ class ParserTrainer(Trainer):
             len(train.instances), len(val.instances) if val else 0))
 
 
+    # for ignore labels
+    def setup_evaluator(self):
+        if self.decode_type == 'tdep' and self.args.ignore_labels:
+            tmp = self.args.ignore_labels
+            self.args.ignore_labels = set()
+
+            for label in tmp.split(','):
+                label_id = self.indices.get_arc_label_id(label)
+                if label_id >= 0:
+                    self.args.ignore_labels.add(label_id)
+
+            self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignore_labels))
+
+        self.evaluator = classifiers.init_evaluator(self.decode_type, self.indices, self.args.ignore_labels)
+
+
     def gen_inputs(self, data, ids):
         xp = cuda.cupy if self.args.gpu >= 0 else np
 
         ws = [xp.asarray(data.instances[j], dtype='i') for j in ids]
         ps = [xp.asarray(data.labels[0][j], dtype='i') for j in ids]
         ths = [xp.asarray(data.labels[1][j], dtype='i') for j in ids]
-        tls = [xp.asarray(data.labels[2][j], dtype='i') for j in ids]
+        if self.decode_type == 'tdep':
+            tls = [xp.asarray(data.labels[2][j], dtype='i') for j in ids]
 
-        return ws, ps, ths, tls
+        if self.decode_type == 'tdep':
+            return ws, ps, ths, tls
+        else:
+            return ws, ps, ths
         
 
     def decode(self, data, stream=sys.stdout):
@@ -782,3 +820,18 @@ def batch_generator(len_data, batchsize=100, shuffle=True):
         yield perm[i:i_max]
 
     raise StopIteration
+
+
+def load_embedding_model(model_path):
+    if model_path.endswith('model'):
+        model = word2vec.Word2Vec.load(model_path)        
+    elif model_path.endswith('bin'):
+        model = keyedvectors.KeyedVectors.load_word2vec_format(model_path, binary=True)
+    elif model_path.endswith('txt'):
+        model = keyedvectors.KeyedVectors.load_word2vec_format(model_path, binary=False)
+    else:
+        print("unsuported format of word embedding model.", file=sys.stderr)
+        return
+
+    print("load embedding model: vocab=%d" % len(model.wv.vocab))
+    return model

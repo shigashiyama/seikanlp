@@ -81,11 +81,13 @@ class Arguments(object):
         parser.add_argument('--unit_embed_model_path', 
                             help='File path of pretrained model of unit (character or word) embedding')
 
-        # options for data preprocessing
+        # options for data pre/post-processing
         parser.add_argument('--lowercase',  action='store_true',
                             help='Lowercase alphabets in the case of using English data')
         parser.add_argument('--normalize_digits',  action='store_true',
                             help='Normalize digits by the same symbol in the case of using English data')
+        parser.add_argument('--ignore_labels', default=set(),
+                            help='')
 
         # other options
         parser.add_argument('--quiet', '-q', action='store_true',
@@ -101,6 +103,7 @@ class Arguments(object):
             args.lrdecay_start = int(array[0])
             args.lrdecay_width = int(array[1])
             args.lrdecay_rate = float(array[2])
+
         if args.execute_mode == 'interactive':
             args.quiet = True
 

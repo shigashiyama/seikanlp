@@ -62,14 +62,22 @@ class DACounts(object):
 
 
 class AccuracyCalculator(object):
-    def __call__(self, ts, ys, ignore_head=False):
+    def __init__(self, ignore_head=False, ignore_labels=set()):
+        self.ignore_head = ignore_head
+        self.ignore_labels = ignore_labels
+
+
+    def __call__(self, ts, ys):
         counts = ACounts()
         for t, y in zip(ts, ys):
-            if ignore_head:
+            if self.ignore_head:
                 t = t[1:]
                 y = y[1:]
 
             for ti, yi in zip(t, y):
+                if int(ti) in self.ignore_labels:
+                    continue
+                
                 counts.total += 1 
                 if ti == yi:
                     counts.correct += 1 
@@ -78,7 +86,12 @@ class AccuracyCalculator(object):
 
 
 class DoubleAccuracyCalculator(object):
-    def __call__(self, t1s, t2s, y1s, y2s, ignore_head=False):
+    def __init__(self, ignore_head=False, ignore_labels=set()):
+        self.ignore_head = ignore_head
+        self.ignore_labels = ignore_labels
+        
+
+    def __call__(self, t1s, t2s, y1s, y2s):
         counts = DACounts()
         for t1, t2, y1, y2 in zip(t1s, t2s, y1s, y2s):
             # print(t1)
@@ -86,13 +99,16 @@ class DoubleAccuracyCalculator(object):
             # print(t2)
             # print(y2)
 
-            if ignore_head:
+            if self.ignore_head:
                 t1 = t1[1:]
                 t2 = t2[1:]
                 y1 = y1[1:]
                 y2 = y2[1:]                
 
             for t1i, t2i, y1i, y2i in zip(t1, t2, y1, y2):
+                if int(t2i) in self.ignore_labels:
+                    continue
+
                 counts.l1.total += 1
                 counts.l2.total += 1 
                 if t1i == y1i:
@@ -173,15 +189,14 @@ class JointSegmenterEvaluator(object):
 
 
 class AccuracyEvaluator(object):
-    def __init__(self, ignore_head=False):
-        self.calculator = AccuracyCalculator()
-        self.ignore_head = ignore_head
+    def __init__(self, ignore_head=False, ignore_labels=set()):
+        self.calculator = AccuracyCalculator(ignore_head, ignore_labels)
 
 
     def calculate(self, *inputs):
         ts = inputs[1]
         ys = inputs[2]
-        counts = self.calculator(ts, ys, ignore_head=self.ignore_head)
+        counts = self.calculator(ts, ys)
         return counts
 
 
@@ -192,25 +207,25 @@ class AccuracyEvaluator(object):
         print('ave loss: %.5f'% ave_loss, file=stream)
         print('sen, token, correct: {} {} {}'.format(
             sen_counter, counts.total, counts.correct), file=stream)
-        print('A:%6.2f' % (100.*met.acc), file=stream)
+        print('A:%6.2f' % (100.*acc), file=stream)
 
-        res = '%.2f\t%.4f' % ((100.*met.acc), ave_loss)
+        res = '%.2f\t%.4f' % ((100.*acc), ave_loss)
         return res
 
 
 class TaggerEvaluator(AccuracyEvaluator):
-    def __init__(self):
-        super(TaggerEvaluator, self).__init__(ignore_head=False)
+    def __init__(self, ignore_head=False, ignore_labels=set()):
+        super(TaggerEvaluator, self).__init__(ignore_head=False, ignore_labels=set())
 
 
 class ParserEvaluator(AccuracyEvaluator):
-    def __init__(self):
-        super(ParserEvaluator, self).__init__(ignore_head=True)
+    def __init__(self, ignore_head=True, ignore_labels=set()):
+        super(ParserEvaluator, self).__init__(ignore_head=True, ignore_labels=set())
 
 
 class TypedParserEvaluator(object):
-    def __init__(self):
-        self.calculator = DoubleAccuracyCalculator()
+    def __init__(self, ignore_head=True, ignore_labels=set()):
+        self.calculator = DoubleAccuracyCalculator(ignore_head, ignore_labels)
 
 
     def calculate(self, *inputs):
@@ -218,7 +233,7 @@ class TypedParserEvaluator(object):
         tls = inputs[2]
         yhs = inputs[3]
         yls = inputs[4]
-        counts = self.calculator(ths, tls, yhs, yls, ignore_head=True)
+        counts = self.calculator(ths, tls, yhs, yls)
         return counts
 
 

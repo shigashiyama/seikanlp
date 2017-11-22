@@ -50,22 +50,21 @@ def run(process_name):
     if args.model_path:
         trainer.load_model(args.model_path)
         id2token_org = copy.deepcopy(trainer.indices.token_indices.id2str)
-        id2label_org = copy.deepcopy(trainer.indices.arc_label_indices.id2str) # TODO modify
+        #id2label_org = copy.deepcopy(trainer.indices.arc_label_indices.id2str) # TODO modify
     else:
         trainer.init_hyperparameters(args)
         id2token_org = {}
-        id2label_org = {}
+        #id2label_org = {}
     trainer.init_feat_extractor(use_gpu=use_gpu)
 
     ################################
     # Load word embedding model
 
-    # TODO modify for parsing
     if args.unit_embed_model_path and args.execute_mode != 'interactive':
-        embed_model = emb.read_model(args.unit_embed_model_path)
+        embed_model = trainers.load_embedding_model(args.unit_embed_model_path)
         embed_dim = embed_model.wv.syn0[0].shape[0]
-        if embed_dim != hparams['embed_dimension']:
-            print('Given embedding model is discarded due to dimension confriction')
+        if embed_dim != trainer.hparams['unit_embed_dim']:
+            print('Given embedding model is discarded due to dimension confliction')
             embed_model = None
     else:
         embed_model = None
@@ -95,13 +94,15 @@ def run(process_name):
         trainer.load_data_for_test(embed_model)
 
     ################################
-    # Set up classifier and optimizer
+    # Set up evaluator, classifier and optimizer
+
+    trainer.setup_evaluator()
 
     if not trainer.classifier:
         trainer.init_model()
 
     grow_vocab = id2token_org and (len(trainer.indices.token_indices.id2str) > len(id2token_org))
-    if embed_model or grow_vocab:
+    if grow_vocab or (not args.model_path and embed_model):
         trainer.classifier.grow_embedding_layer(
             trainer.indices.token_indices.id2str, id2token_org, embed_model)
     # TODO modify

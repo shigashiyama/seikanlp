@@ -206,7 +206,7 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
         arc_seq = [-1] if parsing else []
 
         for line in f:
-            line = line.strip()
+            line = re.sub(' +', ' ', line).strip('\n\t')
 
             if len(line) < 1:
                 if len(ins) - (1 if parsing else 0) > 0:
@@ -233,7 +233,7 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
             elif line[0] == constants.COMMENT_SYM:
                 if line.startswith(constants.DELIM_TXT):
                     delim = line.split(constants.KEY_VALUE_SEPARATOR)[1]
-                    print('Read delimiter:', delim, file=sys.stderr)
+                    print('Read delimiter: \'{}\''.format(delim), file=sys.stderr)
 
                 elif line.startswith(constants.WORD_CLM_TXT):
                     word_clm = int(line.split('=')[1]) - 1
@@ -295,7 +295,7 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
                 pos_seq.append(indices.pos_label_indices.get_id(pos, update=update_label))
 
             if parsing:
-                dep_seq.append(int(dep))
+                dep_seq.append(int(dep.replace('-1', '0')))
 
             if typed_parsing:
                 arc_seq.append(indices.arc_label_indices.get_id(arc, update=update_label))
