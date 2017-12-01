@@ -8,7 +8,7 @@ SeikaNLP is a Natural Language Processing Toolkit including word segmenter, POS 
 - Python 3 (tested with 3.6.0)
 - Chainer v2 (tested with 2.0.0)
 - numpy (tested with 1.13.0)
-- gensim
+- gensim 2.3.0 or lator
 
 If you use GPU, the following softwares are also required:
 
