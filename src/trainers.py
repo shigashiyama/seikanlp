@@ -850,7 +850,7 @@ class ParserTrainer(Trainer):
         xp = cuda.cupy if self.args.gpu >= 0 else np
 
         ws = [xp.asarray(data.instances[j], dtype='i') for j in ids]
-        ps = [xp.asarray(data.labels[0][j], dtype='i') for j in ids]
+        ps = [xp.asarray(data.labels[0][j], dtype='i') for j in ids] if data.labels[0] else None
         ths = [xp.asarray(data.labels[1][j], dtype='i') for j in ids]
         if self.decode_type == 'tdep':
             tls = [xp.asarray(data.labels[2][j], dtype='i') for j in ids]

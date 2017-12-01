@@ -44,7 +44,6 @@ class MLP(chainer.Chain):
                     act = F.relu
 
                 layers[i] = L.Linear(n_left, n_right)
-                print(i, n_left, n_right, layers[i].W.shape)
                 self.acts[i] = act
             
             self.layers = chainer.ChainList(*layers)
@@ -311,7 +310,7 @@ class RNNBiaffineParser(chainer.Chain):
             rnn_unit_type, rnn_bidirection, n_rnn_layers, n_rnn_units, 
             affine_layers_arc, affine_units_arc, affine_layers_label, affine_units_label, 
             n_labels=0, rnn_dropout=0, mlp_dropout=0, biaffine_dropout=0,
-            trained_word_embed_dim=0, use_mlp_for_label_pred=False,
+            trained_word_embed_dim=0, use_mlp_for_label_pred=True,
             file=sys.stderr):
         super(RNNBiaffineParser, self).__init__()
 
@@ -357,11 +356,13 @@ class RNNBiaffineParser(chainer.Chain):
             print('# MLP for arc heads', file=file)
             self.affine_arc_head = MLP(
                 rnn_output_dim, affine_units_arc, n_layers=affine_layers_arc, dropout=mlp_dropout, file=file)
+            #self.affine_arc_head = L.Linear(rnn_output_dim, affine_units_arc)
 
             print('# MLP for arc modifiers', file=file)
             self.affine_arc_mod = MLP(
                 rnn_output_dim, affine_units_arc, n_layers=affine_layers_arc, dropout=mlp_dropout, file=file)
-
+            #self.affine_arc_mod = L.Linear(rnn_output_dim, affine_units_arc)
+            
             self.biaffine_arc = BiaffineCombination(affine_units_arc, affine_units_arc)
             print('# Biaffine layer for arc prediction:   W={}, U={}, dropout={}'.format(
                 self.biaffine_arc.W.shape, self.biaffine_arc.U.shape, self.biaffine_dropout), file=file)
@@ -374,11 +375,13 @@ class RNNBiaffineParser(chainer.Chain):
                 self.affine_label_head = MLP(
                     rnn_output_dim, affine_units_label, n_layers=affine_layers_label, dropout=mlp_dropout, 
                     file=file)
+                #self.affine_label_head = L.Linear(rnn_output_dim, affine_units_label)
 
                 print('# MLP for label modifiers', file=file)
                 self.affine_label_mod = MLP(
                     rnn_output_dim, affine_units_label, n_layers=affine_layers_label, dropout=mlp_dropout, 
                     file=file)
+                #self.affine_label_mod = L.Linear(rnn_output_dim, affine_units_label)
 
                 if self.use_mlp_for_label_pred: # tmp
                     print('# MLP for label prediction:', file=file)
@@ -505,26 +508,22 @@ class RNNBiaffineParser(chainer.Chain):
         # head representations
 
         hs_arc = self.affine_arc_head(rs)
-        # hs_arc = [F.dropout(F.relu(self.affine_arc_head(r)), self.dropout) for r in rs] 
-        # hs_arc = [F.dropout(
-        #     F.relu(self.affine_arc_head(F.dropout(r, self.dropout))), self.dropout) for r in rs] 
+        #hs_arc = [F.relu(self.affine_arc_head(r)) for r in rs] 
 
         # modifier representations
         rs_noroot = [r[1:] for r in rs]
         ms_arc = self.affine_arc_mod(rs_noroot)
-        # ms_arc = [F.dropout(F.relu(self.affine_arc_mod(r[1:])), self.dropout) for r in rs]
-        # ms_arc = [F.dropout(
-        #     F.relu(self.affine_arc_mod(F.dropout(r[1:], self.dropout))), self.dropout) for r in rs]
+        #ms_arc = [F.relu(self.affine_arc_mod(r[1:])) for r in rs]
 
         # affine layers for label
         if self.label_prediction:
             # head representations
             hs_label = self.affine_label_head(rs)
-            # hs_label = [F.dropout(F.relu(self.affine_label_head(r)), self.dropout) for r in rs]
+            #hs_label = [F.relu(self.affine_label_head(r)) for r in rs]
 
             # modifier representations
             ms_label = self.affine_label_mod(rs_noroot)
-            # ms_label = [F.dropout(F.relu(self.affine_label_mod(r[1:])), self.dropout) for r in rs]
+            #ms_label = [F.relu(self.affine_label_mod(r[1:])) for r in rs]
         else:
             hs_label = [None] * data_size
             ms_label = [None] * data_size            

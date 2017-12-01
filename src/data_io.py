@@ -182,9 +182,10 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
                  update_token=True, update_label=True, 
                  lowercase=False, normalize_digits=True,
                  subpos_depth=-1, create_word_trie=False, indices=None, refer_vocab=set()):
+    read_pos = tagging or parsing
     if not indices:
         indices = dictionary.Dictionary(
-            use_seg_label=segmentation, use_pos_label=(tagging or parsing), 
+            use_seg_label=segmentation, use_pos_label=read_pos, 
             use_arc_label=typed_parsing, use_word_trie=create_word_trie, use_root=parsing)
 
     delim = constants.DELIM2_SYMBOL
@@ -207,7 +208,7 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
     with open(path) as f:
         ins = [indices.root_id] if parsing else []
         seg_seq = []
-        pos_seq = [indices.root_id] if parsing else []
+        pos_seq = [indices.root_id] if (parsing and read_pos) else []
         dep_seq = [-1] if parsing else []
         arc_seq = [-1] if parsing else []
 
@@ -223,7 +224,7 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
                         seg_seq = []
                     if pos_seq:
                         pos_seqs.append(pos_seq)
-                        pos_seq = [indices.root_id] if parsing else []
+                        pos_seq = [indices.root_id] if (parsing and read_pos) else []
                     if dep_seq:
                         dep_seqs.append(dep_seq)
                         dep_seq = [-1] if parsing else []
@@ -249,6 +250,13 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
                     pos_clm = int(line.split('=')[1]) - 1
                     print('Read 1st label column id:', pos_clm+1, file=sys.stderr)
 
+                    if pos_clm < 0:
+                        read_pos = False
+                        pos_seq = []
+                        if tagging: 
+                            print('POS label is mandatory for POS tagging', file=sys.stderr)
+                            sys.exit()
+
                 elif line.startswith(constants.DEP_CLM_TXT):
                     dep_clm = int(line.split('=')[1]) - 1
                     print('Read 2nd label column id:', dep_clm+1, file=sys.stderr)
@@ -266,7 +274,7 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
             if normalize_digits and not word in refer_vocab:
                 word = re.sub(r'[0-9]+', constants.NUM_SYMBOL, word)
 
-            if tagging or parsing:
+            if read_pos:
                 pos = array[pos_clm]
                 if subpos_depth == 1:
                     pos = pos.split(constants.POS_SEPARATOR)[0]
@@ -301,7 +309,7 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
             else:
                 ins.append(indices.token_indices.get_id(word, update=update_this_token))
 
-            if tagging or parsing:
+            if read_pos:
                 pos_seq.append(indices.pos_label_indices.get_id(pos, update=update_label))
 
             if parsing:
@@ -330,6 +338,8 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
         label_seqs_list.append(seg_seqs)
     if pos_seqs:
         label_seqs_list.append(pos_seqs)
+    elif parsing:
+        label_seqs_list.append(None)
     if dep_seqs:
         label_seqs_list.append(dep_seqs)
     if arc_seqs:

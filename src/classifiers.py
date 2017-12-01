@@ -137,8 +137,9 @@ class DependencyParser(Classifier):
     def change_mlp_dropout_ratio(self, dropout_ratio, stream=sys.stderr):
         self.predictor.affine_arc_head.dropout = dropout_ratio
         self.predictor.affine_arc_mod.dropout = dropout_ratio
-        self.predictor.affine_label_head.dropout = dropout_ratio
-        self.predictor.affine_label_mod.dropout = dropout_ratio
+        if self.predictor.label_prediction:
+            self.predictor.affine_label_head.dropout = dropout_ratio
+            self.predictor.affine_label_mod.dropout = dropout_ratio
         print('Set {} dropout ratio to {}'.format('MLP', dropout_ratio), file=stream)
 
 
