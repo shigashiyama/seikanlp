@@ -74,6 +74,7 @@ otherwise, the following format is expected for segmentation:
 """
 def load_data_SL(path, segmentation=True, tagging=False,
                  update_token=True, update_label=True, 
+                 lowercase=False, normalize_digits=True,
                  subpos_depth=-1, create_word_trie=False, indices=None, refer_vocab=set()):
     if not indices:
         indices = dictionary.Dictionary(
@@ -109,6 +110,10 @@ def load_data_SL(path, segmentation=True, tagging=False,
             for entry in entries:
                 attrs = entry.split(delim)
                 word = attrs[0]
+                if lowercase:
+                    word = word.lower()
+                if normalize_digits and not word in refer_vocab:
+                    word = re.sub(r'[0-9]+', constants.NUM_SYMBOL, word)
                 
                 if tagging:
                     pos = attrs[1]
@@ -174,8 +179,9 @@ otherwise, the following format is expected for segmentation:
   ...
 """
 def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_parsing=False,
-                  update_token=True, update_label=True, subpos_depth=-1, create_word_trie=False,
-                  indices=None, refer_vocab=set()):
+                 update_token=True, update_label=True, 
+                 lowercase=False, normalize_digits=True,
+                 subpos_depth=-1, create_word_trie=False, indices=None, refer_vocab=set()):
     if not indices:
         indices = dictionary.Dictionary(
             use_seg_label=segmentation, use_pos_label=(tagging or parsing), 
@@ -255,6 +261,10 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
 
             array = line.split(delim)
             word = array[word_clm]
+            if lowercase:
+                word = word.lower()
+            if normalize_digits and not word in refer_vocab:
+                word = re.sub(r'[0-9]+', constants.NUM_SYMBOL, word)
 
             if tagging or parsing:
                 pos = array[pos_clm]
@@ -363,6 +373,7 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
         data, indices = load_data_WL(
             path, segmentation=segmentation, tagging=tagging, parsing=parsing, typed_parsing=typed_parsing,
             update_token=update_token, update_label=update_label, 
+            lowercase=lowercase, normalize_digits=normalize_digits,
             subpos_depth=subpos_depth, create_word_trie=create_word_trie,
             indices=indices, refer_vocab=refer_vocab)
 
@@ -370,25 +381,10 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
         data, indices = load_data_SL(
             path, segmentation=segmentation, tagging=tagging, 
             update_token=update_token, update_label=update_label,
+            lowercase=lowercase, normalize_digits=normalize_digits,
             subpos_depth=subpos_depth, create_word_trie=create_word_trie, 
             indices=indices, refer_vocab=refer_vocab)
         
-    # if data_format == 'bccwj_seg_lattice':
-    #     instances, label_seqs, pos_seqs, indices = load_bccwj_data_for_lattice_ma(
-    #         path, read_pos, update_token=update_token, subpos_depth=subpos_depth, 
-    #         indices=indices, limit=limit)
-
-    # elif data_format == 'wsj':
-    #     instances, label_seqs, indices = load_wsj_data(
-    #         path, update_token=update_token, update_label=update_label, 
-    #         lowercase=lowercase, normalize_digits=normalize_digits, 
-    #         indices=indices, refer_vocab=refer_vocab, limit=limit)
-
-    # elif data_format == 'conll2003':
-    #     instances, label_seqs, indices = load_conll2003_data(
-    #         path, update_token=update_token, update_label=update_label, 
-    #         lowercase=lowercase, normalize_digits=normalize_digits, 
-    #         indices=indices, refer_vocab=refer_vocab, limit=limit)
     else:
         data = None
 
@@ -403,7 +399,7 @@ def load_pickled_data(filename_wo_ext, load_indices=True):
         instances = obj[0]
         labels = obj[1]
 
-    return Data(instances, [labels])
+    return Data(instances, labels)
 
 
 def dump_pickled_data(filename_wo_ext, data, pos_labels=None):

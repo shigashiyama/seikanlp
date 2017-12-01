@@ -191,6 +191,18 @@ class Dictionary(object):
             self.wid2pids = None
 
 
+    def has_seg_label(self):
+        return self.seg_label_indices is not None
+
+
+    def has_pos_label(self):
+        return self.pos_label_indices is not None
+
+
+    def has_arc_label(self):
+        return self.arc_label_indices is not None
+
+
     def create_id2strs(self):
         if self.token_indices:
             self.token_indices.create_id2str()

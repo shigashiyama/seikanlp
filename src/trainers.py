@@ -23,6 +23,20 @@ import features
 from tools import conlleval
 
 
+class DeleteGradient(object):
+    name = 'DeleteGradient'
+
+    def __init__(self, target_params):
+        self.target_params = target_params
+
+
+    def __call__(self, optimizer):
+        for name, param in optimizer.target.namedparams():
+            for tgt in self.target_params:
+                if name.endswith(tgt):
+                    param.grad = None
+
+
 class Trainer(object):
     def __init__(self, args, logger=sys.stderr):
         err_msgs = []
@@ -123,13 +137,13 @@ class Trainer(object):
             self.hparams.update({'additional_feat_dim' : feat_dim})
 
 
-    def init_model(self):
+    def init_model(self, pretrained_unit_embed_dim=0):
         self.log('Initialize model from hyperparameters\n')
         self.classifier = classifiers.init_classifier(
-            self.decode_type, self.hparams, self.indices, train=(self.args.execute_mode=='train'))
+            self.decode_type, self.hparams, self.indices, pretrained_unit_embed_dim)
 
 
-    def load_model(self, model_path):
+    def load_model(self, model_path, pretrained_unit_embed_dim=0):
         array = model_path.split('_e')
         indices_path = '{}.s2i'.format(array[0])
         hparam_path = '{}.hyp'.format(array[0])
@@ -145,8 +159,13 @@ class Trainer(object):
         self.log('Load hyperparameters: {}\n'.format(hparam_path))
         self.log('### arguments')
         for k, v in self.args.__dict__.items():
-            if k in self.hparams and v != self.hparams[k]:
+            if 'dropout' in k:
+                self.hparams[k] = v
+                message = '{}={}'.format(k, v)            
+
+            elif k in self.hparams and v != self.hparams[k]:
                 message = '{}={} (input option value {} was discarded)'.format(k, self.hparams[k], v)
+
             else:
                 message = '{}={}'.format(k, v)
 
@@ -155,7 +174,7 @@ class Trainer(object):
         self.log('')
 
         # model
-        self.init_model()
+        self.init_model(pretrained_unit_embed_dim)
         chainer.serializers.load_npz(model_path, self.classifier)
         self.log('Load model parameters: {}\n'.format(model_path))
 
@@ -179,6 +198,7 @@ class Trainer(object):
         # to be implemented in sub-class
         pass
 
+
     def load_data_for_training(self, embed_model=None):
         args = self.args
         hparams = self.hparams
@@ -196,19 +216,19 @@ class Trainer(object):
         lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
         
-        if args.label_reference_data:
-            _, self.indices = data_io.load_data(
-                data_format, refer_path, read_pos=read_pos, update_token=False,
-                create_word_trie=create_word_trie, subpos_depth=subpos_depth, 
-                lowercase=lowercase, normalize_digits=normalize_digits, 
-                indices=self.indices)
-            self.log('Load label set from reference data: {}'.format(refer_path))
+        # if args.label_reference_data:
+        #     _, self.indices = data_io.load_data(
+        #         data_format, refer_path, read_pos=read_pos, update_token=False,
+        #         create_word_trie=create_word_trie, subpos_depth=subpos_depth, 
+        #         lowercase=lowercase, normalize_digits=normalize_digits, 
+        #         indices=self.indices)
+        #     self.log('Load label set from reference data: {}'.format(refer_path))
 
         if args.train_data.endswith('pickle'):
             name, ext = os.path.splitext(train_path)
             train = data_io.load_pickled_data(name)
             self.log('Load dumpped data:'.format(train_path))
-            #TODO error checking for re-training from another training data
+            #TODO update indices when re-training using another training data
 
         else:
             train, self.indices = data_io.load_data(
@@ -217,10 +237,10 @@ class Trainer(object):
                 lowercase=lowercase, normalize_digits=normalize_digits, 
                 indices=self.indices, refer_vocab=refer_vocab)
         
-        if self.args.dump_train_data:
-            name, ext = os.path.splitext(train_path)
-            data_io.dump_pickled_data(name, train)
-            self.log('Dumpped training data: {}.pickle'.format(train_path))
+            if self.args.dump_train_data:
+                name, ext = os.path.splitext(train_path)
+                data_io.dump_pickled_data(name, train)
+                self.log('Dumpped training data: {}.pickle'.format(train_path))
 
         self.log('Load training data: {}'.format(train_path))
         self.log('Data length: {}'.format(len(train.instances)))
@@ -248,6 +268,7 @@ class Trainer(object):
         
         self.train = train
         self.val = val
+        self.indices.create_id2strs()
         self.show_training_data()
 
 
@@ -278,6 +299,7 @@ class Trainer(object):
             self.extract_features(test)
 
         self.test = test
+        self.indices.create_id2strs()
 
 
     def extract_features(self, data):
@@ -298,6 +320,9 @@ class Trainer(object):
             optimizer = chainer.optimizers.AdaGrad(lr=self.args.learning_rate)
 
         optimizer.setup(self.classifier)
+        if self.args.fix_pretrained_embed:
+            optimizer.add_hook(DeleteGradient(['trained_word_embed/W']))
+            self.log('Fix parameters: trained_word_embed/W')
         optimizer.add_hook(chainer.optimizer.GradientClipping(self.args.gradclip))
         if self.args.weightdecay > 0:
             optimizer.add_hook(chainer.optimizer.WeightDecay(self.args.weightdecay))
@@ -411,7 +436,7 @@ class Trainer(object):
             classifier = self.classifier
         else:
             classifier = self.classifier.copy()
-            classifier.turn_off_dropout()
+            classifier.change_dropout_ratio(0)
 
         n_sen = 0
         total_loss = 0
@@ -427,10 +452,10 @@ class Trainer(object):
             # timer = util.Timer()
             # timer.start()
             if train:
-                ret = self.classifier(*inputs, train=True)
+                ret = classifier(*inputs, train=True)
             else:
                 with chainer.no_backprop_mode():
-                    ret = self.classifier(*inputs, train=False)
+                    ret = classifier(*inputs, train=False)
             loss = ret[0]
             outputs = ret[1:]
             # timer.stop()
@@ -449,6 +474,7 @@ class Trainer(object):
 
                 i_max = min(i + self.args.batchsize, n_ins)
                 self.log('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
+
                 i = i_max
                 self.n_iter += 1
 
@@ -477,7 +503,7 @@ class Trainer(object):
                     mdl_path = '{}/{}_e{}.npz'.format(constants.MODEL_DIR, self.start_time, now_e)
                     self.log('Save the model: %s\n' % mdl_path)
                     self.report('[INFO] save the model: %s\n' % mdl_path)
-                    serializers.save_npz(mdl_path, self.classifier)
+                    serializers.save_npz(mdl_path, classifier)
         
                 if not self.args.quiet:
                     self.reporter.close() 
@@ -501,7 +527,13 @@ class TaggerTrainer(Trainer):
         super(TaggerTrainer, self).__init__(args, logger)
 
 
-    def init_hyperparameters(self, args):
+    def load_model(self, model_path, pretrained_unit_embed_dim=0):
+        super().load_model(model_path, pretrained_unit_embed_dim)
+        if 'dropout' in self.hparams:
+            self.classifier.change_dropout_ratio(self.hparams['dropout'])
+
+
+    def init_hyperparameters(self, args, pretrained_unit_embed_dim=0):
         self.hparams = {
             'unit_embed_dim' : args.unit_embed_dim,
             'rnn_unit_type' : args.rnn_unit_type,
@@ -679,6 +711,16 @@ class ParserTrainer(Trainer):
         super(ParserTrainer, self).__init__(args, logger)
 
 
+    def load_model(self, model_path, pretrained_unit_embed_dim=0):
+        super().load_model(model_path, pretrained_unit_embed_dim)
+        if 'rnn_dropout' in self.hparams:
+            self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
+        if 'mlp_dropout' in self.hparams:
+            self.classifier.change_mlp_dropout_ratio(self.hparams['mlp_dropout'])
+        if 'biaffine_dropout' in self.hparams:
+            self.classifier.change_biaffine_dropout_ratio(self.hparams['biaffine_dropout'])
+            
+
     def init_hyperparameters(self, args):
         self.hparams = {
             'unit_embed_dim' : args.unit_embed_dim,
@@ -687,9 +729,13 @@ class ParserTrainer(Trainer):
             'rnn_bidirection' : args.rnn_bidirection,
             'rnn_layers' : args.rnn_layers,
             'rnn_hidden_units' : args.rnn_hidden_units,
+            'affine_layers_arc' : args.affine_layers_arc,
             'affine_units_arc' : args.affine_units_arc,
+            'affine_layers_label' : args.affine_layers_label,
             'affine_units_label' : args.affine_units_label,
-            'dropout' : args.dropout,
+            'rnn_dropout' : args.rnn_dropout,
+            'mlp_dropout' : args.mlp_dropout,
+            'biaffine_dropout' : args.biaffine_dropout,
             'data_format' : args.data_format,
             'subpos_depth' : args.subpos_depth,
             'lowercase' : args.lowercase,
@@ -719,16 +765,22 @@ class ParserTrainer(Trainer):
                 val = kv[1]
 
                 if (key == 'unit_embed_dim' or
+                    key == 'pretrained_unit_embed_dim' or
                     key == 'pos_embed_dim' or
                     key == 'rnn_layers' or
                     key == 'rnn_hidden_units' or
+                    key == 'affine_layers_arc' or
                     key == 'affine_units_arc' or
+                    key == 'affine_layers_label' or
                     key == 'affine_units_label' or                    
                     key == 'subpos_depth'
                 ):
                     val = int(val)
 
-                elif key == 'dropout':
+                elif (key == 'rnn_dropout' or
+                      key == 'mlp_dropout' or
+                      key == 'biaffine_dropout'
+                ):
                     val = float(val)
 
                 elif (key == 'rnn_bidirection' or
@@ -833,5 +885,5 @@ def load_embedding_model(model_path):
         print("unsuported format of word embedding model.", file=sys.stderr)
         return
 
-    print("load embedding model: vocab=%d" % len(model.wv.vocab))
+    print("load embedding model: vocab=%d\n" % len(model.wv.vocab))
     return model

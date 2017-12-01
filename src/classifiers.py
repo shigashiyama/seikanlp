@@ -32,13 +32,14 @@ class Classifier(chainer.link.Chain):
         return exs
 
 
-    def grow_embedding_layer(self, embed, id2token_all, id2token_trained={}, embed_external=None, 
+    # deprecated
+    def grow_embedding_layer_old(self, embed, id2token_all, id2token_trained={}, embed_external=None, 
                              stream=sys.stderr):
         diff = len(id2token_all) - len(id2token_trained)
         weight1 = embed.W
         weight2 = []
 
-        dim = embed.W.shape[0]
+        dim = embed.W.shape[1]
         initialW = initializers.normal.Normal(1.0)
 
         count = 0
@@ -46,17 +47,15 @@ class Classifier(chainer.link.Chain):
             start_i = len(id2token_trained)
             for i in range(start_i, len(id2token_all)):
                 key = id2token_all[i]
-                    
                 if key in embed_external.wv.vocab:
                     vec = embed_external.wv[key]
-                    weight.append(vec)
+                    weight2.append(vec)
                     count += 1
                 else:
                     vec = initializers.generate_array(initialW, (dim, ), np)
-                    weight.append(vec)
+                    weight2.append(vec)
 
             weight2 = np.reshape(weight2, (diff, dim))
-            #TODO type check
 
         else:
             weight2 = chainer.variable.Parameter(initialW, (diff, dim))
@@ -65,14 +64,15 @@ class Classifier(chainer.link.Chain):
             weight = F.concat((weight1, weight2), 0)
         else:
             weight = weight2
+        print(type(weight))
+        print(weight.data)
 
         embed = L.EmbedID(0, 0)
-        embed.W = chainer.Parameter(initializer=weight.data)
+        embed.W = chainer.Parameter(initializer=weight)
 
         print('Grow embedding layer: {} -> {}'.format(weight1.shape, weight.shape), file=stream)
         if count >= 1:
-            print('Use %d pretrained embedding vectors'.format(count), file=stream)
-        print('', file=stream)
+            print('Use {} pretrained embedding vectors\n'.format(count), file=stream)
 
         
 class SequenceTagger(Classifier):
@@ -92,59 +92,21 @@ class SequenceTagger(Classifier):
         return ys
 
 
-    def turn_off_dropout(self, stream=sys.stderr):
-        self.rnn.__dict__['dropout'] = 0
-        print('Set dropout ratio to 0', file=stream)
+    def change_dropout_ratio(self, dropout_ratio, stream=sys.stderr):
+        self.predictor.rnn.dropout = dropout_ratio
+        print('Set dropout ratio to {}\n'.format(self.predictor.rnn.dropout), file=stream)
 
 
-    def grow_embedding_layer(self, id2token_all, id2token_trained={}, embed_model=None, stream=sys.stderr):
-        super().grow_embedding_layer(
-            self.predictor.embed, id2token_all, id2token_trained, embed_model, stream)
+    def grow_embedding_layers(self):
+        #TODO implement
+        pass
+
+
+    # def grow_embedding_layer_old(self, id2token_all, id2token_trained={}, embed_model=None, stream=sys.stderr):
+    #     super().grow_embedding_layer_old(
+    #         self.predictor.embed, id2token_all, id2token_trained, embed_model, stream)
 
         
-    def grow_inference_layers(self, id2label_all, id2label_trained, stream=sys.stderr):
-        org_len = len(id2label_trained)
-        new_len = len(id2label_all)
-        diff = new_len - org_len
-
-
-        # affine layer
-        w_org = self.predictor.affine.W
-        b_org = self.predictor.affine.b
-        w_org_shape = w_org.shape
-        b_org_shape = b_org.shape
-
-        dim = w_org.shape[1]
-        initialW = initializers.normal.Normal(1.0)
-
-        w_diff = chainer.variable.Parameter(initialW, (diff, dim))
-        w_new = F.concat((w_org, w_diff), 0)
-
-        b_diff = chainer.variable.Parameter(initialW, (diff,))
-        b_new = F.concat((b_org, b_diff), 0)
-            
-        self.predictor.affine.W = chainer.Parameter(initializer=w_new.data)
-        self.predictor.affine.b = chainer.Parameter(initializer=b_new.data)
-
-        print('Grow affine layer: {}, {} -> {}, {}'.format(
-            w_org_shape, b_org_shape, self.predictor.affine.W.shape, 
-            self.predictor.affine.b.shape), file=stream)
-
-        # crf layer
-        if isinstance(self.predictor, RNN_CRF):
-            c_org = self.predictor.crf.cost
-            c_diff1 = chainer.variable.Parameter(0, (org_len, diff))
-            c_diff2 = chainer.variable.Parameter(0, (diff, new_len))
-            c_tmp = F.concat((c_org, c_diff1), 1)
-            c_new = F.concat((c_tmp, c_diff2), 0)
-            self.predictor.crf.cost = chainer.Parameter(initializer=c_new.data)
-
-            print('Grow crf layer: {} -> {}'.format(
-                c_org.shape, self.predictor.crf.cost.shape, file=stream))
-
-        print('', file=stream)
-        
-
 class DependencyParser(Classifier):
     def __init__(self, predictor):
         super(DependencyParser, self).__init__(predictor=predictor)
@@ -160,20 +122,62 @@ class DependencyParser(Classifier):
         return ret
 
 
-    def turn_off_dropout(self, stream=sys.stderr):
-        self.predictor.dropout = 0 # for mlp outputs
-        self.predictor.rnn.__dict__['dropout'] = 0 # for rnn layer
-        print('Set dropout ratio to 0\n', file=stream)
+    def change_dropout_ratio(self, dropout_ratio, stream=sys.stderr):
+        self.change_rnn_dropout_ratio(dropout_ratio, stream=stream)
+        self.change_mlp_dropout_ratio(dropout_ratio, stream=stream)
+        self.change_biaffine_dropout_ratio(dropout_ratio, stream=stream)
+        print('', file=stream)
 
 
-    def grow_embedding_layer(self, id2token_all, id2token_trained={}, embed_model=None, stream=sys.stderr):
-        super().grow_embedding_layer(
-            self.predictor.word_embed, id2token_all, id2token_trained, embed_model, stream)
+    def change_rnn_dropout_ratio(self, dropout_ratio, stream=sys.stderr):
+        self.predictor.rnn.dropout = dropout_ratio
+        print('Set {} dropout ratio to {}'.format('RNN', self.predictor.rnn.dropout), file=stream)
 
 
-def init_classifier(classifier_type, hparams, indices, train=True):
+    def change_mlp_dropout_ratio(self, dropout_ratio, stream=sys.stderr):
+        self.predictor.affine_arc_head.dropout = dropout_ratio
+        self.predictor.affine_arc_mod.dropout = dropout_ratio
+        self.predictor.affine_label_head.dropout = dropout_ratio
+        self.predictor.affine_label_mod.dropout = dropout_ratio
+        print('Set {} dropout ratio to {}'.format('MLP', dropout_ratio), file=stream)
+
+
+    def change_biaffine_dropout_ratio(self, dropout_ratio, stream=sys.stderr):
+        self.predictor.biaffine_dropout = dropout_ratio
+        print('Set {} dropout ratio to {}'.format('biaffine',dropout_ratio), file=stream)
+
+
+    def grow_embedding_layers(self, indices_org, indices_grown, external_model=None, train=True):
+        id2token_grown = indices_grown.token_indices.id2str
+        id2token_org = indices_org.token_indices.id2str
+        if len(id2token_grown) > len(id2token_org):
+            models.grow_embedding_layers(
+                id2token_org, id2token_grown, 
+                self.predictor.word_embed, self.predictor.trained_word_embed, external_model, train=train)
+
+        id2pos_grown = indices_grown.pos_label_indices.id2str
+        id2pos_org = indices_org.pos_label_indices.id2str
+        if len(id2pos_grown) > len(id2pos_org):
+            models.grow_embedding_layers(
+                id2pos_org, id2pos_grown, self.predictor.pos_embed,
+                trained_embed=None, external_model=None, train=train)
+
+
+    def grow_inference_layers(self, indices_org, indices_grown):
+        id2alab_grown = indices_grown.arc_label_indices.id2str
+        id2alab_org = indices_org.arc_label_indices.id2str
+
+        if (self.predictor.label_prediction and
+            len(id2alab_grown) > len(id2alab_org)):
+            models.grow_biaffine_layer(
+                id2alab_org, id2alab_grown, self.predictor.biaffine_label)
+
+
+def init_classifier(classifier_type, hparams, indices, pretrained_unit_embed_dim=0):
+    #, finetune_external_embed=False):
     n_vocab = len(indices.token_indices)
-    dropout = hparams['dropout'] if train else 0
+
+    # tagger
     if classifier_type == 'seg' or classifier_type == 'seg_tag' or classifier_type == 'tag':
         if 'seg' in classifier_type:
             n_labels = len(indices.seg_label_indices)
@@ -184,39 +188,34 @@ def init_classifier(classifier_type, hparams, indices, train=True):
             predictor = models.RNNCRFTagger(
                 n_vocab, hparams['unit_embed_dim'], hparams['rnn_unit_type'], 
                 hparams['rnn_bidirection'], hparams['rnn_layers'], hparams['rnn_hidden_units'], 
-                n_labels, feat_dim=hparams['additional_feat_dim'], dropout=dropout)
+                n_labels, feat_dim=hparams['additional_feat_dim'], dropout=hparams['dropout'])
                 
         else:
             predictor = models.RNNTagger(
                 n_vocab, hparams['unit_embed_dim'], hparams['rnn_unit_type'], 
                 hparams['rnn_bidirection'], hparams['rnn_layers'], hparams['rnn_hidden_units'], 
-                n_labels, feat_dim=hparams['additional_feat_dim'], dropout=dropout)
+                n_labels, feat_dim=hparams['additional_feat_dim'], dropout=hparams['dropout'])
             
         classifier = SequenceTagger(predictor)
-            
+    
+    # parser
     elif classifier_type == 'dep' or classifier_type == 'tdep':
         n_pos = len(indices.pos_label_indices)
 
         if classifier_type == 'dep':
             n_labels = 0
-            predictor = models.RNNBiaffineParser(
-                n_vocab, hparams['unit_embed_dim'], n_pos, hparams['pos_embed_dim'],
-                hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_layers'], 
-                hparams['rnn_hidden_units'], hparams['affine_units_arc'], hparams['affine_units_label'],
-                n_labels=n_labels, 
-                dropout=dropout)
-
         elif classifier_type == 'tdep':
             n_labels = len(indices.arc_label_indices)
-            predictor = models.RNNBiaffineParser(
-                n_vocab, hparams['unit_embed_dim'], n_pos, hparams['pos_embed_dim'],
-                hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_layers'], 
-                hparams['rnn_hidden_units'], hparams['affine_units_arc'], hparams['affine_units_label'],
-                n_labels=n_labels, 
-                dropout=dropout)
 
-        else:
-            predictor = None
+        predictor = models.RNNBiaffineParser(
+            n_vocab, hparams['unit_embed_dim'], n_pos, hparams['pos_embed_dim'],
+            hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_layers'], 
+            hparams['rnn_hidden_units'], 
+            hparams['affine_layers_arc'], hparams['affine_units_arc'],
+            hparams['affine_layers_label'], hparams['affine_units_label'],
+            n_labels=n_labels, rnn_dropout=hparams['rnn_dropout'], 
+            mlp_dropout=hparams['mlp_dropout'], biaffine_dropout=hparams['biaffine_dropout'],
+            trained_word_embed_dim=pretrained_unit_embed_dim)
 
         classifier = DependencyParser(predictor)
 

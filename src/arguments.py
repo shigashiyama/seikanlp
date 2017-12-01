@@ -6,7 +6,7 @@ class Arguments(object):
         self.parser = argparse.ArgumentParser()
         parser = self.parser
 
-        ### used letters: bcdegmopqtvx
+        ### used letters: bcegmopqtvx
 
         # mandatory options
         parser.add_argument('--execute_mode', '-x', required=True,
@@ -29,8 +29,6 @@ class Arguments(object):
                             + ' (Default: 10000)')
         parser.add_argument('--batchsize', '-b', type=int, default=100,
                             help='The number of examples in each mini-batch (Default: 100)')
-        parser.add_argument('--dropout', type=float, default=0.0, 
-                            help='Dropout ratio for RNN vertical layers (Default: 0.0)')
         parser.add_argument('--gradclip', '-c', type=float, default=5,
                             help='Gradient norm threshold to clip')
 
@@ -80,6 +78,8 @@ class Arguments(object):
                             + ' using new file name endding with \'.pickle\'')
         parser.add_argument('--unit_embed_model_path', 
                             help='File path of pretrained model of unit (character or word) embedding')
+        parser.add_argument('--fix_pretrained_embed', action='store_true',
+                            help='')
 
         # options for data pre/post-processing
         parser.add_argument('--lowercase',  action='store_true',
@@ -115,9 +115,11 @@ class TaggerArguments(Arguments):
         super(TaggerArguments, self).__init__()
         parser = self.parser
 
-        ### used letters: bcdegmopqtvwx + flsuw
+        ### used letters: bcegmopqtvwx + dflsuw
 
         # model parameters
+        parser.add_argument('--dropout', type=float, default=0.0, 
+                            help='Dropout ratio for RNN vertical layers (Default: 0.0)')
         parser.add_argument('--rnn_unit_type', default='lstm',
                             help='Choose unit type of RNN from among \'lstm\', \'gru\' and \'plain\''
                             + ' (Default: lstm)')
@@ -160,9 +162,15 @@ class ParserArguments(Arguments):
         super(ParserArguments, self).__init__()
         parser = self.parser
 
-        ### used letters: bcdegmopqtvx + flsu
+        ### used letters: bcegmopqtvx + flsu
 
         # model parameters
+        parser.add_argument('--rnn_dropout', type=float, default=0.0, 
+                            help='Dropout ratio for RNN vertical layers (Default: 0.0)')
+        parser.add_argument('--mlp_dropout', type=float, default=0.0, 
+                            help='Dropout ratio for MLP (Default: 0.0)')
+        parser.add_argument('--biaffine_dropout', type=float, default=0.0, 
+                            help='Dropout ratio for biaffine layers (Default: 0.0)')
         parser.add_argument('--pos_embed_dim', type=int, default=100,
                             help='The number of dimension of pos embedding (Default: 100)')
         parser.add_argument('--rnn_unit_type', default='lstm',
@@ -174,10 +182,14 @@ class ParserArguments(Arguments):
                             help='The number of RNN layers (Default: 1)')
         parser.add_argument('--rnn_hidden_units', '-u', type=int, default=400,
                             help='The number of hidden units of RNN (Default: 400)')
+        parser.add_argument('--affine_layers_arc', type=int, default=1, 
+                            help='The number of affine layers (Default: 1)')
         parser.add_argument('--affine_units_arc', type=int, default=200,
-                            help='The number of dimension of affine layer (Default: 200)')
+                            help='The number of dimension of affine layers (Default: 200)')
+        parser.add_argument('--affine_layers_label', type=int, default=1, 
+                            help='The number of affine layers (Default: 1)')
         parser.add_argument('--affine_units_label', type=int, default=200,
-                            help='The number of dimension of affine layer (Default: 200)')
+                            help='The number of dimension of affine layers (Default: 200)')
 
         # data paths and related options
         parser.add_argument('--data_format', '-f', 

@@ -8,6 +8,8 @@ from chainer import cuda
 import constants
 import arguments
 import trainers
+import models
+
 
 def run(process_name):
     if chainer.__version__[0] != '2':
@@ -45,29 +47,30 @@ def run(process_name):
         chainer.config.cudnn_deterministic = args.use_cudnn
 
     ################################
-    # Load feature extractor and classifier model
-
-    if args.model_path:
-        trainer.load_model(args.model_path)
-        id2token_org = copy.deepcopy(trainer.indices.token_indices.id2str)
-        #id2label_org = copy.deepcopy(trainer.indices.arc_label_indices.id2str) # TODO modify
-    else:
-        trainer.init_hyperparameters(args)
-        id2token_org = {}
-        #id2label_org = {}
-    trainer.init_feat_extractor(use_gpu=use_gpu)
-
-    ################################
     # Load word embedding model
 
     if args.unit_embed_model_path and args.execute_mode != 'interactive':
         embed_model = trainers.load_embedding_model(args.unit_embed_model_path)
-        embed_dim = embed_model.wv.syn0[0].shape[0]
-        if embed_dim != trainer.hparams['unit_embed_dim']:
-            print('Given embedding model is discarded due to dimension confliction')
-            embed_model = None
+        pretrained_unit_embed_dim = embed_model.wv.syn0[0].shape[0]
     else:
         embed_model = None
+        pretrained_unit_embed_dim = 0
+
+    ################################
+    # Load feature extractor and classifier model
+
+    if args.model_path:
+        trainer.load_model(args.model_path, pretrained_unit_embed_dim)
+        indices_org = copy.deepcopy(trainer.indices)
+    else:
+        trainer.init_hyperparameters(args)
+        indices_org = None
+
+        # id2token_org = {}
+        # id2slab_org = {}
+        # id2plab_org = {}
+        # id2alab_org = {}
+    trainer.init_feat_extractor(use_gpu=use_gpu)
 
     ################################
     # Initialize indices of strings from external dictionary
@@ -99,16 +102,15 @@ def run(process_name):
     trainer.setup_evaluator()
 
     if not trainer.classifier:
-        trainer.init_model()
-
-    grow_vocab = id2token_org and (len(trainer.indices.token_indices.id2str) > len(id2token_org))
-    if grow_vocab or (not args.model_path and embed_model):
-        trainer.classifier.grow_embedding_layer(
-            trainer.indices.token_indices.id2str, id2token_org, embed_model)
-    # TODO modify
-    # grow_labels = id2label_org and (len(trainer.classifier.indices.id2str) > len(id2label_org))
-    # if grow_labels:
-    #     trainer.classifier.grow_inference_layers(trainer.classifier.indices.id2label, id2label_org)
+        trainer.init_model(pretrained_unit_embed_dim)
+        if embed_model:
+            models.load_and_update_embedding_layer(
+                trainer.classifier.predictor.trained_word_embed, trainer.indices.token_indices.id2str, 
+                embed_model, finetuning=(not args.fix_pretrained_embed))
+    else:
+        trainer.classifier.grow_embedding_layers(indices_org, trainer.indices, embed_model,
+                                                 train=(args.execute_mode=='train'))
+        trainer.classifier.grow_inference_layers(indices_org, trainer.indices)
 
     if args.gpu >= 0:
         trainer.classifier.to_gpu()
