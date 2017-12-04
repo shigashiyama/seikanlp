@@ -125,9 +125,9 @@ class TaggerArguments(Arguments):
                             + ' (Default: lstm)')
         parser.add_argument('--rnn_bidirection', action='store_true', 
                             help='Use bidirectional RNN')
-        parser.add_argument('--rnn_layers', '-l', type=int, default=1, 
+        parser.add_argument('--rnn_n_layers', '-l', type=int, default=1, 
                             help='The number of RNN layers (Default: 1)')
-        parser.add_argument('--rnn_hidden_units', '-u', type=int, default=800,
+        parser.add_argument('--rnn_n_units', '-u', type=int, default=800,
                             help='The number of hidden units of RNN (Default: 800)')
         parser.add_argument('--inference_layer', default='crf',
                             help='Choose type of inference layer from between \'softmax\' and \'crf\''
@@ -167,10 +167,10 @@ class ParserArguments(Arguments):
         # model parameters
         parser.add_argument('--rnn_dropout', type=float, default=0.0, 
                             help='Dropout ratio for RNN vertical layers (Default: 0.0)')
-        parser.add_argument('--mlp_dropout', type=float, default=0.0, 
+        parser.add_argument('--hidden_mlp_dropout', type=float, default=0.0, 
                             help='Dropout ratio for MLP (Default: 0.0)')
-        parser.add_argument('--biaffine_dropout', type=float, default=0.0, 
-                            help='Dropout ratio for biaffine layers (Default: 0.0)')
+        parser.add_argument('--pred_layers_dropout', type=float, default=0.0, 
+                            help='Dropout ratio for prediction layers (Default: 0.0)')
         parser.add_argument('--pos_embed_dim', type=int, default=100,
                             help='The number of dimension of pos embedding (Default: 100)')
         parser.add_argument('--rnn_unit_type', default='lstm',
@@ -178,18 +178,26 @@ class ParserArguments(Arguments):
                             + ' (Default: lstm)')
         parser.add_argument('--rnn_bidirection', action='store_true', 
                             help='Use bidirectional RNN')
-        parser.add_argument('--rnn_layers', '-l', type=int, default=1, 
+        parser.add_argument('--rnn_n_layers', '-l', type=int, default=1, 
                             help='The number of RNN layers (Default: 1)')
-        parser.add_argument('--rnn_hidden_units', '-u', type=int, default=400,
+        parser.add_argument('--rnn_n_units', '-u', type=int, default=400,
                             help='The number of hidden units of RNN (Default: 400)')
-        parser.add_argument('--affine_layers_arc', type=int, default=1, 
-                            help='The number of affine layers (Default: 1)')
-        parser.add_argument('--affine_units_arc', type=int, default=200,
-                            help='The number of dimension of affine layers (Default: 200)')
-        parser.add_argument('--affine_layers_label', type=int, default=1, 
-                            help='The number of affine layers (Default: 1)')
-        parser.add_argument('--affine_units_label', type=int, default=200,
-                            help='The number of dimension of affine layers (Default: 200)')
+        parser.add_argument('--mlp4pospred_n_layers', type=int, default=0, 
+                            help='')
+        parser.add_argument('--mlp4pospred_n_units', type=int, default=200,
+                            help='')
+        parser.add_argument('--mlp4arcrep_n_layers', type=int, default=1, 
+                            help='')
+        parser.add_argument('--mlp4arcrep_n_units', type=int, default=200,
+                            help='')
+        parser.add_argument('--mlp4labelrep_n_layers', type=int, default=1, 
+                            help='')
+        parser.add_argument('--mlp4labelrep_n_units', type=int, default=200,
+                            help='')
+        parser.add_argument('--mlp4labelpred_n_layers', type=int, default=1, 
+                            help='')
+        parser.add_argument('--mlp4labelpred_n_units', type=int, default=200,
+                            help='')
 
         # data paths and related options
         parser.add_argument('--data_format', '-f', 

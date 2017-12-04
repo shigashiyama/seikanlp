@@ -124,8 +124,8 @@ class DependencyParser(Classifier):
 
     def change_dropout_ratio(self, dropout_ratio, stream=sys.stderr):
         self.change_rnn_dropout_ratio(dropout_ratio, stream=stream)
-        self.change_mlp_dropout_ratio(dropout_ratio, stream=stream)
-        self.change_biaffine_dropout_ratio(dropout_ratio, stream=stream)
+        self.change_hidden_mlp_dropout_ratio(dropout_ratio, stream=stream)
+        self.change_pred_layers_dropout_ratio(dropout_ratio, stream=stream)
         print('', file=stream)
 
 
@@ -134,7 +134,7 @@ class DependencyParser(Classifier):
         print('Set {} dropout ratio to {}'.format('RNN', self.predictor.rnn.dropout), file=stream)
 
 
-    def change_mlp_dropout_ratio(self, dropout_ratio, stream=sys.stderr):
+    def change_hidden_mlp_dropout_ratio(self, dropout_ratio, stream=sys.stderr):
         self.predictor.affine_arc_head.dropout = dropout_ratio
         self.predictor.affine_arc_mod.dropout = dropout_ratio
         if self.predictor.label_prediction:
@@ -143,8 +143,8 @@ class DependencyParser(Classifier):
         print('Set {} dropout ratio to {}'.format('MLP', dropout_ratio), file=stream)
 
 
-    def change_biaffine_dropout_ratio(self, dropout_ratio, stream=sys.stderr):
-        self.predictor.biaffine_dropout = dropout_ratio
+    def change_pred_layers_dropout_ratio(self, dropout_ratio, stream=sys.stderr):
+        self.predictor.pred_layers_dropout = dropout_ratio
         print('Set {} dropout ratio to {}'.format('biaffine',dropout_ratio), file=stream)
 
 
@@ -188,38 +188,54 @@ def init_classifier(classifier_type, hparams, indices, pretrained_unit_embed_dim
         if hparams['inference_layer'] == 'crf':
             predictor = models.RNNCRFTagger(
                 n_vocab, hparams['unit_embed_dim'], hparams['rnn_unit_type'], 
-                hparams['rnn_bidirection'], hparams['rnn_layers'], hparams['rnn_hidden_units'], 
+                hparams['rnn_bidirection'], hparams['rnn_n_layers'], hparams['rnn_n_units'], 
                 n_labels, feat_dim=hparams['additional_feat_dim'], dropout=hparams['dropout'])
                 
         else:
             predictor = models.RNNTagger(
                 n_vocab, hparams['unit_embed_dim'], hparams['rnn_unit_type'], 
-                hparams['rnn_bidirection'], hparams['rnn_layers'], hparams['rnn_hidden_units'], 
+                hparams['rnn_bidirection'], hparams['rnn_n_layers'], hparams['rnn_n_units'], 
                 n_labels, feat_dim=hparams['additional_feat_dim'], dropout=hparams['dropout'])
             
         classifier = SequenceTagger(predictor)
     
     # parser
-    elif classifier_type == 'dep' or classifier_type == 'tdep':
+    elif (classifier_type == 'dep' or classifier_type == 'tdep' or
+          classifier_type == 'tag_dep' or classifier_type == 'tag_tdep'):
         n_pos = len(indices.pos_label_indices)
 
-        if classifier_type == 'dep':
-            n_labels = 0
-        elif classifier_type == 'tdep':
+        if classifier_type == 'tdep' or classifier_type == 'tag_tdep':
             n_labels = len(indices.arc_label_indices)
+        else:
+            n_labels = 0
+
+        if classifier_type == 'tag_dep' or classifier_type == 'tag_tdep':
+            mlp4pospred_n_layers = hparams['mlp4pospred_n_layers']
+            mlp4pospred_n_units = hparams['mlp4pospred_n_units']
+        else:
+            mlp4pospred_n_layers = 0
+            mlp4pospred_n_units = 0
 
         predictor = models.RNNBiaffineParser(
             n_vocab, hparams['unit_embed_dim'], n_pos, hparams['pos_embed_dim'],
-            hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_layers'], 
-            hparams['rnn_hidden_units'], 
-            hparams['affine_layers_arc'], hparams['affine_units_arc'],
-            hparams['affine_layers_label'], hparams['affine_units_label'],
+            hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_n_layers'], 
+            hparams['rnn_n_units'], 
+            hparams['mlp4arcrep_n_layers'], hparams['mlp4arcrep_n_units'],
+            hparams['mlp4labelrep_n_layers'], hparams['mlp4labelrep_n_units'],
+            mlp4labelpred_n_layers=hparams['mlp4labelpred_n_layers'], 
+            mlp4labelpred_n_units=hparams['mlp4labelpred_n_units'],
+            mlp4pospred_n_layers=mlp4pospred_n_layers, mlp4pospred_n_units=mlp4pospred_n_units,
             n_labels=n_labels, rnn_dropout=hparams['rnn_dropout'], 
-            mlp_dropout=hparams['mlp_dropout'], biaffine_dropout=hparams['biaffine_dropout'],
+            hidden_mlp_dropout=hparams['hidden_mlp_dropout'], 
+            pred_layers_dropout=hparams['pred_layers_dropout'],
             trained_word_embed_dim=pretrained_unit_embed_dim)
 
         classifier = DependencyParser(predictor)
 
+    else:
+        print('Invalid type: {}'.format(classifier_type), file=sys.stderr)
+        sys.exit()
+        
     return classifier
     
 
@@ -238,6 +254,12 @@ def init_evaluator(classifier_type, indices, ignore_labels):
 
     elif classifier_type == 'tdep':
         return evaluators.TypedParserEvaluator(ignore_head=True, ignore_labels=ignore_labels)
+
+    elif classifier_type == 'tag_dep':
+        return evaluators.TagerParserEvaluator(ignore_head=True, ignore_labels=ignore_labels)
+
+    elif classifier_type == 'tag_tdep':
+        return evaluators.TaggerTypedParserEvaluator(ignore_head=True, ignore_labels=ignore_labels)
 
     else:
         return None

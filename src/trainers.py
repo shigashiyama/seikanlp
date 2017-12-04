@@ -101,6 +101,7 @@ class Trainer(object):
         self.optimizer = None
         self.decode_type = None
         self.n_iter = 0
+        self.label_begin_index = 2
 
         self.log('Start time: {}\n'.format(self.start_time))
         if not self.args.quiet:
@@ -448,7 +449,7 @@ class Trainer(object):
         for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=shuffle):
             inputs = self.gen_inputs(data, ids)
             xs = inputs[0]
-            golds = inputs[2:]
+            golds = inputs[self.label_begin_index:]
             # timer = util.Timer()
             # timer.start()
             if train:
@@ -538,8 +539,8 @@ class TaggerTrainer(Trainer):
             'unit_embed_dim' : args.unit_embed_dim,
             'rnn_unit_type' : args.rnn_unit_type,
             'rnn_bidirection' : args.rnn_bidirection,
-            'rnn_layers' : args.rnn_layers,
-            'rnn_hidden_units' : args.rnn_hidden_units,
+            'rnn_n_layers' : args.rnn_n_layers,
+            'rnn_n_units' : args.rnn_n_units,
             'inference_layer' : args.inference_layer,
             'dropout' : args.dropout,
             'feature_template' : args.feature_template,
@@ -573,8 +574,8 @@ class TaggerTrainer(Trainer):
 
                 if (key == 'unit_embed_dim' or
                     key == 'additional_feat_dim' or
-                    key == 'rnn_layers' or
-                    key == 'rnn_hidden_units' or
+                    key == 'rnn_n_layers' or
+                    key == 'rnn_n_units' or
                     key == 'subpos_depth'
                 ):
                     val = int(val)
@@ -677,6 +678,7 @@ class TaggerTrainer(Trainer):
             self.decode_batch(xs, fs)
 
 
+    # TODO implement parsing
     def decode_batch(self, xs, fs, stream=sys.stdout):
         ys = self.classifier.decode(xs, fs)
 
@@ -715,10 +717,10 @@ class ParserTrainer(Trainer):
         super().load_model(model_path, pretrained_unit_embed_dim)
         if 'rnn_dropout' in self.hparams:
             self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
-        if 'mlp_dropout' in self.hparams:
-            self.classifier.change_mlp_dropout_ratio(self.hparams['mlp_dropout'])
-        if 'biaffine_dropout' in self.hparams:
-            self.classifier.change_biaffine_dropout_ratio(self.hparams['biaffine_dropout'])
+        if 'hidden_mlp_dropout' in self.hparams:
+            self.classifier.change_hidden_mlp_dropout_ratio(self.hparams['hidden_mlp_dropout'])
+        if 'pred_layers_dropout' in self.hparams:
+            self.classifier.change_pred_layers_dropout_ratio(self.hparams['pred_layers_dropout'])
             
 
     def init_hyperparameters(self, args):
@@ -727,15 +729,19 @@ class ParserTrainer(Trainer):
             'pos_embed_dim' : args.pos_embed_dim,
             'rnn_unit_type' : args.rnn_unit_type,
             'rnn_bidirection' : args.rnn_bidirection,
-            'rnn_layers' : args.rnn_layers,
-            'rnn_hidden_units' : args.rnn_hidden_units,
-            'affine_layers_arc' : args.affine_layers_arc,
-            'affine_units_arc' : args.affine_units_arc,
-            'affine_layers_label' : args.affine_layers_label,
-            'affine_units_label' : args.affine_units_label,
+            'rnn_n_layers' : args.rnn_n_layers,
+            'rnn_n_units' : args.rnn_n_units,
+            'mlp4pospred_n_layers' : args.mlp4pospred_n_layers,
+            'mlp4pospred_n_units' : args.mlp4pospred_n_units,
+            'mlp4arcrep_n_layers' : args.mlp4arcrep_n_layers,
+            'mlp4arcrep_n_units' : args.mlp4arcrep_n_units,
+            'mlp4labelrep_n_layers' : args.mlp4labelrep_n_layers,
+            'mlp4labelrep_n_units' : args.mlp4labelrep_n_units,
+            'mlp4labelpred_n_layers' : args.mlp4labelpred_n_layers,
+            'mlp4labelpred_n_units' : args.mlp4labelpred_n_units,
             'rnn_dropout' : args.rnn_dropout,
-            'mlp_dropout' : args.mlp_dropout,
-            'biaffine_dropout' : args.biaffine_dropout,
+            'hidden_mlp_dropout' : args.hidden_mlp_dropout,
+            'pred_layers_dropout' : args.pred_layers_dropout,
             'data_format' : args.data_format,
             'subpos_depth' : args.subpos_depth,
             'lowercase' : args.lowercase,
@@ -767,19 +773,23 @@ class ParserTrainer(Trainer):
                 if (key == 'unit_embed_dim' or
                     key == 'pretrained_unit_embed_dim' or
                     key == 'pos_embed_dim' or
-                    key == 'rnn_layers' or
-                    key == 'rnn_hidden_units' or
-                    key == 'affine_layers_arc' or
-                    key == 'affine_units_arc' or
-                    key == 'affine_layers_label' or
-                    key == 'affine_units_label' or                    
+                    key == 'rnn_n_layers' or
+                    key == 'rnn_n_units' or
+                    key == 'mlp4pospred_n_layers' or
+                    key == 'mlp4pospred_n_units' or
+                    key == 'mlp4arcrep_n_layers' or
+                    key == 'mlp4arcrep_n_units' or
+                    key == 'mlp4labelrep_n_layers' or
+                    key == 'mlp4labelrep_n_units' or
+                    key == 'mlp4labelpred_n_layers' or
+                    key == 'mlp4labelpred_n_units' or
                     key == 'subpos_depth'
                 ):
                     val = int(val)
 
                 elif (key == 'rnn_dropout' or
-                      key == 'mlp_dropout' or
-                      key == 'biaffine_dropout'
+                      key == 'hidden_mlp_dropout' or
+                      key == 'pred_layers_dropout'
                 ):
                     val = float(val)
 
@@ -802,6 +812,14 @@ class ParserTrainer(Trainer):
             
         elif (data_format == 'wl_tdep'):
             self.decode_type = 'tdep'
+
+        elif (data_format == 'wl_tag_dep'):
+            self.decode_type = 'tag_dep'
+            self.label_begin_index = 1
+
+        elif (data_format == 'wl_tag_tdep'):
+            self.decode_type = 'tag_tdep'
+            self.label_begin_index = 1
 
         else:
             print('Error: invalid data format: {}'.format(data_format), file=sys.stderr)
@@ -832,7 +850,7 @@ class ParserTrainer(Trainer):
 
     # for ignore labels
     def setup_evaluator(self):
-        if self.decode_type == 'tdep' and self.args.ignore_labels:
+        if (self.decode_type == 'tdep' or self.decode_type == 'tag_tdep') and self.args.ignore_labels:
             tmp = self.args.ignore_labels
             self.args.ignore_labels = set()
 
@@ -852,10 +870,10 @@ class ParserTrainer(Trainer):
         ws = [xp.asarray(data.instances[j], dtype='i') for j in ids]
         ps = [xp.asarray(data.labels[0][j], dtype='i') for j in ids] if data.labels[0] else None
         ths = [xp.asarray(data.labels[1][j], dtype='i') for j in ids]
-        if self.decode_type == 'tdep':
+        if self.decode_type == 'tdep' or self.decode_type == 'tag_tdep':
             tls = [xp.asarray(data.labels[2][j], dtype='i') for j in ids]
 
-        if self.decode_type == 'tdep':
+        if self.decode_type == 'tdep' or self.decode_type == 'tag_tdep':
             return ws, ps, ths, tls
         else:
             return ws, ps, ths

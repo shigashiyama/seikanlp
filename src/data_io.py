@@ -379,7 +379,9 @@ def load_data(data_format, path, read_pos=True, update_token=True, update_label=
     typed_parsing = True if 'tdep' in data_format else False
 
     if (data_format == 'wl_seg' or data_format == 'wl_seg_tag' or data_format == 'wl_tag' or
-        data_format == 'wl_dep' or data_format == 'wl_tdep'):
+        data_format == 'wl_dep' or data_format == 'wl_tdep' or
+        data_format == 'wl_tag_dep' or data_format == 'wl_tag_tdep'
+    ):
         data, indices = load_data_WL(
             path, segmentation=segmentation, tagging=tagging, parsing=parsing, typed_parsing=typed_parsing,
             update_token=update_token, update_label=update_label, 
