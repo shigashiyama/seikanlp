@@ -272,13 +272,17 @@ class RNNBiaffineParser(chainer.Chain):
             file=sys.stderr):
         super(RNNBiaffineParser, self).__init__()
 
-        self.concat_pretraind_embeddings = True # unused
+        #self.concat_pretraind_embeddings = True
+        self.common_arc_label = False
+        self.common_head_mod = False
 
         with self.init_scope():
             self.pred_layers_dropout = pred_layers_dropout
             self.softmax_cross_entropy = softmax_cross_entropy.softmax_cross_entropy
 
             print('### Parameters', file=file)
+            print('acl=label:', self.common_arc_label, file=file)
+            print('head=mod:', self.common_head_mod, file=file)
 
             # word embedding layer(s)
 
@@ -326,10 +330,14 @@ class RNNBiaffineParser(chainer.Chain):
                 dropout=hidden_mlp_dropout, file=file)
 
             print('# MLP for arc modifiers', file=file)
-            self.mlp_arc_mod = MLP(
-                rnn_output_dim, mlp4arcrep_n_units, n_layers=mlp4arcrep_n_layers, 
-                dropout=hidden_mlp_dropout, file=file)
-            
+            if not self.common_head_mod:
+                self.mlp_arc_mod = MLP(
+                    rnn_output_dim, mlp4arcrep_n_units, n_layers=mlp4arcrep_n_layers, 
+                    dropout=hidden_mlp_dropout, file=file)
+            else:
+                self.mlp_arc_mod = None
+                print('use common reps for heads and modifiers', file=file)
+                
             self.biaffine_arc = BiaffineCombination(mlp4arcrep_n_units, mlp4arcrep_n_units)
             print('# Biaffine layer for arc prediction:   W={}, U={}, dropout={}'.format(
                 self.biaffine_arc.W.shape, self.biaffine_arc.U.shape, self.pred_layers_dropout), file=file)
@@ -338,17 +346,29 @@ class RNNBiaffineParser(chainer.Chain):
 
             self.label_prediction = (n_labels > 0)
             if self.label_prediction:
-                print('# MLP for label heads', file=file)
-                self.mlp_label_head = MLP(
-                    rnn_output_dim, mlp4labelrep_n_units, n_layers=mlp4labelrep_n_layers, 
-                    dropout=hidden_mlp_dropout, 
-                    file=file)
+                if not self.common_arc_label:
+                    print('# MLP for label heads', file=file)
+                    self.mlp_label_head = MLP(
+                        rnn_output_dim, mlp4labelrep_n_units, n_layers=mlp4labelrep_n_layers, 
+                        dropout=hidden_mlp_dropout, 
+                        file=file)
+                else:
+                    self.mlp_label_head = None
+                    print('use common reps for arc and label', file=file)
 
-                print('# MLP for label modifiers', file=file)
-                self.mlp_label_mod = MLP(
-                    rnn_output_dim, mlp4labelrep_n_units, n_layers=mlp4labelrep_n_layers, 
-                    dropout=hidden_mlp_dropout, 
-                    file=file)
+                if not self.common_arc_label:
+                    if not self.common_head_mod:
+                        print('# MLP for label modifiers', file=file)
+                        self.mlp_label_mod = MLP(
+                            rnn_output_dim, mlp4labelrep_n_units, n_layers=mlp4labelrep_n_layers, 
+                            dropout=hidden_mlp_dropout, 
+                            file=file)
+                    else:
+                        self.mlp_label_mod = None
+                        print('use common reps for head and mod', file=file)
+                else:
+                    self.mlp_label_mod = None
+                    print('use common reps for arc and label', file=file)
 
                 print('# MLP for label prediction:', file=file)
                 self.mlp_label = MLP(
@@ -475,16 +495,28 @@ class RNNBiaffineParser(chainer.Chain):
         hs_arc = self.mlp_arc_head(rs)
 
         # modifier representations
-        rs_noroot = [r[1:] for r in rs]
-        ms_arc = self.mlp_arc_mod(rs_noroot)
+        if self.common_head_mod:
+            ms_arc = [h_arc[1:] for h_arc in hs_arc]
+        else:
+            rs_noroot = [r[1:] for r in rs]
+            ms_arc = self.mlp_arc_mod(rs_noroot)
 
         # MLP for label
         if self.label_prediction:
             # head representations
-            hs_label = self.mlp_label_head(rs)
+            if self.common_arc_label:
+                hs_label = hs_arc
+            else:
+                hs_label = self.mlp_label_head(rs)
 
             # modifier representations
-            ms_label = self.mlp_label_mod(rs_noroot)
+            if self.common_head_mod:
+                ms_label = [h_label[1:] for h_label in hs_label]
+            else:
+                if self.common_arc_label:
+                    ms_label = ms_arc
+                else:
+                    ms_label = self.mlp_label_mod(rs_noroot)
 
         else:
             hs_label = [None] * data_size
@@ -492,7 +524,11 @@ class RNNBiaffineParser(chainer.Chain):
             
         xp = cuda.get_array_module(xs[0])
         if self.label_prediction:
-            ldim = self.mlp_label_head.layers[-1].W.shape[0]
+            if self.common_arc_label:
+                ldim = self.mlp_arc_head.layers[-1].W.shape[0]
+            else:
+                ldim = self.mlp_label_head.layers[-1].W.shape[0]
+
         loss = chainer.Variable(xp.array(0, dtype='f'))
         yps = []                # predicted label
         yhs = []                # predicted head
@@ -744,6 +780,36 @@ def grow_crf_layer(id2label_org, id2label_grown, crf, file=sys.stderr):
     crf.cost = chainer.Parameter(initializer=c_new.data)
     
     print('Grow CRF layer: {} -> {}'.format(c_org.shape, crf.cost.shape, file=file))
+
+
+def grow_MLP(id2label_org, id2label_grown, out_layer, file=sys.stderr):
+    org_len = len(id2label_org)
+    new_len = len(id2label_grown)
+    diff = new_len - org_len
+
+    w_org = out_layer.W
+    w_org_shape = w_org.shape
+
+    dim = w_org.shape[1]
+    initialW = initializers.normal.Normal(1.0)
+
+    w_diff = chainer.variable.Parameter(initialW, (diff, dim))
+    w_new = F.concat((w_org, w_diff), 0)
+    out_layer.W = chainer.Parameter(initializer=w_new.data)
+    w_shape = out_layer.W.shape
+
+    if 'b' in out_layer.__dict__:
+        b_org = out_layer.b
+        b_org_shape = b_org.shape
+        b_diff = chainer.variable.Parameter(initialW, (diff,))
+        b_new = F.concat((b_org, b_diff), 0)
+        out_layer.b = chainer.Parameter(initializer=b_new.data)
+        b_shape = out_layer.b.shape
+    else:
+        b_org_shape = b_shape = None
+
+    print('Grow MLP output layer: {}, {} -> {}, {}'.format(
+        w_org_shape, b_org_shape, w_shape, b_shape), file=file)
 
 
 def grow_biaffine_layer(id2label_org, id2label_grown, biaffine, file=sys.stderr):

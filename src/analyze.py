@@ -49,18 +49,18 @@ def run(process_name):
     ################################
     # Load word embedding model
 
-    if args.unit_embed_model_path and args.execute_mode != 'interactive':
-        embed_model = trainers.load_embedding_model(args.unit_embed_model_path)
-        pretrained_unit_embed_dim = embed_model.wv.syn0[0].shape[0]
+    if args.token_embed_model_path and args.execute_mode != 'interactive':
+        embed_model = trainers.load_embedding_model(args.token_embed_model_path)
+        pretrained_token_embed_dim = embed_model.wv.syn0[0].shape[0]
     else:
         embed_model = None
-        pretrained_unit_embed_dim = 0
+        pretrained_token_embed_dim = 0
 
     ################################
     # Load feature extractor and classifier model
 
     if args.model_path:
-        trainer.load_model(args.model_path, pretrained_unit_embed_dim)
+        trainer.load_model(args.model_path, pretrained_token_embed_dim)
         indices_org = copy.deepcopy(trainer.indices)
     else:
         trainer.init_hyperparameters(args)
@@ -102,7 +102,7 @@ def run(process_name):
     trainer.setup_evaluator()
 
     if not trainer.classifier:
-        trainer.init_model(pretrained_unit_embed_dim)
+        trainer.init_model(pretrained_token_embed_dim)
         if embed_model:
             models.load_and_update_embedding_layer(
                 trainer.classifier.predictor.trained_word_embed, trainer.indices.token_indices.id2str, 

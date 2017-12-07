@@ -27,6 +27,19 @@ def merge_counts(c1, c2):
         return c
 
 
+    elif isinstance(c1, TACounts) or isinstance(c2, TACounts):
+        if c1 is None:
+            return c2
+        if c2 is None:
+            return c1
+            
+        c = TACounts()
+        c.l1 = merge_counts(c1.l1, c2.l1)
+        c.l2 = merge_counts(c1.l2, c2.l2)        
+        c.l3 = merge_counts(c1.l3, c2.l3)
+        return c
+
+
     elif isinstance(c1, conlleval.FCounts) or isinstance(c2, conlleval.FCounts):
         if c1 is None:
             return c2
@@ -45,7 +58,7 @@ def merge_counts(c1, c2):
         return c
 
     else:
-        print('Invalid count object', sys.stderr)
+        print('Invalid count object', file=sys.stderr)
         return None
 
 
@@ -59,6 +72,13 @@ class DACounts(object):
     def __init__(self):
         self.l1 = ACounts()
         self.l2 = ACounts()
+
+
+class TACounts(object):
+    def __init__(self):
+        self.l1 = ACounts()
+        self.l2 = ACounts()
+        self.l3 = ACounts()
 
 
 class AccuracyCalculator(object):
@@ -94,10 +114,6 @@ class DoubleAccuracyCalculator(object):
     def __call__(self, t1s, t2s, y1s, y2s):
         counts = DACounts()
         for t1, t2, y1, y2 in zip(t1s, t2s, y1s, y2s):
-            # print(t1)
-            # print(y1)
-            # print(t2)
-            # print(y2)
 
             if self.ignore_head:
                 t1 = t1[1:]
@@ -114,8 +130,45 @@ class DoubleAccuracyCalculator(object):
                 if t1i == y1i:
                     counts.l1.correct += 1
 
-                    if t2i == y2i:
+                    if t2i == y2i: # depend on t1i equals to y1i
                         counts.l2.correct += 1
+
+        return counts
+
+
+class TripleAccuracyCalculator(object):
+    def __init__(self, ignore_head=False, ignore_labels=set()):
+        self.ignore_head = ignore_head
+        self.ignore_labels = ignore_labels
+        
+
+    def __call__(self, t1s, t2s, t3s, y1s, y2s, y3s):
+        counts = TACounts()
+        for t1, t2, t3, y1, y2, y3 in zip(t1s, t2s, t3s, y1s, y2s, y3s):
+
+            if self.ignore_head:
+                t1 = t1[1:]
+                t2 = t2[1:]
+                t3 = t3[1:]
+                y1 = y1[1:]
+                y2 = y2[1:]
+                y3 = y3[1:]
+
+            for t1i, t2i, t3i, y1i, y2i, y3i in zip(t1, t2, t3, y1, y2, y3):
+                if int(t3i) in self.ignore_labels:
+                    continue
+
+                counts.l1.total += 1
+                counts.l2.total += 1
+                counts.l3.total += 1
+                if t1i == y1i:
+                    counts.l1.correct += 1
+
+                if t2i == y2i:
+                    counts.l2.correct += 1
+
+                    if t3i == y3i: # depend on t2i equals to y2i
+                        counts.l3.correct += 1
 
         return counts
 
@@ -129,7 +182,7 @@ class FMeasureCalculator(object):
         counts = None
         for x, t, y in zip(xs, ts, ys):
             generator = self.generate_lines(x, t, y)
-            eval_counts = conlleval.merge_counts(counts, conlleval.evaluate(generator))
+            eval_counts = merge_counts(counts, conlleval.evaluate(generator))
         return counts
 
 
@@ -213,28 +266,49 @@ class AccuracyEvaluator(object):
         return res
 
 
-class TaggerEvaluator(AccuracyEvaluator):
+class DoubleAccuracyEvaluator(object):
     def __init__(self, ignore_head=False, ignore_labels=set()):
-        super(TaggerEvaluator, self).__init__(ignore_head=False, ignore_labels=set())
-
-
-class ParserEvaluator(AccuracyEvaluator):
-    def __init__(self, ignore_head=True, ignore_labels=set()):
-        super(ParserEvaluator, self).__init__(ignore_head=True, ignore_labels=set())
-
-
-class TypedParserEvaluator(object):
-    def __init__(self, ignore_head=True, ignore_labels=set()):
         self.calculator = DoubleAccuracyCalculator(ignore_head, ignore_labels)
 
 
     def calculate(self, *inputs):
-        ths = inputs[1]
-        tls = inputs[2]
-        yhs = inputs[3]
-        yls = inputs[4]
-        counts = self.calculator(ths, tls, yhs, yls)
+        t1s = inputs[1]
+        t2s = inputs[2]
+        y1s = inputs[3]
+        y2s = inputs[4]
+        counts = self.calculator(t1s, t2s, y1s, y2s)
         return counts
+
+
+class TripleAccuracyEvaluator(object):
+    def __init__(self, ignore_head=False, ignore_labels=set()):
+        self.calculator = TripleAccuracyCalculator(ignore_head, ignore_labels)
+
+
+    def calculate(self, *inputs):
+        t1s = inputs[1]
+        t2s = inputs[2]
+        t3s = inputs[3]
+        y1s = inputs[4]
+        y2s = inputs[5]
+        y3s = inputs[6]
+        counts = self.calculator(t1s, t2s, t3s, y1s, y2s, y3s)
+        return counts
+
+
+class TaggerEvaluator(AccuracyEvaluator):
+    def __init__(self, ignore_head=False, ignore_labels=set()):
+        super(TaggerEvaluator, self).__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
+
+
+class ParserEvaluator(AccuracyEvaluator):
+    def __init__(self, ignore_head=True, ignore_labels=set()):
+        super(ParserEvaluator, self).__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
+
+
+class TypedParserEvaluator(DoubleAccuracyEvaluator):
+    def __init__(self, ignore_head=True, ignore_labels=set()):
+        super().__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
 
 
     def report_results(self, sen_counter, counts, loss, stream=sys.stderr):
@@ -246,6 +320,46 @@ class TypedParserEvaluator(object):
         print('sen, token, correct head, correct label: {} {} {} {}'.format(
             sen_counter, counts.l1.total, counts.l1.correct, counts.l2.correct), file=stream)
         print('UAS, LAS:%6.2f %6.2f' % ((100.*uas), (100.*las)), file=stream)
+
+        res = '%.2f\t%.2f\t%.4f' % ((100.*uas), (100.*las), ave_loss)
+        return res
+
+
+class TaggerParserEvaluator(DoubleAccuracyEvaluator):
+    def __init__(self, ignore_head=True, ignore_labels=set()):
+        super().__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
+
+
+    def report_results(self, sen_counter, counts, loss, stream=sys.stderr):
+        ave_loss = loss / counts.l1.total
+        uas = 1.*counts.l1.correct / counts.l1.total
+        las = 1.*counts.l2.correct / counts.l2.total
+        
+        print('ave loss: %.5f'% ave_loss, file=stream)
+        print('sen, token, correct head, correct label: {} {} {} {}'.format(
+            sen_counter, counts.l1.total, counts.l1.correct, counts.l2.correct), file=stream)
+        print('POS, UAS:%6.2f %6.2f' % ((100.*uas), (100.*las)), file=stream)
+
+        res = '%.2f\t%.2f\t%.4f' % ((100.*uas), (100.*las), ave_loss)
+        return res
+
+
+class TaggerTypedParserEvaluator(TripleAccuracyEvaluator):
+    def __init__(self, ignore_head=True, ignore_labels=set()):
+        super().__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
+
+
+    def report_results(self, sen_counter, counts, loss, stream=sys.stderr):
+        ave_loss = loss / counts.l1.total
+        pos = 1.*counts.l1.correct / counts.l1.total
+        uas = 1.*counts.l2.correct / counts.l2.total
+        las = 1.*counts.l3.correct / counts.l3.total
+        
+        print('ave loss: %.5f'% ave_loss, file=stream)
+        print('sen, token, correct pos, correct head, correct label: {} {} {} {} {}'.format(
+            sen_counter, counts.l1.total, counts.l1.correct, counts.l2.correct, counts.l3.correct), 
+              file=stream)
+        print('POS, UAS, LAS:%6.2f %6.2f %6.2f' % ((100.*pos), (100.*uas), (100.*las)), file=stream)
 
         res = '%.2f\t%.2f\t%.4f' % ((100.*uas), (100.*las), ave_loss)
         return res

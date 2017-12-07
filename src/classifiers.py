@@ -135,11 +135,14 @@ class DependencyParser(Classifier):
 
 
     def change_hidden_mlp_dropout_ratio(self, dropout_ratio, stream=sys.stderr):
-        self.predictor.affine_arc_head.dropout = dropout_ratio
-        self.predictor.affine_arc_mod.dropout = dropout_ratio
+        self.predictor.mlp_arc_head.dropout = dropout_ratio
+        if self.predictor.mlp_arc_mod is not None:
+            self.predictor.mlp_arc_mod.dropout = dropout_ratio
         if self.predictor.label_prediction:
-            self.predictor.affine_label_head.dropout = dropout_ratio
-            self.predictor.affine_label_mod.dropout = dropout_ratio
+            if self.predictor.mlp_label_head is not None:
+                self.predictor.mlp_label_head.dropout = dropout_ratio
+            if self.predictor.mlp_label_mod is not None:
+                self.predictor.mlp_label_mod.dropout = dropout_ratio
         print('Set {} dropout ratio to {}'.format('MLP', dropout_ratio), file=stream)
 
 
@@ -170,11 +173,11 @@ class DependencyParser(Classifier):
 
         if (self.predictor.label_prediction and
             len(id2alab_grown) > len(id2alab_org)):
-            models.grow_biaffine_layer(
-                id2alab_org, id2alab_grown, self.predictor.biaffine_label)
+            models.grow_MLP(
+                id2alab_org, id2alab_grown, self.predictor.mlp_label.layers[-1])
 
 
-def init_classifier(classifier_type, hparams, indices, pretrained_unit_embed_dim=0):
+def init_classifier(classifier_type, hparams, indices, pretrained_token_embed_dim=0):
     #, finetune_external_embed=False):
     n_vocab = len(indices.token_indices)
 
@@ -187,13 +190,13 @@ def init_classifier(classifier_type, hparams, indices, pretrained_unit_embed_dim
 
         if hparams['inference_layer'] == 'crf':
             predictor = models.RNNCRFTagger(
-                n_vocab, hparams['unit_embed_dim'], hparams['rnn_unit_type'], 
+                n_vocab, hparams['token_embed_dim'], hparams['rnn_unit_type'], 
                 hparams['rnn_bidirection'], hparams['rnn_n_layers'], hparams['rnn_n_units'], 
                 n_labels, feat_dim=hparams['additional_feat_dim'], dropout=hparams['dropout'])
                 
         else:
             predictor = models.RNNTagger(
-                n_vocab, hparams['unit_embed_dim'], hparams['rnn_unit_type'], 
+                n_vocab, hparams['token_embed_dim'], hparams['rnn_unit_type'], 
                 hparams['rnn_bidirection'], hparams['rnn_n_layers'], hparams['rnn_n_units'], 
                 n_labels, feat_dim=hparams['additional_feat_dim'], dropout=hparams['dropout'])
             
@@ -217,7 +220,7 @@ def init_classifier(classifier_type, hparams, indices, pretrained_unit_embed_dim
             mlp4pospred_n_units = 0
 
         predictor = models.RNNBiaffineParser(
-            n_vocab, hparams['unit_embed_dim'], n_pos, hparams['pos_embed_dim'],
+            n_vocab, hparams['token_embed_dim'], n_pos, hparams['pos_embed_dim'],
             hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_n_layers'], 
             hparams['rnn_n_units'], 
             hparams['mlp4arcrep_n_layers'], hparams['mlp4arcrep_n_units'],
@@ -228,7 +231,7 @@ def init_classifier(classifier_type, hparams, indices, pretrained_unit_embed_dim
             n_labels=n_labels, rnn_dropout=hparams['rnn_dropout'], 
             hidden_mlp_dropout=hparams['hidden_mlp_dropout'], 
             pred_layers_dropout=hparams['pred_layers_dropout'],
-            trained_word_embed_dim=pretrained_unit_embed_dim)
+            trained_word_embed_dim=pretrained_token_embed_dim)
 
         classifier = DependencyParser(predictor)
 

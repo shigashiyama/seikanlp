@@ -6,7 +6,7 @@ class Arguments(object):
         self.parser = argparse.ArgumentParser()
         parser = self.parser
 
-        ### used letters: bcegmopqtvx
+        ### used letters: bcegmopqtuvx
 
         # mandatory options
         parser.add_argument('--execute_mode', '-x', required=True,
@@ -39,6 +39,9 @@ class Arguments(object):
         parser.add_argument('--learning_rate', type=float, default=1.0, 
                             help='Initial learning rate (Default: 1.0)')
         parser.add_argument('--momentum', type=float, default=0.0, help='Momentum ratio for SGD')
+        parser.add_argument('--adam_alpha', type=float, default=0.001, help='alpha for Adam')
+        parser.add_argument('--adam_beta1', type=float, default=0.9, help='beta1 for Adam')
+        parser.add_argument('--adam_beta2', type=float, default=0.999, help='beta2 for Adam')
         parser.add_argument('--lrdecay', default='', 
                             help='Specify information on learning rate decay'
                             + ' by format \'start:width:rate\''
@@ -54,8 +57,15 @@ class Arguments(object):
                             + 'are also read simultaneously if you specify \'xxx_izzz.npz\' file.')
 
         # model parameters
-        parser.add_argument('--unit_embed_dim', '-d', type=int, default=300,
-                            help='The number of dimension of unit (character or word) embedding'
+        parser.add_argument('--freq_threshold', type=int, default=1,
+                            help='The threshold of frequency to regard tokens as unknown tokens'
+                            + '(Default: 1)')
+        parser.add_argument('--max_vocab_size', type=int, default=-1,
+                            help='')
+        parser.add_argument('--no_freq_update', action='store_true',
+                            help='')
+        parser.add_argument('--token_embed_dim', '-d', type=int, default=300,
+                            help='The number of dimension of token (character or word) embedding'
                             + '(Default: 300)')
 
         # data paths and related options
@@ -76,8 +86,8 @@ class Arguments(object):
         parser.add_argument('--dump_train_data', action='store_true',
                             help='Dump data specified as \'train_data\''
                             + ' using new file name endding with \'.pickle\'')
-        parser.add_argument('--unit_embed_model_path', 
-                            help='File path of pretrained model of unit (character or word) embedding')
+        parser.add_argument('--token_embed_model_path', 
+                            help='File path of pretrained model of token (character or word) embedding')
         parser.add_argument('--fix_pretrained_embed', action='store_true',
                             help='')
 
@@ -115,7 +125,7 @@ class TaggerArguments(Arguments):
         super(TaggerArguments, self).__init__()
         parser = self.parser
 
-        ### used letters: bcegmopqtvwx + dflsuw
+        ### used letters: + dflsuw
 
         # model parameters
         parser.add_argument('--dropout', type=float, default=0.0, 
@@ -127,7 +137,7 @@ class TaggerArguments(Arguments):
                             help='Use bidirectional RNN')
         parser.add_argument('--rnn_n_layers', '-l', type=int, default=1, 
                             help='The number of RNN layers (Default: 1)')
-        parser.add_argument('--rnn_n_units', '-u', type=int, default=800,
+        parser.add_argument('--rnn_n_units', type=int, default=800,
                             help='The number of hidden units of RNN (Default: 800)')
         parser.add_argument('--inference_layer', default='crf',
                             help='Choose type of inference layer from between \'softmax\' and \'crf\''
@@ -162,7 +172,7 @@ class ParserArguments(Arguments):
         super(ParserArguments, self).__init__()
         parser = self.parser
 
-        ### used letters: bcegmopqtvx + flsu
+        ### used letters: + fls
 
         # model parameters
         parser.add_argument('--rnn_dropout', type=float, default=0.0, 
@@ -180,7 +190,7 @@ class ParserArguments(Arguments):
                             help='Use bidirectional RNN')
         parser.add_argument('--rnn_n_layers', '-l', type=int, default=1, 
                             help='The number of RNN layers (Default: 1)')
-        parser.add_argument('--rnn_n_units', '-u', type=int, default=400,
+        parser.add_argument('--rnn_n_units', type=int, default=400,
                             help='The number of hidden units of RNN (Default: 400)')
         parser.add_argument('--mlp4pospred_n_layers', type=int, default=0, 
                             help='')

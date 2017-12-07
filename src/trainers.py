@@ -138,13 +138,13 @@ class Trainer(object):
             self.hparams.update({'additional_feat_dim' : feat_dim})
 
 
-    def init_model(self, pretrained_unit_embed_dim=0):
+    def init_model(self, pretrained_token_embed_dim=0):
         self.log('Initialize model from hyperparameters\n')
         self.classifier = classifiers.init_classifier(
-            self.decode_type, self.hparams, self.indices, pretrained_unit_embed_dim)
+            self.decode_type, self.hparams, self.indices, pretrained_token_embed_dim)
 
 
-    def load_model(self, model_path, pretrained_unit_embed_dim=0):
+    def load_model(self, model_path, pretrained_token_embed_dim=0):
         array = model_path.split('_e')
         indices_path = '{}.s2i'.format(array[0])
         hparam_path = '{}.hyp'.format(array[0])
@@ -175,7 +175,7 @@ class Trainer(object):
         self.log('')
 
         # model
-        self.init_model(pretrained_unit_embed_dim)
+        self.init_model(pretrained_token_embed_dim)
         chainer.serializers.load_npz(model_path, self.classifier)
         self.log('Load model parameters: {}\n'.format(model_path))
 
@@ -219,7 +219,7 @@ class Trainer(object):
         
         # if args.label_reference_data:
         #     _, self.indices = data_io.load_data(
-        #         data_format, refer_path, read_pos=read_pos, update_token=False,
+        #         data_format, refer_path, read_pos=read_pos, update_tokens=False,
         #         create_word_trie=create_word_trie, subpos_depth=subpos_depth, 
         #         lowercase=lowercase, normalize_digits=normalize_digits, 
         #         indices=self.indices)
@@ -236,10 +236,13 @@ class Trainer(object):
                 data_format, train_path, read_pos=read_pos,
                 create_word_trie=create_word_trie, subpos_depth=subpos_depth, 
                 lowercase=lowercase, normalize_digits=normalize_digits, 
+                max_vocab_size=args.max_vocab_size, freq_threshold=args.freq_threshold,
                 indices=self.indices, refer_vocab=refer_vocab)
         
             if self.args.dump_train_data:
                 name, ext = os.path.splitext(train_path)
+                if args.max_vocab_size > 0 or args.freq_threshold > 1:
+                    name = '{}_{}k'.format(name, int(len(self.indices.token_indices) / 1000))
                 data_io.dump_pickled_data(name, train)
                 self.log('Dumpped training data: {}.pickle'.format(train_path))
 
@@ -253,9 +256,10 @@ class Trainer(object):
         if args.valid_data:
             # indices can be updated if embed_model are used
             val, self.indices = data_io.load_data(
-                data_format, val_path, read_pos=read_pos, update_token=False, update_label=False,
+                data_format, val_path, read_pos=read_pos, update_tokens=False, update_labels=False,
                 create_word_trie=create_word_trie, subpos_depth=subpos_depth, 
                 lowercase=lowercase, normalize_digits=normalize_digits, 
+                max_vocab_size=args.max_vocab_size, freq_threshold=args.freq_threshold,
                 indices=self.indices, refer_vocab=refer_vocab)
 
             self.log('Load validation data: {}'.format(val_path))
@@ -287,9 +291,10 @@ class Trainer(object):
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
             
         test, self.indices = data_io.load_data(
-            data_format, test_path, read_pos=read_pos, update_token=False, update_label=False,
+            data_format, test_path, read_pos=read_pos, update_tokens=False, update_labels=False,
             create_word_trie=create_word_trie, subpos_depth=subpos_depth, 
             lowercase=lowercase, normalize_digits=normalize_digits, 
+            max_vocab_size=args.max_vocab_size, freq_threshold=args.freq_threshold,
             indices=self.indices, refer_vocab=refer_vocab)
 
         self.log('Load test data: {}'.format(test_path))
@@ -316,7 +321,11 @@ class Trainer(object):
                 optimizer = chainer.optimizers.MomentumSGD(
                     lr=self.args.learning_rate, momentum=self.args.momentum)
         elif self.args.optimizer == 'adam':
-            optimizer = chainer.optimizers.Adam()
+            optimizer = chainer.optimizers.Adam(
+                alpha=self.args.adam_alpha,
+                beta1=self.args.adam_beta1,
+                beta2=self.args.adam_beta2
+            )
         elif self.args.optimizer == 'adagrad':
             optimizer = chainer.optimizers.AdaGrad(lr=self.args.learning_rate)
 
@@ -528,15 +537,15 @@ class TaggerTrainer(Trainer):
         super(TaggerTrainer, self).__init__(args, logger)
 
 
-    def load_model(self, model_path, pretrained_unit_embed_dim=0):
-        super().load_model(model_path, pretrained_unit_embed_dim)
+    def load_model(self, model_path, pretrained_token_embed_dim=0):
+        super().load_model(model_path, pretrained_token_embed_dim)
         if 'dropout' in self.hparams:
             self.classifier.change_dropout_ratio(self.hparams['dropout'])
 
 
-    def init_hyperparameters(self, args, pretrained_unit_embed_dim=0):
+    def init_hyperparameters(self, args, pretrained_token_embed_dim=0):
         self.hparams = {
-            'unit_embed_dim' : args.unit_embed_dim,
+            'token_embed_dim' : args.token_embed_dim,
             'rnn_unit_type' : args.rnn_unit_type,
             'rnn_bidirection' : args.rnn_bidirection,
             'rnn_n_layers' : args.rnn_n_layers,
@@ -572,7 +581,7 @@ class TaggerTrainer(Trainer):
                 key = kv[0]
                 val = kv[1]
 
-                if (key == 'unit_embed_dim' or
+                if (key == 'token_embed_dim' or
                     key == 'additional_feat_dim' or
                     key == 'rnn_n_layers' or
                     key == 'rnn_n_units' or
@@ -713,8 +722,8 @@ class ParserTrainer(Trainer):
         super(ParserTrainer, self).__init__(args, logger)
 
 
-    def load_model(self, model_path, pretrained_unit_embed_dim=0):
-        super().load_model(model_path, pretrained_unit_embed_dim)
+    def load_model(self, model_path, pretrained_token_embed_dim=0):
+        super().load_model(model_path, pretrained_token_embed_dim)
         if 'rnn_dropout' in self.hparams:
             self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
         if 'hidden_mlp_dropout' in self.hparams:
@@ -725,7 +734,7 @@ class ParserTrainer(Trainer):
 
     def init_hyperparameters(self, args):
         self.hparams = {
-            'unit_embed_dim' : args.unit_embed_dim,
+            'token_embed_dim' : args.token_embed_dim,
             'pos_embed_dim' : args.pos_embed_dim,
             'rnn_unit_type' : args.rnn_unit_type,
             'rnn_bidirection' : args.rnn_bidirection,
@@ -770,8 +779,8 @@ class ParserTrainer(Trainer):
                 key = kv[0]
                 val = kv[1]
 
-                if (key == 'unit_embed_dim' or
-                    key == 'pretrained_unit_embed_dim' or
+                if (key == 'token_embed_dim' or
+                    key == 'pretrained_token_embed_dim' or
                     key == 'pos_embed_dim' or
                     key == 'rnn_n_layers' or
                     key == 'rnn_n_units' or
