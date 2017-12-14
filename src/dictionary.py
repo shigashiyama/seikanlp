@@ -164,30 +164,37 @@ class IndexTable(object):
 
 class Dictionary(object):
     def __init__(self, use_seg_label=False, use_pos_label=False, use_arc_label=False,
-                 use_word_trie=False, use_root=False):
+                 use_subtoken=False, use_chunk_trie=False, use_root=False):
         self.token_indices = IndexTable()
+        self.subtoken_indices = IndexTable() if use_subtoken else None
         self.seg_label_indices = IndexTable() if use_seg_label else None
         self.pos_label_indices = IndexTable() if use_pos_label else None
         self.arc_label_indices = IndexTable() if use_arc_label else None
 
         if use_root:
             self.root_id = self.token_indices.get_id(constants.ROOT_SYMBOL, update=True)
-            self.root_id = self.pos_label_indices.get_id(constants.ROOT_SYMBOL, update=True)
+            self.pos_label_indices.get_id(constants.ROOT_SYMBOL, update=True)
+            if use_subtoken:
+                self.subtoken_indices.get_id(constants.ROOT_SYMBOL, update=True)
         else:
             self.root_id = -1
 
+        # unknown token
         self.token_indices.set_unk(constants.UNK_SYMBOL)
+        if use_subtoken:
+            self.subtoken_indices.set_unk(constants.UNK_SYMBOL)
 
-        if use_word_trie:
-            word_unk_id = np.int32(0)
-            self.word_trie = MapTrie()
-            self.id2word = {word_unk_id : constants.UNK_SYMBOL}
+
+        if use_chunk_trie:
+            chunk_unk_id = np.int32(0)
+            self.chunk_trie = MapTrie()
+            self.id2chunk = {chunk_unk_id : constants.UNK_SYMBOL}
             pos_unk_id = self.pos_label_indices.set_unk(constants.UNK_SYMBOL)
             self.wid2pids = Key2Values()
-            self.wid2pids.add(word_unk_id, pos_unk_id)
+            self.wid2pids.add(chunk_unk_id, pos_unk_id)
         else:
-            self.word_trie = None
-            self.id2word = None
+            self.chunk_trie = None
+            self.id2chunk = None
             self.wid2pids = None
 
 
@@ -207,6 +214,9 @@ class Dictionary(object):
         if self.token_indices:
             self.token_indices.create_id2str()
 
+        if self.subtoken_indices:
+            self.subtoken_indices.create_id2str()
+
         if self.seg_label_indices:
             self.seg_label_indices.create_id2str()
 
@@ -220,11 +230,19 @@ class Dictionary(object):
     def get_token(self, ti):
         ti = int(ti)
         return self.token_indices.id2str[ti]
-        # return self.id2token[ti] if ti in self.id2token else UNK_TOKEN
 
 
     def get_token_id(self, token):
         return self.token_indices.get_id(token)
+
+
+    def get_subtoken(self, si):
+        si = int(si)
+        return self.subtoken_indices.id2str[si]
+
+
+    def get_subtoken_id(self, subtoken):
+        return self.subtoken_indices.get_id(subtoken)
 
 
     def get_seg_label(self, li):
@@ -251,27 +269,25 @@ class Dictionary(object):
         return self.arc_label_indices.get_id(label)
 
 
-    def get_word(self, wi):
-        if wi in self.id2word:
-            return self.id2word[wi]
+    def get_chunk(self, wi):
+        if wi in self.id2chunk:
+            return self.id2chunk[wi]
         else:
             return constants.UNK_SYMBOL
 
 
-    def get_entries(self, word, pos, update=False):
-        char_ids = [self.token_indices.get_id(char, update=update) for char in word]
+    # token indicates character
+    # chunk indicates word
+    def get_entries(self, chunk, pos, update=False):
+        token_ids = [self.token_indices.get_id(t, update=update) for t in chunk]
 
-        wid = self.word_trie.get_word_id(char_ids, update)
+        cid = self.chunk_trie.get_chunk_id(token_ids, update)
         pid = self.pos_label_indices.get_id(pos, update=update) if pos else None
         if update:
-            self.id2word[wid] = word
+            self.id2chunk[cid] = chunk
             if pid:
-                self.wid2pids.add(wid, pid)
+                self.wid2pids.add(cid, pid)
         return char_ids, wid, pid
-
-
-    # def init_segmentation_labels(self):
-    #     self.slabel_indices.add_entries(constants.SEG_LABELS)
 
 
 # load vocabulary from external dictionary resource

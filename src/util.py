@@ -21,6 +21,11 @@ class Timer(object):
         self.elapsed = 0
 
 
+    def restart(self):
+        self.reset()
+        self.start()
+
+
 if __name__ == '__main__':
     timer = Timer()
 

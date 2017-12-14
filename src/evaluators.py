@@ -57,6 +57,18 @@ def merge_counts(c1, c2):
 
         return c
 
+    elif isinstance(c1, DFCounts) or isinstance(c2, DFCounts):
+        if c1 is None:
+            return c2
+        if c2 is None:
+            return c1
+
+        c = DFCounts()
+        c.l1 = merge_counts(c1.l1, c2.l1)
+        c.l2 = merge_counts(c1.l2, c2.l2)        
+
+        return c
+
     else:
         print('Invalid count object', file=sys.stderr)
         return None
@@ -79,6 +91,12 @@ class TACounts(object):
         self.l1 = ACounts()
         self.l2 = ACounts()
         self.l3 = ACounts()
+
+
+class DFCounts(object):
+    def __init__(self):
+        self.l1 = conlleval.FCounts()
+        self.l2 = conlleval.FCounts()
 
 
 class AccuracyCalculator(object):
@@ -174,15 +192,15 @@ class TripleAccuracyCalculator(object):
 
 
 class FMeasureCalculator(object):
-    def __init__(self, label_indices):
-        self.label_indices = label_indices
+    def __init__(self, id2label):
+        self.id2label = id2label
 
 
     def __call__(self, xs, ts, ys):
-        counts = None
+        counts = conlleval.FCounts()
         for x, t, y in zip(xs, ts, ys):
             generator = self.generate_lines(x, t, y)
-            eval_counts = merge_counts(counts, conlleval.evaluate(generator))
+            counts = conlleval.evaluate(generator, counts=counts)
         return counts
 
 
@@ -192,20 +210,65 @@ class FMeasureCalculator(object):
             if i == len(x):
                 raise StopIteration
             x_str = str(x[i])
-            t_str = self.label_indices.get_label(int(t[i]))
-            y_str = self.label_indices.get_label(int(y[i]))
+            t_str = self.id2label[int(t[i])]
+            y_str = self.id2label[int(y[i])]
+
+            yield [x_str, t_str, y_str]
+            i += 1
+
+
+class DoubleFMeasureCalculator(object):
+    def __init__(self, id2label):
+        self.id2label = id2label
+
+
+    def __call__(self, xs, ts, ys):
+        counts = DFCounts()
+
+        for x, t, y in zip(xs, ts, ys):
+            generator_seg = self.generate_lines_seg(x, t, y)
+            generator_tag = self.generate_lines(x, t, y)
+            counts.l1 = conlleval.evaluate(generator_seg, counts=counts.l1)
+            counts.l2 = conlleval.evaluate(generator_tag, counts=counts.l2)
+
+        return counts
+
+
+    def generate_lines_seg(self, x, t, y):
+        i = 0
+        while True:
+            if i == len(x):
+                raise StopIteration
+            x_str = str(x[i])
+            t_str = self.id2label[int(t[i])] 
+            y_str = self.id2label[int(y[i])] 
+            tseg_str = t_str.split('-')[0]
+            yseg_str = y_str.split('-')[0]
+
+            yield [x_str, tseg_str, yseg_str]
+            i += 1
+
+
+    def generate_lines(self, x, t, y):
+        i = 0
+        while True:
+            if i == len(x):
+                raise StopIteration
+            x_str = str(x[i])
+            t_str = self.id2label[int(t[i])] 
+            y_str = self.id2label[int(y[i])] 
 
             yield [x_str, t_str, y_str]
             i += 1
 
 
 class SegmenterEvaluator(object):
-    def __init__(self, label_indices):
-        self.calculator = FMeasureCalculator()
+    def __init__(self, id2label):
+        self.calculator = FMeasureCalculator(id2label)
 
 
     def calculate(self, *inputs):
-        coutns = self.calculator(*inputs)
+        counts = self.calculator(*inputs)
         return counts
 
 
@@ -227,18 +290,37 @@ class SegmenterEvaluator(object):
 
 
 class JointSegmenterEvaluator(object):
-    def __init__(self):
-        self.calculator = FMeasureCalculator()
+    def __init__(self, id2label):
+        self.calculator = DoubleFMeasureCalculator(id2label)
 
 
     def calculate(self, *inputs):
-        # to be implemented
-        pass
+        counts = self.calculator(*inputs)
+        return counts
 
 
     def report_results(self, sen_counter, counts, loss, stream=sys.stderr):
-        # to be implemented
-        pass
+        ave_loss = loss / counts.l1.token_counter
+        met1 = conlleval.calculate_metrics(
+            counts.l1.correct_chunk, counts.l1.found_guessed, counts.l1.found_correct)
+        met2 = conlleval.calculate_metrics(
+            counts.l2.correct_chunk, counts.l2.found_guessed, counts.l2.found_correct)
+        
+        print('ave loss: %.5f'% ave_loss, file=stream)
+        print('sen, token, chunk, chunk_pred: {} {} {} {}'.format(
+            sen_counter, counts.l1.token_counter, counts.l1.found_correct, counts.l1.found_guessed), 
+              file=stream)
+        print('SEG - TP, FP, FN / A, P, R, F: %d %d %d /\t%6.2f %6.2f %6.2f %6.2f' % (
+            met1.tp, met1.fp, met1.fn, 100.*met1.acc, 100.*met1.prec, 100.*met1.rec, 100.*met1.fscore),
+              file=stream)
+        print('TAG - TP, FP, FN / A, P, R, F: %d %d %d /\t%6.2f %6.2f %6.2f %6.2f' % (
+            met2.tp, met2.fp, met2.fn, 100.*met2.acc, 100.*met2.prec, 100.*met2.rec, 100.*met2.fscore),
+              file=stream)
+
+        res = '%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.4f' % (
+            (100.*met1.acc), (100.*met1.prec), (100.*met1.rec), (100.*met1.fscore), 
+            (100.*met2.acc), (100.*met2.prec), (100.*met2.rec), (100.*met2.fscore), ave_loss)
+        return res
 
 
 class AccuracyEvaluator(object):

@@ -10,22 +10,18 @@ import dictionary
 
 
 class Data(object):
-    def __init__(self, instances, labels):
-        self.instances = instances
-        self.labels = labels    # list of label sequences (e.g. seg, pos, dep and arc)
+    def __init__(self, tokenseqs, labels, subtokenseqs=None):
+        self.tokenseqs = tokenseqs
+        self.subtokenseqs = subtokenseqs
+        self.labels = labels    # list of label sequences (seg, pos, dep and arc)
         self.features = None
-
-        # self.seg_labels = seg_labels
-        # self.pos_labels = pos_labels
-        # self.dep_labels = dep_labels
-        # self.arc_labels = arc_labesl
 
     def set_features(self, features):
         self.features = features
 
 
-def load_raw_text_for_segmentation(path, indices):
-    instances = []
+def load_raw_text_for_segmentation(path, dic):
+    tokenseqs = []
     ins_cnt = 0
 
     with open(path) as f:
@@ -34,18 +30,18 @@ def load_raw_text_for_segmentation(path, indices):
             if len(line) < 1:
                 continue
 
-            ins = [indices.get_token_id(char) for char in line]
-            instances.append(ins)
+            ins = [dic.get_token_id(char) for char in line]
+            tokenseqs.append(ins)
 
             ins_cnt += 1
             if ins_cnt % 100000 == 0:
-                print('read', ins_cnt, 'instances', file=sys.stderr)
+                print('read', ins_cnt, 'sentences', file=sys.stderr)
 
-    return instances
+    return tokenseqs
 
 
-def load_raw_text_for_tagging(path, indices):
-    instances = []
+def load_raw_text_for_tagging(path, dic):
+    tokenseqs = []
     ins_cnt = 0
 
     with open(path) as f:
@@ -55,14 +51,14 @@ def load_raw_text_for_tagging(path, indices):
                 continue
 
             array = line.split(' ')
-            ins = [indices.get_token_id(word) for word in array]
-            instances.append(ins)
+            ins = [dic.get_token_id(word) for word in array]
+            tokenseqs.append(ins)
 
             ins_cnt += 1
             if ins_cnt % 100000 == 0:
-                print('read', ins_cnt, 'instances', file=sys.stderr)
+                print('read', ins_cnt, 'sentences', file=sys.stderr)
 
-    return instances
+    return tokenseqs
 
 
 """
@@ -76,19 +72,19 @@ otherwise, the following format is expected for segmentation:
 def load_data_SL(path, segmentation=True, tagging=False,
                  update_tokens=True, update_labels=True, 
                  lowercase=False, normalize_digits=True,
-                 subpos_depth=-1, create_word_trie=False, 
-                 freq_words=set(), indices=None, refer_vocab=set()):
-    if not indices:
-        indices = dictionary.Dictionary(
-            use_seg_label=segmentation, use_pos_label=tagging, use_word_trie=create_word_trie)
+                 subpos_depth=-1, use_subtoken=False, create_chunk_trie=False, 
+                 freq_tokens=set(), dic=None, refer_vocab=set()):
+    if not dic:
+        dic = dictionary.Dictionary(
+            use_seg_label=segmentation, use_pos_label=tagging, 
+            use_subtoken=use_subtoken, use_chunk_trie=create_chunk_trie)
 
     delim = constants.DELIM1_SYMBOL
 
     ins_cnt = 0
-    word_cnt = 0
-    token_cnt = 0
 
-    instances = []
+    tokenseqs = []
+    subtokenseqs = []
     seg_seqs = []               # list of segmentation label sequences
     pos_seqs = []               # list of POS label sequences
 
@@ -105,7 +101,8 @@ def load_data_SL(path, segmentation=True, tagging=False,
                 continue
             
             entries = re.sub(' +', ' ', line).split()
-            ins = []
+            t_seq = []
+            st_seq = []
             seg_seq = []
             pos_seq = []
 
@@ -127,7 +124,7 @@ def load_data_SL(path, segmentation=True, tagging=False,
 
                     if segmentation and update_labels:
                         for seg_lab in constants.SEG_LABELS:
-                            indices.seg_label_indices.get_id('{}-{}'.format(seg_lab, pos) , True)
+                            dic.seg_label_indices.get_id('{}-{}'.format(seg_lab, pos) , True)
                 else:
                     pos = None    
                         
@@ -135,39 +132,50 @@ def load_data_SL(path, segmentation=True, tagging=False,
 
                 if segmentation:
                     update_token = [
-                        update_each_token(word[i], freq_words, refer_vocab, update_tokens) for i in range(wlen)]
-                    ins.extend([indices.token_indices.get_id(word[i], update_token[i]) for i in range(wlen)])
+                        update_each_token(word[i], update_tokens, freq_tokens, refer_vocab) for i in range(wlen)]
+                    t_seq.extend([dic.token_indices.get_id(word[i], update_token[i]) for i in range(wlen)])
                     seg_seq.extend(
-                        [indices.seg_label_indices.get_id(
+                        [dic.seg_label_indices.get_id(
                             get_label_BIES(i, wlen-1, cate=pos), update=update_labels) for i in range(wlen)])
 
-                    if create_word_trie and update_token == [True for i in range(wlen)]: # update word trie
+                    if create_chunk_trie and update_token == [True for i in range(wlen)]: # update word trie
                         ids = chars[-wlen:]
-                        indices.word_trie.get_word_id(ids, True)
+                        dic.chunk_trie.get_chunk_id(ids, True)
 
                 else:
-                    update_token = update_each_token(word, freq_words, refer_vocab, update_tokens)
-                    ins.append(indices.token_indices.get_id(word, update=update_token))
-                    pos_seq.append(indices.pos_label_indices.get_id(pos, update=update_labels))
+                    update_token = update_each_token(word, update_tokens, freq_tokens, refer_vocab)
+                    t_seq.append(dic.token_indices.get_id(word, update=update_token))
+                    pos_seq.append(dic.pos_label_indices.get_id(pos, update=update_labels))
+
+                    if use_subtoken:
+                        update_token = [
+                            update_each_token(word[i], update_tokens, refer_vocab) for i in range(wlen)]
+                        st_seq.append(
+                            [dic.subtoken_indices.get_id(word[i], update_token[i]) for i in range(wlen)])
 
             ins_cnt += 1
 
-            instances.append(ins)
+            tokenseqs.append(t_seq)
+            if subtokenseqs:
+                subtokenseqs.append(st_seq)
             if seg_seq:
                 seg_seqs.append(seg_seq)
             if pos_seq:
                 pos_seqs.append(pos_seq)
 
             if ins_cnt % 100000 == 0:
-                print('Read', ins_cnt, 'instances', file=sys.stderr)
+                print('Read', ins_cnt, 'sentences', file=sys.stderr)
 
     label_seqs_list = []
+
+    if subtokenseqs:
+        subtokenseqs.append(st_seq)
     if seg_seqs:
         label_seqs_list.append(seg_seqs)
     if pos_seqs:
         label_seqs_list.append(pos_seqs)
 
-    return Data(instances, label_seqs_list), indices
+    return Data(tokenseqs, label_seqs_list, subtokenseqs), dic
 
 
 """
@@ -185,13 +193,14 @@ otherwise, the following format is expected for segmentation:
 def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_parsing=False,
                  update_tokens=True, update_labels=True, 
                  lowercase=False, normalize_digits=True,
-                 subpos_depth=-1, create_word_trie=False, 
-                 freq_words=set(), indices=None, refer_vocab=set()):
+                 subpos_depth=-1, use_subtoken=False, create_chunk_trie=False, 
+                 freq_tokens=set(), dic=None, refer_vocab=set()):
     read_pos = tagging or parsing
-    if not indices:
-        indices = dictionary.Dictionary(
+    if not dic:
+        dic = dictionary.Dictionary(
             use_seg_label=segmentation, use_pos_label=read_pos, 
-            use_arc_label=typed_parsing, use_word_trie=create_word_trie, use_root=parsing)
+            use_arc_label=typed_parsing, use_subtoken=use_subtoken,
+            use_chunk_trie=create_chunk_trie, use_root=parsing)
 
     delim = constants.DELIM2_SYMBOL
 
@@ -201,19 +210,19 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
     arc_clm = 3
 
     ins_cnt = 0
-    word_cnt = 0
-    token_cnt = 0
 
-    instances = []
+    tokenseqs = []
+    subtokenseqs = []
     seg_seqs = []        # list of segmentation label sequences
     pos_seqs = []        # list of POS label sequences
     dep_seqs = []        # list of dependency label sequences
     arc_seqs = []        # list of arc label sequences
 
     with open(path) as f:
-        ins = [indices.root_id] if parsing else []
+        t_seq = [dic.root_id] if parsing else []
+        st_seq = [[dic.root_id]] if (parsing and use_subtoken) else []
         seg_seq = []
-        pos_seq = [indices.root_id] if (parsing and read_pos) else []
+        pos_seq = [dic.root_id] if (parsing and read_pos) else []
         dep_seq = [-1] if parsing else []
         arc_seq = [-1] if parsing else []
 
@@ -221,15 +230,19 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
             line = re.sub(' +', ' ', line).strip('\n\t')
 
             if len(line) < 1:
-                if len(ins) - (1 if parsing else 0) > 0:
-                    instances.append(ins)
-                    ins = [indices.root_id] if parsing else []
+                if len(t_seq) - (1 if parsing else 0) > 0:
+                    tokenseqs.append(t_seq)
+                    t_seq = [dic.root_id] if parsing else []
+                    if st_seq:
+                        # add_padding_to_subtokens(st_seq, dic.pad_id)
+                        subtokenseqs.append(st_seq)
+                        st_seq = [[dic.root_id]] if (parsing and use_subtoken) else []
                     if seg_seq:
                         seg_seqs.append(seg_seq)
                         seg_seq = []
                     if pos_seq:
                         pos_seqs.append(pos_seq)
-                        pos_seq = [indices.root_id] if (parsing and read_pos) else []
+                        pos_seq = [dic.root_id] if (parsing and read_pos) else []
                     if dep_seq:
                         dep_seqs.append(dep_seq)
                         dep_seq = [-1] if parsing else []
@@ -239,10 +252,11 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
 
                     ins_cnt += 1
                     if ins_cnt % 100000 == 0:
-                        print('Read', ins_cnt, 'instances', file=sys.stderr)
+                        print('Read', ins_cnt, 'sentences', file=sys.stderr)
                 continue
 
             elif line[0] == constants.COMMENT_SYM:
+
                 if line.startswith(constants.DELIM_TXT):
                     delim = line.split(constants.KEY_VALUE_SEPARATOR)[1]
                     print('Read delimiter: \'{}\''.format(delim), file=sys.stderr)
@@ -289,7 +303,7 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
 
                 if segmentation and update_labels:
                     for seg_lab in constants.SEG_LABELS:
-                        indices.seg_label_indices.get_id('{}-{}'.format(seg_lab, pos) , True)
+                        dic.seg_label_indices.get_id('{}-{}'.format(seg_lab, pos) , True)
             else:
                 pos = None
 
@@ -303,35 +317,39 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
 
             if segmentation:
                 update_token = [
-                    update_each_token(word[i], freq_words, refer_vocab, update_tokens) for i in range(wlen)]
-                ins.extend([indices.token_indices.get_id(word[i], update_token[i]) for i in range(wlen)])
+                    update_each_token(word[i], update_tokens, freq_tokens, refer_vocab) for i in range(wlen)]
+                t_seq.extend([dic.token_indices.get_id(word[i], update_token[i]) for i in range(wlen)])
                 seg_seq.extend(
-                    [indices.seg_label_indices.get_id(
+                    [dic.seg_label_indices.get_id(
                         get_label_BIES(i, wlen-1, cate=pos), update=update_labels) for i in range(wlen)])
 
-                if create_word_trie and update_token == [True for i in range(wlen)]: # update word trie
-                    ids = ins[-wlen:]
-                    indices.word_trie.get_word_id(ids, True)
+                if create_chunk_trie and update_token == [True for i in range(wlen)]: # update chunk trie
+                    ids = t_seq[-wlen:]
+                    dic.chunk_trie.get_chunk_id(ids, True)
 
             else:
-                update_token = update_each_token(word, freq_words, refer_vocab, update_tokens)
-                ins.append(indices.token_indices.get_id(word, update=update_token))
+                update_token = update_each_token(word, update_tokens, freq_tokens, refer_vocab)
+                t_seq.append(dic.token_indices.get_id(word, update=update_token))
+
+                if use_subtoken:
+                    update_token = [update_each_token(word[i], update_tokens, refer_vocab) for i in range(wlen)]
+                    st_seq.append(
+                        [dic.subtoken_indices.get_id(word[i], update_token[i]) for i in range(wlen)])
 
             if read_pos:
-                pos_seq.append(indices.pos_label_indices.get_id(pos, update=update_labels))
+                pos_seq.append(dic.pos_label_indices.get_id(pos, update=update_labels))
 
             if parsing:
                 dep_seq.append(int(dep.replace('-1', '0')))
 
             if typed_parsing:
-                arc_seq.append(indices.arc_label_indices.get_id(arc, update=update_labels))
+                arc_seq.append(dic.arc_label_indices.get_id(arc, update=update_labels))
                 
-
-            word_cnt += 1
-            token_cnt += len(word)
-
-        if len(ins) - (1 if parsing else 0) > 0:
-            instances.append(ins)
+        if len(t_seq) - (1 if parsing else 0) > 0:
+            tokenseqs.append(t_seq)
+            if subtokenseqs:
+                # add_padding_to_subtokens(st_seq, dic.pad_id)                
+                subtokenseqs.append(st_seq)
             if seg_seq:
                 seg_seqs.append(seg_seq)
             if pos_seq:
@@ -353,20 +371,29 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
     if arc_seqs:
         label_seqs_list.append(arc_seqs)
 
-    return Data(instances, label_seqs_list), indices
+    return Data(tokenseqs, label_seqs_list, subtokenseqs), dic
 
 
-def update_each_token(word, freq_words, refer_vocab, update_tokens):
-    if word in refer_vocab:
+# def add_padding_to_subtokens(subtokenseq, padding_id):
+#     max_len = max([len(subs) for subs in subtokenseq])
+#     for subs in subtokenseq:
+#         diff = max_len - len(subs)
+#         if diff > 0:
+#             subs.extend([padding_id for i in range(diff)])
+
+
+def update_each_token(token, update_tokens, freq_tokens=set(), refer_vocab=set()):
+    if token in refer_vocab:
         return True
-    elif update_tokens and (not freq_words or word in freq_words):
+    elif update_tokens and (not freq_tokens or token in freq_tokens):
         return True
     else:
         return False
 
 
 def count_tokens_SL(path, freq_threshold, max_vocab_size=-1,
-                    segmentation=True, lowercase=False, normalize_digits=True):
+                    segmentation=True, lowercase=False, normalize_digits=True,
+                    refer_vocab=set()):
     counter = {}
     delim = constants.DELIM2_SYMBOL
     word_clm = 0
@@ -409,29 +436,30 @@ def count_tokens_SL(path, freq_threshold, max_vocab_size=-1,
 
             ins_cnt += 1
             if ins_cnt % 100000 == 0:
-                print('Read', ins_cnt, 'instances', file=sys.stderr)
+                print('Read', ins_cnt, 'sentences', file=sys.stderr)
 
     if max_vocab_size > 0:
         counter2 = Counter(counter)
         for pair in counter2.most_common(max_vocab_size):
             del counter[pair[0]]
         
-        print('keep {} words from {} words (max vocab size={})'.format(
+        print('keep {} tokens from {} tokens (max vocab size={})'.format(
             len(counter), len(counter2), max_vocab_size), file=sys.stderr)
 
-    freq_words = set()
+    freq_tokens = set()
     for word in counter:
         if counter[word] >= freq_threshold:
-            freq_words.add(word)
+            freq_tokens.add(word)
 
-    print('keep {} words from {} words (frequency threshold={})'.format(
-        len(freq_words), len(counter), freq_threshold), file=sys.stderr)
+    print('keep {} tokens from {} tokens (frequency threshold={})'.format(
+        len(freq_tokens), len(counter), freq_threshold), file=sys.stderr)
     
-    return freq_words
+    return freq_tokens
 
 
 def count_tokens_WL(path, freq_threshold, max_vocab_size=-1,
-                    segmentation=True, lowercase=False, normalize_digits=True):
+                    segmentation=True, lowercase=False, normalize_digits=True,
+                    refer_vocab=set()):
     counter = {}
     delim = constants.DELIM2_SYMBOL
     word_clm = 0
@@ -443,7 +471,7 @@ def count_tokens_WL(path, freq_threshold, max_vocab_size=-1,
 
             if len(line) < 1:
                 if ins_cnt > 0 and ins_cnt % 100000 == 0:
-                    print('Read', ins_cnt, 'instances', file=sys.stderr)
+                    print('Read', ins_cnt, 'sentences', file=sys.stderr)
                 ins_cnt += 1
                 continue
 
@@ -482,19 +510,19 @@ def count_tokens_WL(path, freq_threshold, max_vocab_size=-1,
     if max_vocab_size > 0:
         org_counter = counter
         mc = Counter(org_counter).most_common(max_vocab_size)
-        print('keep {} words from {} words (max vocab size={})'.format(
+        print('keep {} tokens from {} tokens (max vocab size={})'.format(
             len(mc), len(org_counter), max_vocab_size), file=sys.stderr)
         counter = {pair[0]:pair[1] for pair in mc}
 
-    freq_words = set()
+    freq_tokens = set()
     for word in counter:
         if counter[word] >= freq_threshold:
-            freq_words.add(word)
+            freq_tokens.add(word)
 
-    print('keep {} words from {} words (frequency threshold={})'.format(
-        len(freq_words), len(counter), freq_threshold), file=sys.stderr)
+    print('keep {} tokens from {} tokens (frequency threshold={})'.format(
+        len(freq_tokens), len(counter), freq_threshold), file=sys.stderr)
     
-    return freq_words
+    return freq_tokens
 
 
 def get_label_BI(index, cate=None):
@@ -517,82 +545,85 @@ def get_label_BIES(index, last, cate=None):
     return '{}{}'.format(prefix, suffix)
 
 
-def load_data(data_format, path, read_pos=True, update_tokens=True, update_labels=True, create_word_trie=False,
-              subpos_depth=-1, lowercase=False, normalize_digits=False, no_freq_update=False,
-              max_vocab_size=-1, freq_threshold=1, indices=None, refer_vocab=set(), limit=-1):
+def load_data(data_format, path, read_pos=True, update_tokens=True, update_labels=True, 
+              use_subtoken=False, create_chunk_trie=False,
+              subpos_depth=-1, lowercase=False, normalize_digits=False, 
+              #no_freq_update=False,
+              max_vocab_size=-1, freq_threshold=1, dic=None, refer_vocab=set(), limit=-1):
     pos_seqs = []
 
     segmentation = True if 'seg' in data_format else False
     tagging = True if 'tag' in data_format else False
     parsing = True if 'dep' in data_format else False
     typed_parsing = True if 'tdep' in data_format else False
+    use_subtoken = use_subtoken and not segmentation
 
     if (data_format == 'wl_seg' or data_format == 'wl_seg_tag' or data_format == 'wl_tag' or
         data_format == 'wl_dep' or data_format == 'wl_tdep' or
         data_format == 'wl_tag_dep' or data_format == 'wl_tag_tdep'
     ):
         if not update_tokens:
-            freq_words = set()
+            freq_tokens = set()
 
-        elif no_freq_update and indices:
-            freq_words = set(indices.id2word) # skip count tokens
+        # elif no_freq_update and dic:
+        #     freq_tokens = set(dic.id2word) # skip count tokens
 
         elif freq_threshold > 1 or max_vocab_size > 0:
-            freq_words = count_tokens_WL(
+            freq_tokens = count_tokens_WL(
                 path, freq_threshold, max_vocab_size=max_vocab_size, 
                 segmentation=segmentation, lowercase=lowercase, normalize_digits=normalize_digits)
         else:
-            freq_words = set()
+            freq_tokens = set()
 
-        data, indices = load_data_WL(
+        data, dic = load_data_WL(
             path, segmentation=segmentation, tagging=tagging, parsing=parsing, typed_parsing=typed_parsing,
             update_tokens=update_tokens, update_labels=update_labels, 
             lowercase=lowercase, normalize_digits=normalize_digits,
-            subpos_depth=subpos_depth, create_word_trie=create_word_trie,
-            freq_words=freq_words, indices=indices, refer_vocab=refer_vocab)
+            subpos_depth=subpos_depth, use_subtoken=use_subtoken, create_chunk_trie=create_chunk_trie,
+            freq_tokens=freq_tokens, dic=dic, refer_vocab=refer_vocab)
 
     elif data_format == 'sl_seg' or data_format == 'sl_seg_tag' or data_format == 'sl_tag':
         if not update_tokens:
-            freq_words = set()
+            freq_tokens = set()
 
-        elif no_freq_update and indices:
-            freq_words = set(indices.id2word) # skip count tokens
+        # elif no_freq_update and dic:
+        #     freq_tokens = set(dic.id2word) # skip count tokens
 
         elif freq_threshold > 1 or max_vocab_size > 0:
-            freq_words = count_tokens_SL(
+            freq_tokens = count_tokens_SL(
                 path, freq_threshold, max_vocab_size=max_vocab_size, 
                 segmentation=segmentation, lowercase=lowercase, normalize_digits=normalize_digits)
         else:
-            freq_words = set()
+            freq_tokens = set()
 
-        data, indices = load_data_SL(
+        data, dic = load_data_SL(
             path, segmentation=segmentation, tagging=tagging, 
             update_tokens=update_tokens, update_labels=update_labels,
             lowercase=lowercase, normalize_digits=normalize_digits,
-            subpos_depth=subpos_depth, create_word_trie=create_word_trie, 
-            freq_words=freq_words, indices=indices, refer_vocab=refer_vocab)
+            subpos_depth=subpos_depth, use_subtoken=use_subtoken, create_chunk_trie=create_chunk_trie, 
+            freq_tokens=freq_tokens, dic=dic, refer_vocab=refer_vocab)
         
     else:
         data = None
 
-    return data, indices
+    return data, dic
 
 
-def load_pickled_data(filename_wo_ext, load_indices=True):
+def load_pickled_data(filename_wo_ext, load_dic=True):
     dump_path = filename_wo_ext + '.pickle'
 
     with open(dump_path, 'rb') as f:
         obj = pickle.load(f)
-        instances = obj[0]
+        tokenseqs = obj[0]
         labels = obj[1]
 
-    return Data(instances, labels)
+    return Data(tokenseqs, labels)
 
 
 def dump_pickled_data(filename_wo_ext, data, pos_labels=None):
     dump_path = filename_wo_ext + '.pickle'
 
     with open(dump_path, 'wb') as f:
-        obj = (data.instances, data.labels)
+        obj = (data.tokenseqs, data.labels)
         pickle.dump(obj, f)
 

@@ -12,7 +12,7 @@ import models
 
 
 def run(process_name):
-    if chainer.__version__[0] != '2':
+    if int(chainer.__version__[0]) < 2:
         print("chainer version>=2.0.0 is required.")
         sys.exit()
 
@@ -61,10 +61,10 @@ def run(process_name):
 
     if args.model_path:
         trainer.load_model(args.model_path, pretrained_token_embed_dim)
-        indices_org = copy.deepcopy(trainer.indices)
+        dic_org = copy.deepcopy(trainer.dic)
     else:
         trainer.init_hyperparameters(args)
-        indices_org = None
+        dic_org = None
 
         # id2token_org = {}
         # id2slab_org = {}
@@ -73,23 +73,23 @@ def run(process_name):
     trainer.init_feat_extractor(use_gpu=use_gpu)
 
     ################################
-    # Initialize indices of strings from external dictionary
+    # Initialize dic of strings from external dictionary
 
-    if process_name == 'tagging' and args.dict_path and not trainer.indices:
+    if process_name == 'tagging' and args.dict_path and not trainer.dic:
         dic_path = args.dict_path
-        trainer.indices = dictionary.load_dictionary(dic_path, read_pos=False)
+        trainer.dic = dictionary.load_dictionary(dic_path, read_pos=False)
         trainer.log('Load dictionary: {}'.format(dic_path))
-        trainer.log('Vocab size: {}'.format(len(trainer.indices.token_indices)))
+        trainer.log('Vocab size: {}'.format(len(trainer.dic.token_indices)))
 
         if not dic_path.endswith('pickle'):
             base = dic_path.split('.')[0]
             dic_pic_path = base + '.pickle'
             with open(dic_pic_path, 'wb') as f:
-                pickle.dump(trainer.indices, f)
+                pickle.dump(trainer.dic, f)
             trainer.log('Dumpped dictionary: {}'.format(dic_pic_path))
 
     ################################
-    # Load dataset and set up indices
+    # Load dataset and set up dic
 
     if args.execute_mode == 'train':
         trainer.load_data_for_training(embed_model)
@@ -105,12 +105,12 @@ def run(process_name):
         trainer.init_model(pretrained_token_embed_dim)
         if embed_model:
             models.load_and_update_embedding_layer(
-                trainer.classifier.predictor.trained_word_embed, trainer.indices.token_indices.id2str, 
+                trainer.classifier.predictor.trained_word_embed, trainer.dic.token_indices.id2str, 
                 embed_model, finetuning=(not args.fix_pretrained_embed))
     else:
-        trainer.classifier.grow_embedding_layers(indices_org, trainer.indices, embed_model,
+        trainer.classifier.grow_embedding_layers(dic_org, trainer.dic, embed_model,
                                                  train=(args.execute_mode=='train'))
-        trainer.classifier.grow_inference_layers(indices_org, trainer.indices)
+        trainer.classifier.grow_inference_layers(dic_org, trainer.dic)
 
     if args.gpu >= 0:
         trainer.classifier.to_gpu()

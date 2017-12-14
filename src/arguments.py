@@ -67,6 +67,9 @@ class Arguments(object):
         parser.add_argument('--token_embed_dim', '-d', type=int, default=300,
                             help='The number of dimension of token (character or word) embedding'
                             + '(Default: 300)')
+        parser.add_argument('--subtoken_embed_dim', type=int, default=0,
+                            help='The number of dimension of subtoken (usually character) embedding'
+                            + '(Default: 0)')
 
         # data paths and related options
         parser.add_argument('--path_prefix', '-p', help='Path prefix of input data')
@@ -125,20 +128,24 @@ class TaggerArguments(Arguments):
         super(TaggerArguments, self).__init__()
         parser = self.parser
 
-        ### used letters: + dflsuw
-
         # model parameters
-        parser.add_argument('--dropout', type=float, default=0.0, 
+        parser.add_argument('--rnn_dropout', type=float, default=0.0, 
                             help='Dropout ratio for RNN vertical layers (Default: 0.0)')
+        parser.add_argument('--mlp_dropout', type=float, default=0.0, 
+                            help='Dropout ratio for MLP (Default: 0.0)')
         parser.add_argument('--rnn_unit_type', default='lstm',
                             help='Choose unit type of RNN from among \'lstm\', \'gru\' and \'plain\''
                             + ' (Default: lstm)')
         parser.add_argument('--rnn_bidirection', action='store_true', 
                             help='Use bidirectional RNN')
-        parser.add_argument('--rnn_n_layers', '-l', type=int, default=1, 
+        parser.add_argument('--rnn_n_layers', type=int, default=1, 
                             help='The number of RNN layers (Default: 1)')
         parser.add_argument('--rnn_n_units', type=int, default=800,
                             help='The number of hidden units of RNN (Default: 800)')
+        parser.add_argument('--mlp_n_layers', type=int, default=1, 
+                            help='The number of layers of MLP (Default: 1)')
+        parser.add_argument('--mlp_n_units', type=int, default=400,
+                            help='The number of hidden units of MLP (Default: )')
         parser.add_argument('--inference_layer', default='crf',
                             help='Choose type of inference layer from between \'softmax\' and \'crf\''
                             + ' (Default: crf)')
@@ -171,8 +178,6 @@ class ParserArguments(Arguments):
     def __init__(self):
         super(ParserArguments, self).__init__()
         parser = self.parser
-
-        ### used letters: + fls
 
         # model parameters
         parser.add_argument('--rnn_dropout', type=float, default=0.0, 

@@ -2,7 +2,6 @@ import sys
 import copy
 import enum
 from collections import Counter, deque
-from datetime import datetime
 
 import numpy as np
 
@@ -14,14 +13,17 @@ from chainer import initializers
 from chainer import variable
 from chainer.functions.loss import softmax_cross_entropy
 from chainer.functions.math import minmax
+from chainer.functions.array import select_item
 from chainer.links.connection.n_step_rnn import argsort_list_descent, permutate_list
 
-import tools.edmonds.edmonds as edmonds
+#import tools.edmonds.edmonds as edmonds
+import util
+from functions import logdet
 
 
 class MLP(chainer.Chain):
-    def __init__(self, n_input, n_units, n_hidden_units=0, n_layers=1, output_activation=F.relu, dropout=0, 
-                 file=sys.stderr):
+    def __init__(self, n_input, n_units, n_hidden_units=0, n_layers=1, output_activation=F.relu, 
+                 dropout=0, file=sys.stderr):
         super().__init__()
         with self.init_scope():
             layers = [None] * n_layers
@@ -77,49 +79,80 @@ class MLP(chainer.Chain):
 
 # Base model that consists of embedding layer, recurrent network (RNN) layers and affine layer.
 
-# TODO: remove initial embedding, add fixed pretrained embedding
-# TODO: use MLP
 class RNNTaggerBase(chainer.Chain):
     def __init__(
-            self, n_vocab, embed_dim, rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            n_labels, feat_dim=0, dropout=0, initial_embed=None, file=sys.stderr):
-        super(RNNTaggerBase, self).__init__()
+            self, n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
+            mlp_n_layers, mlp_n_units, n_labels, feat_dim=0, rnn_dropout=0, mlp_dropout=0, 
+            pretrained_token_embed_dim=0, file=sys.stderr):
+        super().__init__()
 
         with self.init_scope():
-            #self.dropout = dropout
+            print('### Parameters', file=file)
 
-            if initial_embed:
-                self.embed = initial_embed
-                embed_dim = initial_embed.W.shape[1]
+            # embedding layer(s)
+
+            self.token_embed = L.EmbedID(n_vocab, token_embed_dim)
+            print('# Embedding matrix: W={}'.format(self.token_embed.W.shape), file=file)
+
+            if pretrained_token_embed_dim > 0:
+                self.pretrained_token_embed = L.EmbedID(n_vocab, pretrained_token_embed_dim)
+                print('# Pretrained embedding matrix: W={}'.format(
+                    self.pretrained_token_embed.W.shape), file=file)
             else:
-                self.embed = L.EmbedID(n_vocab, self.embed_dim)
-            input_vec_size = embed_dim + feat_dim
+                self.pretrained_token_embed = None
+            self.pretrained_token_embed_dim = pretrained_token_embed_dim
+
+            self.additional_feat_dim = feat_dim
+            if feat_dim > 0:
+                print('# Additional features dimension: {}'.format(feat_dim), file=file)
+
+            embed_dim = token_embed_dim + pretrained_token_embed_dim + feat_dim
+
+            # subtoken embedding layer
+
+            if n_subtokens > 0 and subtoken_embed_dim > 0:
+                self.subtoken_embed = L.EmbedID(n_subtokens, subtoken_embed_dim)
+                print('# Subtoken embedding matrix: W={}'.format(self.subtoken_embed.W.shape), file=file)
+            self.subtoken_embed_dim = subtoken_embed_dim;
+
+            # recurrent layers
 
             self.rnn_unit_type = rnn_unit_type
             self.rnn = construct_RNN(
-                rnn_unit_type, rnn_bidirection, rnn_n_layers, input_vec_size, rnn_n_units, dropout)
+                rnn_unit_type, rnn_bidirection, rnn_n_layers, embed_dim, rnn_n_units, rnn_dropout)
             rnn_output_dim = rnn_n_units * (2 if rnn_bidirection else 1)
 
-            self.affine = L.Linear(rnn_output_dim, n_labels)
+            # MLP
 
-            print('### Parameters', file=file)
-            print('# Embedding layer: W={}'.format(self.embed.W.shape), file=file)
-            print('# Additional features dimension: {}'.format(feat_dim), file=file)
-            print('# RNN unit: {}, dropout={}'.format(self.rnn, self.rnn.__dict__['dropout']), file=file)
-            if rnn_unit_type == 'lstm':
-                i = 0
-                for c in self.rnn._children:
-                    print('#   LSTM {}-th param'.format(i), file=file)
-                    print('#      0 - W={}, b={}'.format(c.w0.shape, c.b0.shape), file=file) 
-                    print('#      1 - W={}, b={}'.format(c.w1.shape, c.b1.shape), file=file) 
-                    print('#      2 - W={}, b={}'.format(c.w2.shape, c.b2.shape), file=file) 
-                    print('#      3 - W={}, b={}'.format(c.w3.shape, c.b3.shape), file=file) 
-                    print('#      4 - W={}, b={}'.format(c.w4.shape, c.b4.shape), file=file) 
-                    print('#      5 - W={}, b={}'.format(c.w5.shape, c.b5.shape), file=file) 
-                    print('#      6 - W={}, b={}'.format(c.w6.shape, c.b6.shape), file=file) 
-                    print('#      7 - W={}, b={}'.format(c.w7.shape, c.b7.shape), file=file) 
-                    i += 1
-            print('# Affine layer: W={}, b={}'.format(self.affine.W.shape, self.affine.b.shape), file=file)
+            print('# MLP', file=file)
+            self.mlp = MLP(rnn_output_dim, n_labels, n_hidden_units=mlp_n_units, n_layers=mlp_n_layers,
+                           output_activation=F.identity, dropout=mlp_dropout, file=file)
+
+    def get_features(self, ws, fs=None):
+        xs = []
+
+        if self.additional_feat_dim > 0:
+            for w, f in zip(ws, fs):
+                we = self.token_embed(w)
+                if self.pretrained_token_embed_dim > 0:
+                    twe = self.pretrained_token_embed(w)
+                    xe = F.concat((we, twe, f), 1)
+                else:
+                    xe = F.concat((we, f), 1)
+                xs.append(xe)
+
+        else:
+            for w in ws:
+                we = self.token_embed(w)
+                if self.pretrained_token_embed_dim > 0:
+                    twe = self.pretrained_token_embed(w)
+                    xe = F.concat((we, twe), 1)
+                else:
+                    xe = we
+                xs.append(xe)
+
+        return xs
 
 
     def rnn_output(self, xs):
@@ -132,45 +165,53 @@ class RNNTaggerBase(chainer.Chain):
 
 class RNNTagger(RNNTaggerBase):
     def __init__(
-            self, n_vocab, embed_dim, rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            n_labels, feat_dim=0, dropout=0, initial_embed=None, file=sys.stderr):
-        super(RNNTagger, self).__init__(
-            n_vocab, embed_dim, rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            n_labels, feat_dim, dropout, initial_embed, file)
+            self, n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
+            mlp_n_layers, mlp_n_units, n_labels, feat_dim=0, rnn_dropout=0, mlp_dropout=0, 
+            pretrained_token_embed_dim=0, file=sys.stderr):
+        super().__init__(
+            n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
+            mlp_n_layers, mlp_n_units, n_labels, feat_dim, rnn_dropout, mlp_dropout, 
+            pretrained_token_embed_dim, file)
 
-        self.loss_fun = softmax_cross_entropy.softmax_cross_entropy
+        self.softmax_cross_entropy = softmax_cross_entropy.softmax_cross_entropy
 
 
-    def __call__(self, xs, ls):
+    def __call__(self, ws, fs, ls, calculate_loss=True):
+        xs = self.get_features(ws, fs)
         rs = self.rnn_output(xs)
-        ys = [self.affine(r) for r in rs]
-
-        loss = None
+        ys = self.mlp(rs)
         ps = []
+
+        xp = cuda.get_array_module(xs[0])
+        loss = chainer.Variable(xp.array(0, dtype='f'))
         for y, l in zip(ys, ls):
-            if loss is not None:
-                loss += self.loss_fun(y, l)
-            else:
-                loss = self.loss_fun(y, l)
-                ps.append([np.argmax(yi.data) for yi in y])
+            if calculate_loss:
+                loss += self.softmax_cross_entropy(y, l)
+            ps.append([np.argmax(yi.data) for yi in y])
 
         return loss, ps
 
 
-    def decode(self, xs):
+    def decode(self, ws, fs):
         with chainer.no_backprop_mode():
-            rs = self.rnn_output(xs)
-            ys = [self.affine(h) for r in rs]
-        return ys
+            _, ps = self.__call__(ws, fs, calculate_loss=False)
+
+        return ps
 
 
 class RNNCRFTagger(RNNTaggerBase):
     def __init__(
-            self, n_vocab, embed_dim, rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            n_labels, feat_dim=0, dropout=0, initial_embed=None, file=sys.stderr):
-        super(RNNTagger, self).__init__(
-            n_vocab, embed_dim, rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            n_labels, feat_dim, dropout, initial_embed, file)
+            self, n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
+            mlp_n_layers, mlp_n_units, n_labels, feat_dim=0, rnn_dropout=0, mlp_dropout=0, 
+            pretrained_token_embed_dim=0, file=sys.stderr):
+        super().__init__(
+            n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
+            mlp_n_layers, mlp_n_units, n_labels, feat_dim, rnn_dropout, mlp_dropout, 
+            pretrained_token_embed_dim, file)
 
         with self.init_scope():
             self.crf = L.CRF1d(n_labels)
@@ -178,35 +219,32 @@ class RNNCRFTagger(RNNTaggerBase):
             print('# CRF cost: {}\n'.format(self.crf.cost.shape), file=file)
 
 
-    # train is unused
-    def __call__(self, xs, ls=None, train=True, calculate_loss=True):
-        # rnn layers
+    def __call__(self, ws, fs=None, ls=None, calculate_loss=True):
+        xs = self.get_features(ws, fs)
         rs = self.rnn_output(xs)
-
-        # affine layer
-        hs = [self.affine(r) for r in rs]
+        hs = self.mlp(rs)
 
         # crf layer
         indices = argsort_list_descent(hs)
         trans_hs = F.transpose_sequence(permutate_list(hs, indices, inv=False))
         score, trans_ys = self.crf.argmax(trans_hs)
         ys = permutate_list(F.transpose_sequence(trans_ys), indices, inv=True)
-        ys = [y.data for y in ys]
+        ps = [y.data for y in ys]
 
+        xp = cuda.get_array_module(xs[0])
+        loss = chainer.Variable(xp.array(0, dtype='f'))
         if calculate_loss:
             trans_ls = F.transpose_sequence(permutate_list(ls, indices, inv=False))
             loss = self.crf(trans_hs, trans_ls)
-        else:
-            loss = chainer.Variable(xp.array(0, dtype='f'))
 
-        return loss, ys
+        return loss, ps
         
 
     def decode(self, xs):
         with chainer.no_backprop_mode():
-            _, ys = self.__call__(xs, calculate_loss=False)
+            _, ps = self.__call__(xs, calculate_loss=False)
 
-        return ys
+        return ps
 
 
 class BiaffineCombination(chainer.Chain):
@@ -261,14 +299,14 @@ class BiaffineCombination(chainer.Chain):
 
 class RNNBiaffineParser(chainer.Chain):
     def __init__(
-            self, n_words, word_embed_dim, n_pos, pos_embed_dim,
+            self, n_tokens, token_embed_dim, n_pos, pos_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp4arcrep_n_layers, mlp4arcrep_n_units,
             mlp4labelrep_n_layers, mlp4labelrep_n_units, 
             mlp4labelpred_n_layers, mlp4labelpred_n_units,
             mlp4pospred_n_layers=0, mlp4pospred_n_units=0,
             n_labels=0, rnn_dropout=0, hidden_mlp_dropout=0, pred_layers_dropout=0,
-            trained_word_embed_dim=0,
+            pretrained_token_embed_dim=0,
             file=sys.stderr):
         super(RNNBiaffineParser, self).__init__()
 
@@ -284,18 +322,25 @@ class RNNBiaffineParser(chainer.Chain):
             print('acl=label:', self.common_arc_label, file=file)
             print('head=mod:', self.common_head_mod, file=file)
 
-            # word embedding layer(s)
+            # token embedding layer(s)
 
-            self.word_embed = L.EmbedID(n_words, word_embed_dim)
-            print('# Word embedding matrix: W={}'.format(self.word_embed.W.shape), file=file)
+            self.token_embed = L.EmbedID(n_tokens, token_embed_dim)
+            print('# Token embedding matrix: W={}'.format(self.token_embed.W.shape), file=file)
 
-            if trained_word_embed_dim > 0:
-                self.trained_word_embed = L.EmbedID(n_words, trained_word_embed_dim)
-                print('# Pretrained word embedding matrix: W={}'.format(
-                    self.trained_word_embed.W.shape), file=file)
+            if pretrained_token_embed_dim > 0:
+                self.pretrained_token_embed = L.EmbedID(n_tokens, pretrained_token_embed_dim)
+                print('# Pretrained token embedding matrix: W={}'.format(
+                    self.pretrained_token_embed.W.shape), file=file)
             else:
-                self.trained_word_embed = None
-            self.trained_word_embed_dim = trained_word_embed_dim
+                self.pretrained_token_embed = None
+            self.pretrained_token_embed_dim = pretrained_token_embed_dim
+
+            # subtoken embedding layer
+
+            if n_subtokens > 0 and subtoken_embed_dim > 0:
+                self.subtoken_embed = L.EmbedID(n_subtokens, subtoken_embed_dim)
+                print('# Subtoken embedding matrix: W={}'.format(self.subtoken_embed.W.shape), file=file)
+            self.subtoken_embed_dim = subtoken_embed_dim
 
             # pos embedding layer
 
@@ -305,7 +350,8 @@ class RNNBiaffineParser(chainer.Chain):
             self.pos_embed_dim = pos_embed_dim;
 
             # recurrent layers
-            embed_dim = word_embed_dim + trained_word_embed_dim + pos_embed_dim
+
+            embed_dim = token_embed_dim + pretrained_token_embed_dim + subtoken_embed_dim + pos_embed_dim
             self.rnn_unit_type = rnn_unit_type
             self.rnn = construct_RNN(
                 rnn_unit_type, rnn_bidirection, rnn_n_layers, embed_dim, rnn_n_units, rnn_dropout,
@@ -317,7 +363,7 @@ class RNNBiaffineParser(chainer.Chain):
             self.pos_prediction = (mlp4pospred_n_layers > 0 and mlp4pospred_n_units > 0)
             if self.pos_prediction:
                 print('# MLP for POS prediction', file=file)
-                input_dim = word_embed_dim + trained_word_embed_dim
+                input_dim = token_embed_dim + pretrained_token_embed_dim + subtoken_embed_dim
                 self.mlp_pos = MLP(
                     input_dim, n_pos, n_hidden_units=mlp4pospred_n_units, n_layers=mlp4pospred_n_layers,
                     output_activation=F.identity, dropout=pred_layers_dropout, file=file)
@@ -377,29 +423,30 @@ class RNNBiaffineParser(chainer.Chain):
                     output_activation=F.identity, dropout=pred_layers_dropout, file=file)
 
 
-    def embed(self, ws, ps=None):
+    def get_features(self, ws, cs=None, ps=None):
         xs = []
 
-        if self.pos_embed_dim == 0:
-            for w in ws:
-                we = self.word_embed(w)
-                if self.trained_word_embed_dim > 0:
-                    twe = self.trained_word_embed(w)
-                    xe = F.concat((we, pe), 1)
-                else:
-                    xe = we
-                xs.append(xe)
+        size = len(ws)
+        if ps is None:
+            ps = [None] * size
+        if cs is None:
+            cs = [None] * size
 
-        else:
-            for w, p in zip(ws, ps):
-                we = self.word_embed(w)
+        for w, c, p in zip(ws, cs, ps):
+            xe = self.token_embed(w)
+            if self.pretrained_token_embed_dim > 0:
+                twe = self.pretrained_token_embed(w)
+                xe = F.concat((xe, twe), 1)
+            if self.subtoken_embed_dim > 0:
+                ce = F.concat(
+                    [F.mean(self.subtoken_embed(ci), axis=0, keepdims=True) for ci in c],
+                    axis=0)
+                xe = F.concat((xe, ce), 1)
+            if self.pos_embed_dim > 0:
                 pe = self.pos_embed(p)
-                if self.trained_word_embed_dim == 0:
-                    xe = F.concat((we, pe), 1)
-                else:
-                    twe = self.trained_word_embed(w)
-                    xe = F.concat((we, twe, pe), 1)
-                xs.append(xe)
+                xe = F.concat((xe, pe), 1)
+            xs.append(xe)
+
         return xs
 
 
@@ -412,7 +459,7 @@ class RNNBiaffineParser(chainer.Chain):
 
 
     def predict_pos(self, w, xp=np):
-        x = self.word_embed(w)
+        x = self.token_embed(w)
         scores = self.mlp_pos(x, per_element=False)
 
         yp = minmax.argmax(scores, axis=1).data
@@ -473,8 +520,8 @@ class RNNBiaffineParser(chainer.Chain):
         return scores, yl
 
 
-    # batch of words, pos tags, gold head labels, gold arc labels
-    def __call__(self, ws, ps=None, ghs=None, gls=None, train=True, calculate_loss=True):
+    # batch of tokens, pos tags, gold head labels, gold arc labels
+    def __call__(self, ws, cs=None, ps=None, ghs=None, gls=None, train=True, calculate_loss=True):
         data_size = len(ws)
 
         if train:
@@ -485,7 +532,7 @@ class RNNBiaffineParser(chainer.Chain):
             gls = [None] * data_size
 
         # embed
-        xs = self.embed(ws, ps)
+        xs = self.get_features(ws, cs, ps)
 
         # rnn layers
         rs = self.rnn_output(xs)
@@ -538,7 +585,8 @@ class RNNBiaffineParser(chainer.Chain):
         if self.pos_prediction: # tentative
             for w, p in zip(ws, ps):
                 scores_p, yp = self.predict_pos(w, xp)
-                loss += 0.01 * self.softmax_cross_entropy(scores_p, p)
+                if calculate_loss:
+                    loss += 0.01 * self.softmax_cross_entropy(scores_p, p)
                 yps.append(yp)
 
         # (bi)affine layers for arc and label prediction
@@ -548,7 +596,7 @@ class RNNBiaffineParser(chainer.Chain):
             yhs.append(yh)
 
             if self.label_prediction:
-                n = len(m_label)      # the number of words except root
+                n = len(m_label)      # the number of tokens except root
                 heads = gh if train else yh
                 hm_label = F.reshape(F.concat([h_label[heads[i]] for i in range(1, n+1)], axis=0), (n, ldim))
                 scores_l, yl = self.predict_labels(m_label, hm_label, xp)
@@ -571,9 +619,9 @@ class RNNBiaffineParser(chainer.Chain):
                 return loss, yhs
 
 
-    def decode(self, ws, ps):
+    def decode(self, ws, cs=None, ps=None):
         with chainer.no_backprop_mode():
-            ret = self.__call__(ws, ps, train=False, calculate_loss=False)
+            ret = self.__call__(ws, cs=cs, ps=ps, train=False, calculate_loss=False)
 
         return ret[1:]
 
@@ -587,6 +635,7 @@ def get_mask_value(i, j):
     return -np.float32(sys.maxsize) if i == j else np.float32(0)
 
 
+# deprecated
 def mst(scores):
     n1 = scores.shape[0]
     n2 = scores.shape[1]
@@ -596,7 +645,7 @@ def mst(scores):
     for i in range(n1):
         for j in range(n2):
             prices[(j,i+1)] = -scores.data[i][j]
-    res = edmonds.run(prices)
+    res = None #edmonds.run(prices)
 
     for j in res:
         for i in res[j]:
@@ -698,31 +747,31 @@ def load_and_update_embedding_layer(embed, id2token, external_model, finetuning=
 
 
 def grow_embedding_layers(id2token_org, id2token_grown, rand_embed, 
-                          trained_embed=None, external_model=None, train=False, file=sys.stderr):
+                          pretrained_embed=None, external_model=None, train=False, file=sys.stderr):
     n_vocab = rand_embed.W.shape[0]
     d_rand = rand_embed.W.shape[1]
-    d_trained = external_model.wv.syn0[0].shape[0] if external_model else 0
+    d_pretrained = external_model.wv.syn0[0].shape[0] if external_model else 0
 
     initialW = initializers.normal.Normal(1.0)
     w2_rand = []
-    w2_trained = []
+    w2_pretrained = []
 
     count = 0
     for i in range(len(id2token_org), len(id2token_grown)):
         if train:               # resume training
             vec_rand = initializers.generate_array(initialW, (d_rand, ), np)
         else:                   # test
-            vec_rand = rand_embed.W[0].data # use trained vector of unknown word
+            vec_rand = rand_embed.W[0].data # use pretrained vector of unknown token
         w2_rand.append(vec_rand)
 
         if external_model:
             key = id2token_grown[i]
             if key in external_model.wv.vocab:
-                vec_trained = external_model.wv[key]
+                vec_pretrained = external_model.wv[key]
                 count += 1
             else:
-                vec_trained = np.zeros(d_trained, dtype='f')
-            w2_trained.append(vec_trained)
+                vec_pretrained = np.zeros(d_pretrained, dtype='f')
+            w2_pretrained.append(vec_pretrained)
 
     diff = len(id2token_grown) - len(id2token_org)
     w2_rand = np.reshape(w2_rand, (diff, d_rand))
@@ -730,10 +779,10 @@ def grow_embedding_layers(id2token_org, id2token_grown, rand_embed,
     rand_embed.W = chainer.Parameter(initializer=w_rand.data)
 
     if external_model:
-        w2_trained = np.reshape(w2_trained, (diff, d_trained))
-        w_trained = F.concat((trained_embed.W, w2_trained), 0)
-        trained_embed = L.EmbedID(0, 0)
-        trained_embed.W = chainer.Parameter(initializer=w_trained.data)
+        w2_pretrained = np.reshape(w2_pretrained, (diff, d_pretrained))
+        w_pretrained = F.concat((pretrained_embed.W, w2_pretrained), 0)
+        pretrained_embed = L.EmbedID(0, 0)
+        pretrained_embed.W = chainer.Parameter(initializer=w_pretrained.data)
 
     print('Grow embedding matrix: {} -> {}'.format(n_vocab, rand_embed.W.shape[0]), file=file)
     if count >= 1:
@@ -754,10 +803,10 @@ def grow_affine_layer(id2label_org, id2label_grown, affine, file=sys.stderr):
     dim = w_org.shape[1]
     initialW = initializers.normal.Normal(1.0)
 
-    w_diff = chainer.variable.Parameter(initialW, (diff, dim))
+    w_diff = chainer.Parameter(initialW, (diff, dim))
     w_new = F.concat((w_org, w_diff), 0)
 
-    b_diff = chainer.variable.Parameter(initialW, (diff,))
+    b_diff = chainer.Parameter(initialW, (diff,))
     b_new = F.concat((b_org, b_diff), 0)
             
     affine.W = chainer.Parameter(initializer=w_new.data)
@@ -773,8 +822,8 @@ def grow_crf_layer(id2label_org, id2label_grown, crf, file=sys.stderr):
     diff = new_len - org_len
 
     c_org = crf.cost
-    c_diff1 = chainer.variable.Parameter(0, (org_len, diff))
-    c_diff2 = chainer.variable.Parameter(0, (diff, new_len))
+    c_diff1 = chainer.Parameter(0, (org_len, diff))
+    c_diff2 = chainer.Parameter(0, (diff, new_len))
     c_tmp = F.concat((c_org, c_diff1), 1)
     c_new = F.concat((c_tmp, c_diff2), 0)
     crf.cost = chainer.Parameter(initializer=c_new.data)
@@ -793,7 +842,7 @@ def grow_MLP(id2label_org, id2label_grown, out_layer, file=sys.stderr):
     dim = w_org.shape[1]
     initialW = initializers.normal.Normal(1.0)
 
-    w_diff = chainer.variable.Parameter(initialW, (diff, dim))
+    w_diff = chainer.Parameter(initialW, (diff, dim))
     w_new = F.concat((w_org, w_diff), 0)
     out_layer.W = chainer.Parameter(initializer=w_new.data)
     w_shape = out_layer.W.shape
@@ -801,7 +850,7 @@ def grow_MLP(id2label_org, id2label_grown, out_layer, file=sys.stderr):
     if 'b' in out_layer.__dict__:
         b_org = out_layer.b
         b_org_shape = b_org.shape
-        b_diff = chainer.variable.Parameter(initialW, (diff,))
+        b_diff = chainer.Parameter(initialW, (diff,))
         b_new = F.concat((b_org, b_diff), 0)
         out_layer.b = chainer.Parameter(initializer=b_new.data)
         b_shape = out_layer.b.shape
@@ -823,7 +872,7 @@ def grow_biaffine_layer(id2label_org, id2label_grown, biaffine, file=sys.stderr)
     dim = w_org.shape[1]
     initialW = initializers.normal.Normal(1.0)
 
-    w_diff = chainer.variable.Parameter(initialW, (diff, dim))
+    w_diff = chainer.Parameter(initialW, (diff, dim))
     w_new = F.concat((w_org, w_diff), 0)
     affine.W = chainer.Parameter(initializer=w_new.data)
     w_shape = affine.W.shape
@@ -831,7 +880,7 @@ def grow_biaffine_layer(id2label_org, id2label_grown, biaffine, file=sys.stderr)
     if 'b' in affine.__dict__:
         b_org = affine.b
         b_org_shape = b_org.shape
-        b_diff = chainer.variable.Parameter(initialW, (diff,))
+        b_diff = chainer.Parameter(initialW, (diff,))
         b_new = F.concat((b_org, b_diff), 0)
         affine.b = chainer.Parameter(initializer=b_new.data)
         b_shape = affine.b.shape

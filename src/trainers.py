@@ -94,14 +94,14 @@ class Trainer(object):
         self.val = None
         self.test = None
         self.hparams = None
-        self.indices = None
+        self.dic = None
         self.classifier = None
         self.evaluator = None
         self.feat_extractor = None
         self.optimizer = None
         self.decode_type = None
-        self.n_iter = 0
-        self.label_begin_index = 2
+        self.n_iter = args.epoch_begin
+        self.label_begin_index = 3
 
         self.log('Start time: {}\n'.format(self.start_time))
         if not self.args.quiet:
@@ -141,19 +141,19 @@ class Trainer(object):
     def init_model(self, pretrained_token_embed_dim=0):
         self.log('Initialize model from hyperparameters\n')
         self.classifier = classifiers.init_classifier(
-            self.decode_type, self.hparams, self.indices, pretrained_token_embed_dim)
+            self.decode_type, self.hparams, self.dic, pretrained_token_embed_dim)
 
 
     def load_model(self, model_path, pretrained_token_embed_dim=0):
         array = model_path.split('_e')
-        indices_path = '{}.s2i'.format(array[0])
+        dic_path = '{}.s2i'.format(array[0])
         hparam_path = '{}.hyp'.format(array[0])
         param_path = model_path
     
-        with open(indices_path, 'rb') as f:
-            self.indices = pickle.load(f)
-        self.log('Load indices: {}'.format(indices_path))
-        self.log('Vocab size: {}\n'.format(len(self.indices.token_indices)))
+        with open(dic_path, 'rb') as f:
+            self.dic = pickle.load(f)
+        self.log('Load dic: {}'.format(dic_path))
+        self.log('Vocab size: {}\n'.format(len(self.dic.token_indices)))
 
         # hyper parameters
         self.hparams = self.load_hyperparameters(hparam_path)
@@ -212,59 +212,60 @@ class Trainer(object):
 
         data_format = hparams['data_format']
         read_pos = hparams['subpos_depth'] != 0
-        create_word_trie = ('feature_template' in hparams and hparams['feature_template'])
+        use_subtoken = hparams["subtoken_embed_dim"] > 0
+        create_chunk_trie = ('feature_template' in hparams and hparams['feature_template'])
         subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
         lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
         
         # if args.label_reference_data:
-        #     _, self.indices = data_io.load_data(
+        #     _, self.dic = data_io.load_data(
         #         data_format, refer_path, read_pos=read_pos, update_tokens=False,
-        #         create_word_trie=create_word_trie, subpos_depth=subpos_depth, 
+        #         create_chunk_trie=create_chunk_trie, subpos_depth=subpos_depth, 
         #         lowercase=lowercase, normalize_digits=normalize_digits, 
-        #         indices=self.indices)
+        #         dic=self.dic)
         #     self.log('Load label set from reference data: {}'.format(refer_path))
 
         if args.train_data.endswith('pickle'):
             name, ext = os.path.splitext(train_path)
             train = data_io.load_pickled_data(name)
             self.log('Load dumpped data:'.format(train_path))
-            #TODO update indices when re-training using another training data
+            #TODO update dic when re-training using another training data
 
         else:
-            train, self.indices = data_io.load_data(
+            train, self.dic = data_io.load_data(
                 data_format, train_path, read_pos=read_pos,
-                create_word_trie=create_word_trie, subpos_depth=subpos_depth, 
+                create_chunk_trie=create_chunk_trie, use_subtoken=use_subtoken, subpos_depth=subpos_depth, 
                 lowercase=lowercase, normalize_digits=normalize_digits, 
                 max_vocab_size=args.max_vocab_size, freq_threshold=args.freq_threshold,
-                indices=self.indices, refer_vocab=refer_vocab)
+                dic=self.dic, refer_vocab=refer_vocab)
         
             if self.args.dump_train_data:
                 name, ext = os.path.splitext(train_path)
                 if args.max_vocab_size > 0 or args.freq_threshold > 1:
-                    name = '{}_{}k'.format(name, int(len(self.indices.token_indices) / 1000))
+                    name = '{}_{}k'.format(name, int(len(self.dic.token_indices) / 1000))
                 data_io.dump_pickled_data(name, train)
                 self.log('Dumpped training data: {}.pickle'.format(train_path))
 
         self.log('Load training data: {}'.format(train_path))
-        self.log('Data length: {}'.format(len(train.instances)))
-        self.log('Vocab size: {}\n'.format(len(self.indices.token_indices)))
+        self.log('Data length: {}'.format(len(train.tokenseqs)))
+        self.log('Vocab size: {}\n'.format(len(self.dic.token_indices)))
         if 'featre_template' in self.hparams and self.hparams['feature_template']:
             self.log('Start feature extraction for training data\n')
             self.extract_features(train)
 
         if args.valid_data:
-            # indices can be updated if embed_model are used
-            val, self.indices = data_io.load_data(
+            # dic can be updated if embed_model are used
+            val, self.dic = data_io.load_data(
                 data_format, val_path, read_pos=read_pos, update_tokens=False, update_labels=False,
-                create_word_trie=create_word_trie, subpos_depth=subpos_depth, 
+                create_chunk_trie=create_chunk_trie, use_subtoken=use_subtoken, subpos_depth=subpos_depth, 
                 lowercase=lowercase, normalize_digits=normalize_digits, 
                 max_vocab_size=args.max_vocab_size, freq_threshold=args.freq_threshold,
-                indices=self.indices, refer_vocab=refer_vocab)
+                dic=self.dic, refer_vocab=refer_vocab)
 
             self.log('Load validation data: {}'.format(val_path))
-            self.log('Data length: {}'.format(len(val.instances)))
-            self.log('Vocab size: {}\n'.format(len(self.indices.token_indices)))
+            self.log('Data length: {}'.format(len(val.tokenseqs)))
+            self.log('Vocab size: {}\n'.format(len(self.dic.token_indices)))
             if 'featre_template' in self.hparams and self.hparams['feature_template']:
                 self.log('Start feature extraction for validation data\n')
                 self.extract_features(val)
@@ -273,7 +274,7 @@ class Trainer(object):
         
         self.train = train
         self.val = val
-        self.indices.create_id2strs()
+        self.dic.create_id2strs()
         self.show_training_data()
 
 
@@ -285,31 +286,32 @@ class Trainer(object):
 
         data_format = hparams['data_format']
         read_pos = hparams['subpos_depth'] != 0
-        create_word_trie = ('feature_template' in hparams and hparams['feature_template'])
+        use_subtoken = hparams['subtoken_embed_dim'] > 0
+        create_chunk_trie = ('feature_template' in hparams and hparams['feature_template'])
         subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
         lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
             
-        test, self.indices = data_io.load_data(
+        test, self.dic = data_io.load_data(
             data_format, test_path, read_pos=read_pos, update_tokens=False, update_labels=False,
-            create_word_trie=create_word_trie, subpos_depth=subpos_depth, 
+            create_chunk_trie=create_chunk_trie, use_subtoken=use_subtoken, subpos_depth=subpos_depth, 
             lowercase=lowercase, normalize_digits=normalize_digits, 
             max_vocab_size=args.max_vocab_size, freq_threshold=args.freq_threshold,
-            indices=self.indices, refer_vocab=refer_vocab)
+            dic=self.dic, refer_vocab=refer_vocab)
 
         self.log('Load test data: {}'.format(test_path))
-        self.log('Data length: {}'.format(len(test.instances)))
-        self.log('Vocab size: {}\n'.format(len(self.indices.token_indices)))
+        self.log('Data length: {}'.format(len(test.tokenseqs)))
+        self.log('Vocab size: {}\n'.format(len(self.dic.token_indices)))
         if 'featre_template' in self.hparams and self.hparams['feature_template']:
             self.log('Start feature extraction for test data\n')
             self.extract_features(test)
 
         self.test = test
-        self.indices.create_id2strs()
+        self.dic.create_id2strs()
 
 
     def extract_features(self, data):
-        features = self.feat_extractor.extract_features(data.instances, self.indices)
+        features = self.feat_extractor.extract_features(data.tokenseqs, self.dic)
         data.set_features(features)
 
 
@@ -330,10 +332,15 @@ class Trainer(object):
             optimizer = chainer.optimizers.AdaGrad(lr=self.args.learning_rate)
 
         optimizer.setup(self.classifier)
+        delparams = []
         if self.args.fix_pretrained_embed:
-            optimizer.add_hook(DeleteGradient(['trained_word_embed/W']))
-            self.log('Fix parameters: trained_word_embed/W')
+            delparams.update(['pretrained_token_embed/W'])
+            self.log('Fix parameters: pretrained_token_embed/W')
+        if delparams:
+            optimizer.add_hook(DeleteGradient(delparams))
+
         optimizer.add_hook(chainer.optimizer.GradientClipping(self.args.gradclip))
+
         if self.args.weightdecay > 0:
             optimizer.add_hook(chainer.optimizer.WeightDecay(self.args.weightdecay))
 
@@ -351,10 +358,10 @@ class Trainer(object):
                     print('{}={}'.format(key, val), file=f)
                 self.log('save hyperparameters: {}'.format(hparam_path))
 
-            indices_path = '{}/{}.s2i'.format(constants.MODEL_DIR, self.start_time)
-            with open(indices_path, 'wb') as f:
-                pickle.dump(self.indices, f)
-            self.log('save string2index table: {}'.format(indices_path))
+            dic_path = '{}/{}.s2i'.format(constants.MODEL_DIR, self.start_time)
+            with open(dic_path, 'wb') as f:
+                pickle.dump(self.dic, f)
+            self.log('save string2index table: {}'.format(dic_path))
 
         for e in range(max(1, self.args.epoch_begin), self.args.epoch_end+1):
             time = datetime.now().strftime('%Y%m%d_%H%M')
@@ -391,13 +398,13 @@ class Trainer(object):
 
         raw_path = (args.path_prefix if args.path_prefix else '') + self.args.raw_data
         if self.decode_type == 'tag':
-            instances = data_io.load_raw_text_for_tagging(raw_path, self.classifier.indices)
+            tokenseqs = data_io.load_raw_text_for_tagging(raw_path, self.classifier.dic)
         else:
-            instances = data_io.load_raw_text_for_segmentation(raw_path, self.classifier.indices)
-        data = data_io.Data(instances, None)
+            tokenseqs = data_io.load_raw_text_for_segmentation(raw_path, self.classifier.dic)
+        data = data_io.Data(tokenseqs, None)
 
         if 'feature_template' in self.hparams and self.hparams['feature_template']:
-            self.extract_features(data, self.classifier.indices)
+            self.extract_features(data, self.classifier.dic)
 
         stream = open(self.args.output_path, 'w') if self.args.output_path else sys.stdout
         self.decode(data, stream=stream)
@@ -420,13 +427,13 @@ class Trainer(object):
 
             if self.decode_type == 'tag':
                 array = line.split(' ')
-                ins = [self.classifier.indices.get_token_id(word) for word in array]
+                ins = [self.classifier.dic.get_token_id(word) for word in array]
             else:
-                ins = [self.classifier.indices.get_token_id(char) for char in line]
+                ins = [self.classifier.dic.get_token_id(char) for char in line]
             xs = [xp.asarray(ins, dtype=np.int32)]
 
             if self.hparams['feature_template']:
-                fs = self.feat_extractor.extract_features([ins], self.classifier.indices)
+                fs = self.feat_extractor.extract_features([ins], self.classifier.dic)
             else:
                 fs = None
 
@@ -453,7 +460,7 @@ class Trainer(object):
         total_counts = None
 
         i = 0
-        n_ins = len(data.instances)
+        n_ins = len(data.tokenseqs)
         shuffle = True if train else False
         for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=shuffle):
             inputs = self.gen_inputs(data, ids)
@@ -499,7 +506,7 @@ class Trainer(object):
 
                 self.log('\n### Finish %s iterations (%s examples: %s epoch)' % (
                     self.n_iter, (self.n_iter * self.args.batchsize), now_e))
-                self.log('<training result for previous iterations>')            
+                self.log('<training result for previous iterations>')
                 res = self.evaluator.report_results(n_sen, total_counts, total_loss, stream=self.logger)
                 self.report('train\t%d\t%s\t%s' % (self.n_iter, now_e, res))
 
@@ -546,12 +553,16 @@ class TaggerTrainer(Trainer):
     def init_hyperparameters(self, args, pretrained_token_embed_dim=0):
         self.hparams = {
             'token_embed_dim' : args.token_embed_dim,
+            'subtoken_embed_dim' : args.subtoken_embed_dim,
             'rnn_unit_type' : args.rnn_unit_type,
             'rnn_bidirection' : args.rnn_bidirection,
             'rnn_n_layers' : args.rnn_n_layers,
             'rnn_n_units' : args.rnn_n_units,
+            'mlp_n_layers' : args.mlp_n_layers,
+            'mlp_n_units' : args.mlp_n_units,
             'inference_layer' : args.inference_layer,
-            'dropout' : args.dropout,
+            'rnn_dropout' : args.rnn_dropout,
+            'mlp_dropout' : args.mlp_dropout,
             'feature_template' : args.feature_template,
             'data_format' : args.data_format,
             'subpos_depth' : args.subpos_depth,
@@ -582,14 +593,19 @@ class TaggerTrainer(Trainer):
                 val = kv[1]
 
                 if (key == 'token_embed_dim' or
+                    key == 'subtoken_embed_dim' or
                     key == 'additional_feat_dim' or
                     key == 'rnn_n_layers' or
                     key == 'rnn_n_units' or
+                    key == 'mlp_n_layers'or
+                    key == 'mlp_n_units' or
                     key == 'subpos_depth'
                 ):
                     val = int(val)
 
-                elif key == 'dropout':
+                elif (key == 'rnn_dropout' or
+                      key == 'mlp_dropout'
+                ):
                     val = float(val)
 
                 elif (key == 'rnn_bidirection' or
@@ -626,22 +642,22 @@ class TaggerTrainer(Trainer):
     def show_training_data(self):
         train = self.train
         val = self.val
-        n_train = len(train.instances)
+        n_train = len(train.tokenseqs)
         self.log('### Loaded data')
-        self.log('# train: {} ... {}\n'.format(train.instances[:3], train.instances[n_train-3:]))
+        self.log('# train: {} ... {}\n'.format(train.tokenseqs[:3], train.tokenseqs[n_train-3:]))
         self.log('# train_gold: {} ... {}\n'.format(train.labels[0][:3], train.labels[0][n_train-3:]))
-        t2i_tmp = list(self.indices.token_indices.str2id.items())
+        t2i_tmp = list(self.dic.token_indices.str2id.items())
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
-        if self.indices.seg_label_indices:
-            id2seg = {v:k for k,v in self.indices.seg_label_indices.str2id.items()}
+        if self.dic.seg_label_indices:
+            id2seg = {v:k for k,v in self.dic.seg_label_indices.str2id.items()}
             self.log('# seg labels: {}\n'.format(id2seg))
-        if self.indices.pos_label_indices:
-            id2pos = {v:k for k,v in self.indices.pos_label_indices.str2id.items()}
+        if self.dic.pos_label_indices:
+            id2pos = {v:k for k,v in self.dic.pos_label_indices.str2id.items()}
             self.log('# pos labels: {}\n'.format(id2pos))
         
-        self.report('[INFO] vocab: {}'.format(len(self.indices.token_indices)))
+        self.report('[INFO] vocab: {}'.format(len(self.dic.token_indices)))
         self.report('[INFO] data length: train={} val={}'.format(
-            len(train.instances), len(val.instances) if val else 0))
+            len(train.tokenseqs), len(val.tokenseqs) if val else 0))
 
 
     # for ignore labels
@@ -651,19 +667,22 @@ class TaggerTrainer(Trainer):
             self.args.ignore_labels = set()
 
             for label in tmp.split(','):
-                label_id = self.indices.get_pos_label_id(label)
+                label_id = self.dic.get_pos_label_id(label)
                 if label_id >= 0:
                     self.args.ignore_labels.add(label_id)
 
             self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignore_labels))
 
-        self.evaluator = classifiers.init_evaluator(self.decode_type, self.indices, self.args.ignore_labels)
+        else:
+            self.args.ignore_labels = set()
+
+        self.evaluator = classifiers.init_evaluator(self.decode_type, self.dic, self.args.ignore_labels)
 
 
     def gen_inputs(self, data, ids):
         xp = cuda.cupy if self.args.gpu >= 0 else np
 
-        xs = [xp.asarray(data.instances[j], dtype='i') for j in ids]
+        xs = [xp.asarray(data.tokenseqs[j], dtype='i') for j in ids]
         ts = [xp.asarray(data.labels[0][j], dtype='i') for j in ids]
         if self.hparams['feature_template']:
             fs = [data.features[j] for j in ids]
@@ -676,9 +695,9 @@ class TaggerTrainer(Trainer):
     def decode(self, data, stream=sys.stdout):
         xp = cuda.cupy if args.gpu >= 0 else np
 
-        n_ins = len(data.instances)
+        n_ins = len(data.tokenseqs)
         for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=False):
-            xs = [xp.asarray(data.instances[j], dtype='i') for j in ids]
+            xs = [xp.asarray(data.tokenseqs[j], dtype='i') for j in ids]
             if self.hparams['feature_template']:
                 fs = [data.features[j] for j in ids]
             else:
@@ -692,8 +711,8 @@ class TaggerTrainer(Trainer):
         ys = self.classifier.decode(xs, fs)
 
         for x, y in zip(xs, ys):
-            x_str = [self.classifier.indices.get_token(int(xi)) for xi in x]
-            y_str = [self.classifier.indices.get_label(int(yi)) for yi in y]
+            x_str = [self.classifier.dic.get_token(int(xi)) for xi in x]
+            y_str = [self.classifier.dic.get_label(int(yi)) for yi in y]
 
             if self.decode_type == 'tag':
                 res = ['{}/{}'.format(xi_str, yi_str) for xi_str, yi_str in zip(x_str, y_str)]
@@ -735,6 +754,7 @@ class ParserTrainer(Trainer):
     def init_hyperparameters(self, args):
         self.hparams = {
             'token_embed_dim' : args.token_embed_dim,
+            'subtoken_embed_dim' : args.subtoken_embed_dim,
             'pos_embed_dim' : args.pos_embed_dim,
             'rnn_unit_type' : args.rnn_unit_type,
             'rnn_bidirection' : args.rnn_bidirection,
@@ -780,6 +800,7 @@ class ParserTrainer(Trainer):
                 val = kv[1]
 
                 if (key == 'token_embed_dim' or
+                    key == 'subtoken_embed_dim' or
                     key == 'pretrained_token_embed_dim' or
                     key == 'pos_embed_dim' or
                     key == 'rnn_n_layers' or
@@ -824,11 +845,11 @@ class ParserTrainer(Trainer):
 
         elif (data_format == 'wl_tag_dep'):
             self.decode_type = 'tag_dep'
-            self.label_begin_index = 1
+            self.label_begin_index = 2
 
         elif (data_format == 'wl_tag_tdep'):
             self.decode_type = 'tag_tdep'
-            self.label_begin_index = 1
+            self.label_begin_index = 2
 
         else:
             print('Error: invalid data format: {}'.format(data_format), file=sys.stderr)
@@ -838,23 +859,31 @@ class ParserTrainer(Trainer):
     def show_training_data(self):
         train = self.train
         val = self.val
-        n_train = len(train.instances)
+        n_train = len(train.tokenseqs)
         self.log('### Loaded data')
-        self.log('# train: {} ... {}\n'.format(train.instances[:3], train.instances[n_train-3:]))
+        self.log('# train: {} ... {}\n'.format(train.tokenseqs[:3], train.tokenseqs[n_train-3:]))
         self.log('# train_gold_head: {} ... {}\n'.format(train.labels[1][:3], train.labels[1][n_train-3:]))
         self.log('# train_gold_label: {} ... {}\n'.format(train.labels[2][:3], train.labels[2][n_train-3:]))
-        t2i_tmp = list(self.indices.token_indices.str2id.items())
+        t2i_tmp = list(self.dic.token_indices.str2id.items())
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
-        if self.indices.pos_label_indices:
-            id2pos = {v:k for k,v in self.indices.pos_label_indices.str2id.items()}
+
+        if self.dic.subtoken_indices:
+            self.log('# train_subtokens: {} ... {}\n'.format(
+                train.subtokenseqs[:1], train.subtokenseqs[n_train-1:]))
+            st2i_tmp = list(self.dic.subtoken_indices.str2id.items())
+            self.log('# subtoken2id: {} ... {}\n'.format(st2i_tmp[:10], st2i_tmp[len(st2i_tmp)-10:]))
+
+        if self.dic.pos_label_indices:
+            id2pos = {v:k for k,v in self.dic.pos_label_indices.str2id.items()}
             self.log('# pos labels: {}\n'.format(id2pos))
-        if self.indices.arc_label_indices:
-            id2arc = {v:k for k,v in self.indices.arc_label_indices.str2id.items()}
+
+        if self.dic.arc_label_indices:
+            id2arc = {v:k for k,v in self.dic.arc_label_indices.str2id.items()}
             self.log('# arc labels: {}\n'.format(id2arc))
         
-        self.report('[INFO] vocab: {}'.format(len(self.indices.token_indices)))
+        self.report('[INFO] vocab: {}'.format(len(self.dic.token_indices)))
         self.report('[INFO] data length: train={} val={}'.format(
-            len(train.instances), len(val.instances) if val else 0))
+            len(train.tokenseqs), len(val.tokenseqs) if val else 0))
 
 
     # for ignore labels
@@ -864,28 +893,34 @@ class ParserTrainer(Trainer):
             self.args.ignore_labels = set()
 
             for label in tmp.split(','):
-                label_id = self.indices.get_arc_label_id(label)
+                label_id = self.dic.get_arc_label_id(label)
                 if label_id >= 0:
                     self.args.ignore_labels.add(label_id)
 
             self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignore_labels))
 
-        self.evaluator = classifiers.init_evaluator(self.decode_type, self.indices, self.args.ignore_labels)
+        else:
+            self.args.ignore_labels = set()
+
+        self.evaluator = classifiers.init_evaluator(self.decode_type, self.dic, self.args.ignore_labels)
 
 
     def gen_inputs(self, data, ids):
         xp = cuda.cupy if self.args.gpu >= 0 else np
-
-        ws = [xp.asarray(data.instances[j], dtype='i') for j in ids]
+        ws = [xp.asarray(data.tokenseqs[j], dtype='i') for j in ids]
+        if data.subtokenseqs:
+            cs = [[xp.asarray(subs, dtype='i') for subs in data.subtokenseqs[j]] for j in ids] 
+        else:
+            cs = None
         ps = [xp.asarray(data.labels[0][j], dtype='i') for j in ids] if data.labels[0] else None
         ths = [xp.asarray(data.labels[1][j], dtype='i') for j in ids]
         if self.decode_type == 'tdep' or self.decode_type == 'tag_tdep':
             tls = [xp.asarray(data.labels[2][j], dtype='i') for j in ids]
 
         if self.decode_type == 'tdep' or self.decode_type == 'tag_tdep':
-            return ws, ps, ths, tls
+            return ws, cs, ps, ths, tls
         else:
-            return ws, ps, ths
+            return ws, cs, ps, ths
         
 
     def decode(self, data, stream=sys.stdout):
