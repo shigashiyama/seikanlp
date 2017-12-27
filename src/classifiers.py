@@ -20,7 +20,7 @@ class Classifier(chainer.link.Chain):
     
 
     def load_pretrained_embedding_layer(self, dic, external_model, finetuning=False):
-        id2token = dic.token_indices.id2str
+        id2token = dic.tables['unigram'].id2str
         models.util.load_pretrained_embedding_layer(
             id2token, self.predictor.pretrained_token_embed, external_model, finetuning=finetuning)
 
@@ -59,8 +59,8 @@ class SequenceTagger(Classifier):
 
 
     def grow_embedding_layers(self, dic_org, dic_grown, external_model=None, train=True):
-        id2token_grown = dic_grown.token_indices.id2str
-        id2token_org = dic_org.token_indices.id2str
+        id2token_grown = dic_grown.tables['unigram'].id2str
+        id2token_org = dic_org.tables['unigram'].id2str
         if len(id2token_grown) > len(id2token_org):
             models.util.grow_embedding_layers(
                 id2token_org, id2token_grown, 
@@ -69,11 +69,11 @@ class SequenceTagger(Classifier):
         
     def grow_inference_layers(self, dic_org, dic_grown):
         if self.task == 'seg' or self.task == 'seg_tag':
-            id2lab_grown = dic_grown.seg_label_indices.id2str
-            id2lab_org = dic_org.seg_label_indices.id2str
+            id2lab_grown = dic_grown.tables['seg_label'].id2str
+            id2lab_org = dic_org.tables['seg_label'].id2str
         else:
-            id2lab_grown = dic_grown.pos_label_indices.id2str
-            id2lab_org = dic_org.pos_label_indices.id2str
+            id2lab_grown = dic_grown.tables['pos_label'].id2str
+            id2lab_org = dic_org.tables['pos_label'].id2str
 
         if len(id2lab_grown) > len(id2lab_org):
             models.util.grow_MLP(id2lab_org, id2lab_grown, self.predictor.mlp.layers[-1])
@@ -148,7 +148,7 @@ class DualSequenceTagger(Classifier):
 
     # TODO confirm
     def load_pretrained_embedding_layer(self, dic, external_model, finetuning=False):
-        id2token = dic.token_indices.id2str
+        id2token = dic.tables['unigram'].id2str
         models.util.load_pretrained_embedding_layer(
             id2token, self.predictor.su_tagger.pretrained_token_embed, external_model, finetuning=False)
         models.util.load_pretrained_embedding_layer(
@@ -157,8 +157,8 @@ class DualSequenceTagger(Classifier):
 
     # TODO confirm
     def grow_embedding_layers(self, dic_org, dic_grown, external_model=None, train=True):
-        id2token_grown = dic_grown.token_indices.id2str
-        id2token_org = dic_org.token_indices.id2str
+        id2token_grown = dic_grown.tables['unigram'].id2str
+        id2token_org = dic_org.tables['unigram'].id2str
         if len(id2token_grown) > len(id2token_org):
             models.util.grow_embedding_layers(
                 id2token_org, id2token_grown, self.predictor.su_tagger.token_embed, 
@@ -172,11 +172,11 @@ class DualSequenceTagger(Classifier):
     # TODO confirm
     def grow_inference_layers(self, dic_org, dic_grown):
         if self.task == 'dual_seg' or self.task == 'dual_seg_tag':
-            id2lab_grown = dic_grown.seg_label_indices.id2str
-            id2lab_org = dic_org.seg_label_indices.id2str
+            id2lab_grown = dic_grown.tables['seg_label'].id2str
+            id2lab_org = dic_org.tables['seg_label'].id2str
         else:
-            id2lab_grown = dic_grown.pos_label_indices.id2str
-            id2lab_org = dic_org.pos_label_indices.id2str
+            id2lab_grown = dic_grown.tables['pos_label'].id2str
+            id2lab_org = dic_org.tables['pos_label'].id2str
 
         if len(id2lab_grown) > len(id2lab_org):
             models.util.grow_MLP(id2lab_org, id2lab_grown, self.predictor.su_tagger.mlp.layers[-1])
@@ -232,15 +232,15 @@ class DependencyParser(Classifier):
 
 
     def grow_embedding_layers(self, dic_org, dic_grown, external_model=None, train=True):
-        id2token_grown = dic_grown.token_indices.id2str
-        id2token_org = dic_org.token_indices.id2str
+        id2token_grown = dic_grown.tables['unigram'].id2str
+        id2token_org = dic_org.tables['unigram'].id2str
         if len(id2token_grown) > len(id2token_org):
             models.util.grow_embedding_layers(
                 id2token_org, id2token_grown, 
                 self.predictor.token_embed, self.predictor.pretrained_token_embed, external_model, train=train)
 
-        id2pos_grown = dic_grown.pos_label_indices.id2str
-        id2pos_org = dic_org.pos_label_indices.id2str
+        id2pos_grown = dic_grown.tables['pos_label'].id2str
+        id2pos_org = dic_org.tables['pos_label'].id2str
         if len(id2pos_grown) > len(id2pos_org):
             models.util.grow_embedding_layers(
                 id2pos_org, id2pos_grown, self.predictor.pos_embed,
@@ -248,8 +248,8 @@ class DependencyParser(Classifier):
 
 
     def grow_inference_layers(self, dic_org, dic_grown):
-        id2alab_grown = dic_grown.arc_label_indices.id2str
-        id2alab_org = dic_org.arc_label_indices.id2str
+        id2alab_grown = dic_grown.tables['arc_label'].id2str
+        id2alab_org = dic_org.tables['arc_label'].id2str
 
         if (self.predictor.label_prediction and
             len(id2alab_grown) > len(id2alab_org)):
@@ -260,15 +260,15 @@ class DependencyParser(Classifier):
 def init_classifier(
         classifier_type, hparams, dic, 
         pretrained_token_embed_dim=0, predict_parent_existence=False):
-    n_vocab = len(dic.token_indices)
-    n_subtokens = len(dic.subtoken_indices) if hparams['subtoken_embed_dim'] > 0 else 0
+    n_vocab = len(dic.tables['unigram'])
+    n_subtokens = len(dic.tables['subtoken']) if hparams['subtoken_embed_dim'] > 0 else 0
 
     # single tagger
     if (classifier_type == 'seg' or classifier_type == 'seg_tag' or classifier_type == 'tag'):
         if 'seg' in classifier_type:
-            n_labels = len(dic.seg_label_indices)
+            n_labels = len(dic.tables['seg_label'])
         else:
-            n_labels = len(dic.pos_label_indices)
+            n_labels = len(dic.tables['pos_label'])
 
         use_crf = hparams['inference_layer'] == 'crf'
         mlp_n_additional_units=0
@@ -287,9 +287,9 @@ def init_classifier(
     # dual tagger
     elif (classifier_type == 'dual_seg' or classifier_type == 'dual_seg_tag' or classifier_type == 'dual_tag'):
         if 'seg' in classifier_type:
-            n_labels = len(dic.seg_label_indices)
+            n_labels = len(dic.tables['seg_label'])
         else:
-            n_labels = len(dic.pos_label_indices)
+            n_labels = len(dic.tables['pos_label'])
             
         mlp_n_additional_units = 0
 
@@ -307,10 +307,10 @@ def init_classifier(
     # parser
     elif (classifier_type == 'dep' or classifier_type == 'tdep' or
           classifier_type == 'tag_dep' or classifier_type == 'tag_tdep'):
-        n_pos = len(dic.pos_label_indices) if hparams['pos_embed_dim'] > 0 else 0
+        n_pos = len(dic.tables['pos_label']) if hparams['pos_embed_dim'] > 0 else 0
 
         if classifier_type == 'tdep' or classifier_type == 'tag_tdep':
-            n_labels = len(dic.arc_label_indices)
+            n_labels = len(dic.tables['arc_label'])
         else:
             n_labels = 0
 
@@ -364,10 +364,10 @@ def init_classifier(
 
 def init_evaluator(classifier_type, dic, ignore_labels):
     if classifier_type == 'seg' or classifier_type == 'dual_seg':
-        return evaluators.SegmenterEvaluator(dic.seg_label_indices.id2str)
+        return evaluators.SegmenterEvaluator(dic.tables['seg_label'].id2str)
 
     elif classifier_type == 'seg_tag' or classifier_type == 'dual_seg_tag':
-        return evaluators.JointSegmenterEvaluator(dic.seg_label_indices.id2str)
+        return evaluators.JointSegmenterEvaluator(dic.tables['seg_label'].id2str)
 
     elif classifier_type == 'tag' or classifier_type == 'dual_tag':
         return evaluators.TaggerEvaluator(ignore_head=False, ignore_labels=ignore_labels)

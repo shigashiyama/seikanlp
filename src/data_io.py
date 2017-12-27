@@ -10,14 +10,10 @@ import dictionary
 
 
 class Data(object):
-    def __init__(self, tokenseqs, labels, subtokenseqs=None):
-        self.tokenseqs = tokenseqs
-        self.subtokenseqs = subtokenseqs
-        self.labels = labels    # list of label sequences (seg, pos, dep and arc)
-        self.features = None
-
-    def set_features(self, features):
-        self.features = features
+    def __init__(self, inputs=None, outputs=None, featvecs=None):
+        self.inputs = inputs      # list of input sequences e.g. chars, words
+        self.outputs = outputs    # list of output sequences (label sequences) 
+        self.featvecs = featvecs  # feature vectors other than input sequences
 
 
 def load_raw_text_for_segmentation(path, dic):
@@ -75,9 +71,10 @@ def load_data_SL(path, segmentation=True, tagging=False,
                  subpos_depth=-1, use_subtoken=False, create_chunk_trie=False, 
                  freq_tokens=set(), dic=None, refer_vocab=set()):
     if not dic:
-        dic = dictionary.Dictionary(
-            use_seg_label=segmentation, use_pos_label=tagging, 
-            use_subtoken=use_subtoken, use_chunk_trie=create_chunk_trie)
+        dic = dictionary.init_dictionary(
+            use_unigram=True, use_bigram=False, use_subtoken=use_subtoken, use_token_type=False,
+            use_seg_label=segmentation, use_pos_label=read_pos, 
+            use_chunk_trie=create_chunk_trie, use_root=parsing)
 
     delim = constants.DELIM1_SYMBOL
 
@@ -89,7 +86,6 @@ def load_data_SL(path, segmentation=True, tagging=False,
     pos_seqs = []               # list of POS label sequences
 
     with open(path) as f:
-
         for line in f:
             line = line.strip()
             if len(line) < 1:
@@ -133,9 +129,9 @@ def load_data_SL(path, segmentation=True, tagging=False,
                 if segmentation:
                     update_token = [
                         update_each_token(word[i], update_tokens, freq_tokens, refer_vocab) for i in range(wlen)]
-                    t_seq.extend([dic.token_indices.get_id(word[i], update_token[i]) for i in range(wlen)])
+                    t_seq.extend([dic.tables['unigram'].get_id(word[i], update_token[i]) for i in range(wlen)])
                     seg_seq.extend(
-                        [dic.seg_label_indices.get_id(
+                        [dic.tables['seg_label'].get_id(
                             get_label_BIES(i, wlen-1, cate=pos), update=update_labels) for i in range(wlen)])
 
                     if create_chunk_trie and update_token == [True for i in range(wlen)]: # update word trie
@@ -144,14 +140,14 @@ def load_data_SL(path, segmentation=True, tagging=False,
 
                 else:
                     update_token = update_each_token(word, update_tokens, freq_tokens, refer_vocab)
-                    t_seq.append(dic.token_indices.get_id(word, update=update_token))
-                    pos_seq.append(dic.pos_label_indices.get_id(pos, update=update_labels))
+                    t_seq.append(dic.tables['unigram'].get_id(word, update=update_token))
+                    pos_seq.append(dic.tables['pos_label'].get_id(pos, update=update_labels))
 
                     if use_subtoken:
                         update_token = [
                             update_each_token(word[i], update_tokens, refer_vocab) for i in range(wlen)]
                         st_seq.append(
-                            [dic.subtoken_indices.get_id(word[i], update_token[i]) for i in range(wlen)])
+                            [dic.tables['subtoken'].get_id(word[i], update_token[i]) for i in range(wlen)])
 
             ins_cnt += 1
 
@@ -166,16 +162,17 @@ def load_data_SL(path, segmentation=True, tagging=False,
             if ins_cnt % 100000 == 0:
                 print('Read', ins_cnt, 'sentences', file=sys.stderr)
 
-    label_seqs_list = []
-
+    inputs = [tokenseqs]
     if subtokenseqs:
-        subtokenseqs.append(st_seq)
-    if seg_seqs:
-        label_seqs_list.append(seg_seqs)
-    if pos_seqs:
-        label_seqs_list.append(pos_seqs)
+        inputs.append(subtokenseqs)
 
-    return Data(tokenseqs, label_seqs_list, subtokenseqs), dic
+    outputs = []
+    if seg_seqs:
+        outputs.append(seg_seqs)
+    if pos_seqs:
+        outputs.append(pos_seqs)
+
+    return Data(inputs, outputs), dic
 
 
 """
@@ -199,16 +196,16 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
     read_pos = tagging or parsing
     pred_parex = predict_parent_existence
     if not dic:
-        dic = dictionary.Dictionary(
-            use_seg_label=segmentation, use_pos_label=read_pos, 
-            use_arc_label=typed_parsing, use_subtoken=use_subtoken,
-            use_chunk_trie=create_chunk_trie, use_root=parsing, use_dummy=pred_parex)
+        dic = dictionary.init_dictionary(
+            use_unigram=True, use_bigram=False, use_subtoken=use_subtoken, use_token_type=False,
+            use_seg_label=segmentation, use_pos_label=read_pos, use_arc_label=typed_parsing, 
+            use_chunk_trie=create_chunk_trie, use_root=parsing)
+    # predict_parent_existence is unused
 
     delim = constants.DELIM2_SYMBOL
-
     word_clm = 0
     pos_clm = 1
-    dep_clm = 2
+    head_clm = 2
     arc_clm = 3
 
     ins_cnt = 0
@@ -217,24 +214,22 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
     subtokenseqs = []
     seg_seqs = []        # list of segmentation label sequences
     pos_seqs = []        # list of POS label sequences
-    dep_seqs = []        # list of dependency label sequences
+    head_seqs = []       # list of head id sequences
     arc_seqs = []        # list of arc label sequences
 
-    dummy_id = dic.dummy_id if pred_parex else -1
-    t_seq_ = init_list(parsing, dic.root_id, init_list(pred_parex, dummy_id))
-    st_seq_ = init_list(parsing and use_subtoken, [dic.root_id],
-                        init_list(pred_parex and use_subtoken, [dummy_id]))
-    seg_seq_ = init_list()
-    pos_seq_ = init_list(parsing and read_pos, dic.root_id, init_list(pred_parex, dummy_id))
-    dep_seq_ = init_list(parsing, constants.NO_PARENTS_ID, init_list(pred_parex, constants.NO_PARENTS_ID))
-    arc_seq_ = init_list(parsing, constants.NO_PARENTS_ID, init_list(pred_parex, constants.NO_PARENTS_ID))
+    t_seq_ = [dic.tables['unigram'].get_id(constants.ROOT_SYMBOL)] if parsing else []
+    st_seq_ = [[dic.tables['subtoken'].get_id(constants.ROOT_SYMBOL)]] if parsing and use_subtoken else []
+    seg_seq_ = []
+    pos_seq_ = [dic.tables['pos_label'].get_id(constants.ROOT_SYMBOL)] if parsing and read_pos else []
+    head_seq_ = [constants.NO_PARENTS_ID] if parsing else []
+    arc_seq_ = [constants.NO_PARENTS_ID] if typed_parsing else []
 
     with open(path) as f:
         t_seq = t_seq_.copy()
         st_seq = st_seq_.copy()
         seg_seq = seg_seq_.copy()
         pos_seq = pos_seq_.copy() 
-        dep_seq = dep_seq_.copy() 
+        head_seq = head_seq_.copy() 
         arc_seq = arc_seq_.copy() 
 
         for line in f:
@@ -254,9 +249,9 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
                     if pos_seq:
                         pos_seqs.append(pos_seq)
                         pos_seq = pos_seq_.copy()
-                    if dep_seq:
-                        dep_seqs.append(dep_seq)
-                        dep_seq = dep_seq_.copy()
+                    if head_seq:
+                        head_seqs.append(head_seq)
+                        head_seq = head_seq_.copy()
                     if arc_seq:
                         arc_seqs.append(arc_seq)
                         arc_seq = arc_seq_.copy()
@@ -287,9 +282,9 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
                             print('POS label is mandatory for POS tagging', file=sys.stderr)
                             sys.exit()
 
-                elif line.startswith(constants.DEP_CLM_TXT):
-                    dep_clm = int(line.split('=')[1]) - 1
-                    print('Read 2nd label column id:', dep_clm+1, file=sys.stderr)
+                elif line.startswith(constants.HEAD_CLM_TXT):
+                    head_clm = int(line.split('=')[1]) - 1
+                    print('Read 2nd label column id:', head_clm+1, file=sys.stderr)
 
                 elif line.startswith(constants.ARC_CLM_TXT):
                     arc_clm = int(line.split('=')[1]) - 1
@@ -319,7 +314,7 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
                 pos = None
 
             if parsing:
-                dep = array[dep_clm]
+                head = array[head_clm]
 
             if typed_parsing:
                 arc = array[arc_clm]
@@ -329,43 +324,37 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
             if segmentation:
                 update_token = [
                     update_each_token(word[i], update_tokens, freq_tokens, refer_vocab) for i in range(wlen)]
-                t_seq.extend([dic.token_indices.get_id(word[i], update_token[i]) for i in range(wlen)])
+                t_seq.extend([dic.tables['unigram'].get_id(word[i], update_token[i]) for i in range(wlen)])
                 seg_seq.extend(
-                    [dic.seg_label_indices.get_id(
+                    [dic.tables['seg_label'].get_id(
                         get_label_BIES(i, wlen-1, cate=pos), update=update_labels) for i in range(wlen)])
 
                 if create_chunk_trie and update_token == [True for i in range(wlen)]: # update chunk trie
-                    ids = t_seq[-wlen:]
-                    dic.chunk_trie.get_chunk_id(ids, True)
+                    token_ids = t_seq[-wlen:]
+                    dic.tries['chunk'].get_chunk_id(token_ids, True)
 
             else:
                 update_token = update_each_token(word, update_tokens, freq_tokens, refer_vocab)
-                t_seq.append(dic.token_indices.get_id(word, update=update_token))
+                t_seq.append(dic.tables['unigram'].get_id(word, update=update_token))
 
                 if use_subtoken:
                     update_token = [update_each_token(word[i], update_tokens, refer_vocab) for i in range(wlen)]
                     st_seq.append(
-                        [dic.subtoken_indices.get_id(word[i], update_token[i]) for i in range(wlen)])
+                        [dic.tables['subtoken'].get_id(word[i], update_token[i]) for i in range(wlen)])
 
             if read_pos:
-                pos_seq.append(dic.pos_label_indices.get_id(pos, update=update_labels))
+                pos_seq.append(dic.tables['pos_label'].get_id(pos, update=update_labels))
 
             if parsing:
-                if dep == '-1':
-                    dep = 1 if pred_parex else 0
-                elif dep == '-2' and pred_parex:
-                    dep = 0
-                else:
-                    dep = int(dep)+1 if pred_parex else int(dep)
-                dep_seq.append(dep)
+                head = int(head)
+                if head < 0:
+                    head = 0
+                head_seq.append(head)
 
             if typed_parsing:
-                arc_seq.append(dic.arc_label_indices.get_id(arc, update=update_labels))
+                arc_seq.append(dic.tables['arc_label'].get_id(arc, update=update_labels))
                 
-        if parsing:
-            n_non_words = 2 if pred_parex else 1
-        else:
-            n_non_words = 0
+        n_non_words = 1 if parsing else 0
         if len(t_seq) - n_non_words > 0:
             tokenseqs.append(t_seq)
             if subtokenseqs:
@@ -374,34 +363,38 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
                 seg_seqs.append(seg_seq)
             if pos_seq:
                 pos_seqs.append(pos_seq)
-            if dep_seq:
-                dep_seqs.append(dep_seq)
+            if head_seq:
+                head_seqs.append(head_seq)
             if arc_seq:
                 arc_seqs.append(arc_seq)
 
-    label_seqs_list = []
+    inputs = [tokenseqs]
+    if subtokenseqs:
+        inputs.append(subtokenseqs)
+
+    outputs = []
     if seg_seqs:
-        label_seqs_list.append(seg_seqs)
+        outputs.append(seg_seqs)
     if pos_seqs:
-        label_seqs_list.append(pos_seqs)
+        outputs.append(pos_seqs)
     elif parsing:
-        label_seqs_list.append(None)
-    if dep_seqs:
-        label_seqs_list.append(dep_seqs)
+        outputs.append(None)
+    if head_seqs:
+        outputs.append(head_seqs)
     if arc_seqs:
-        label_seqs_list.append(arc_seqs)
+        outputs.append(arc_seqs)
 
-    return Data(tokenseqs, label_seqs_list, subtokenseqs), dic
+    return Data(inputs, outputs), dic
 
 
-def init_list(cond=False, elem=None, org_list=None):
-    if org_list is not None:
-        ret = org_list.copy()
-    else:
-        ret = []
-    if cond:
-        ret.append(elem)
-    return ret
+# def init_list(cond=False, elem=None, org_list=None):
+#     if org_list is not None:
+#         ret = org_list.copy()
+#     else:
+#         ret = []
+#     if cond:
+#         ret.append(elem)
+#     return ret
 
 
 # def add_padding_to_subtokens(subtokenseq, padding_id):

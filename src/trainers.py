@@ -136,7 +136,7 @@ class Trainer(object):
         with open(dic_path, 'rb') as f:
             self.dic = pickle.load(f)
         self.log('Load dic: {}'.format(dic_path))
-        self.log('Vocab size: {}\n'.format(len(self.dic.token_indices)))
+        self.log('Vocab size: {}\n'.format(len(self.dic.tables['unigram'])))
 
 
     def load_model(self, model_path, pretrained_token_embed_dim=0):
@@ -243,13 +243,13 @@ class Trainer(object):
             if self.args.dump_train_data:
                 name, ext = os.path.splitext(train_path)
                 if args.max_vocab_size > 0 or args.freq_threshold > 1:
-                    name = '{}_{}k'.format(name, int(len(self.dic.token_indices) / 1000))
+                    name = '{}_{}k'.format(name, int(len(self.dic.tables['unigram']) / 1000))
                 data_io.dump_pickled_data(name, train)
                 self.log('Dumpped training data: {}.pickle'.format(train_path))
 
         self.log('Load training data: {}'.format(train_path))
-        self.log('Data length: {}'.format(len(train.tokenseqs)))
-        self.log('Vocab size: {}\n'.format(len(self.dic.token_indices)))
+        self.log('Data length: {}'.format(len(train.inputs[0])))
+        self.log('Vocab size: {}\n'.format(len(self.dic.tables['unigram'])))
         if 'featre_template' in self.hparams and self.hparams['feature_template']:
             self.log('Start feature extraction for training data\n')
             self.extract_features(train)
@@ -265,8 +265,8 @@ class Trainer(object):
                 dic=self.dic, refer_vocab=refer_vocab)
 
             self.log('Load validation data: {}'.format(val_path))
-            self.log('Data length: {}'.format(len(val.tokenseqs)))
-            self.log('Vocab size: {}\n'.format(len(self.dic.token_indices)))
+            self.log('Data length: {}'.format(len(val.inputs[0])))
+            self.log('Vocab size: {}\n'.format(len(self.dic.tables['unigram'])))
             if 'featre_template' in self.hparams and self.hparams['feature_template']:
                 self.log('Start feature extraction for validation data\n')
                 self.extract_features(val)
@@ -303,8 +303,8 @@ class Trainer(object):
             dic=self.dic, refer_vocab=refer_vocab)
 
         self.log('Load test data: {}'.format(test_path))
-        self.log('Data length: {}'.format(len(test.tokenseqs)))
-        self.log('Vocab size: {}\n'.format(len(self.dic.token_indices)))
+        self.log('Data length: {}'.format(len(test.inputs[0])))
+        self.log('Vocab size: {}\n'.format(len(self.dic.tables['unigram'])))
         if 'featre_template' in self.hparams and self.hparams['feature_template']:
             self.log('Start feature extraction for test data\n')
             self.extract_features(test)
@@ -314,8 +314,8 @@ class Trainer(object):
 
 
     def extract_features(self, data):
-        features = self.feat_extractor.extract_features(data.tokenseqs, self.dic)
-        data.set_features(features)
+        featvecs = self.feat_extractor.extract_features(data.inputs[0], self.dic.tires['chunk'])
+        data.featvecs = featvecs
 
 
     def setup_optimizer(self):
@@ -411,10 +411,11 @@ class Trainer(object):
             # to be implemented
             pass
 
-        data = data_io.Data(tokenseqs, None)
+        inputs = [tokenseqs]
+        data = data_io.Data(inputs, None)
 
         if 'feature_template' in self.hparams and self.hparams['feature_template']:
-            self.extract_features(data, self.dic)
+            self.extract_features(data)
 
         stream = open(self.args.output_path, 'w') if self.args.output_path else sys.stdout
         self.decode(data, stream=stream)
@@ -443,7 +444,7 @@ class Trainer(object):
             xs = [xp.asarray(ins, dtype=np.int32)]
 
             if self.hparams['feature_template']:
-                fs = self.feat_extractor.extract_features([ins], self.dic)
+                fs = self.feat_extractor.extract_features([ins], self.dic.tries['chunk'])
             else:
                 fs = None
 
@@ -470,7 +471,7 @@ class Trainer(object):
         total_counts = None
 
         i = 0
-        n_ins = len(data.tokenseqs)
+        n_ins = len(data.inputs[0])
         # shuffle = False
         shuffle = True if train else False
         for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=shuffle):
@@ -604,27 +605,27 @@ class TaggerTrainerBase(Trainer):
         train = self.train
         val = self.val
         self.log('### Loaded data')
-        self.log('# train: {} ... {}\n'.format(train.tokenseqs[0], train.tokenseqs[-1]))
-        self.log('# train_gold: {} ... {}\n'.format(train.labels[0][0], train.labels[0][-1]))
-        t2i_tmp = list(self.dic.token_indices.str2id.items())
+        self.log('# train: {} ... {}\n'.format(train.inputs[0][0], train.inputs[0][-1]))
+        self.log('# train_gold: {} ... {}\n'.format(train.outputs[0][0], train.outputs[0][-1]))
+        t2i_tmp = list(self.dic.tables['unigram'].str2id.items())
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
-        if self.dic.seg_label_indices:
-            id2seg = {v:k for k,v in self.dic.seg_label_indices.str2id.items()}
+        if self.dic.has_table('seg_label'):
+            id2seg = {v:k for k,v in self.dic.tables['seg_label'].str2id.items()}
             self.log('# seg labels: {}\n'.format(id2seg))
-        if self.dic.pos_label_indices:
-            id2pos = {v:k for k,v in self.dic.pos_label_indices.str2id.items()}
+        if self.dic.has_table('pos_label'):
+            id2pos = {v:k for k,v in self.dic.tables['pos_label'].str2id.items()}
             self.log('# pos labels: {}\n'.format(id2pos))
         
-        self.report('[INFO] vocab: {}'.format(len(self.dic.token_indices)))
+        self.report('[INFO] vocab: {}'.format(len(self.dic.tables['unigram'])))
         self.report('[INFO] data length: train={} val={}'.format(
-            len(train.tokenseqs), len(val.tokenseqs) if val else 0))
+            len(train.inputs[0]), len(val.inputs[0]) if val else 0))
 
 
     def gen_inputs(self, data, ids, evaluate=True):
         xp = cuda.cupy if self.args.gpu >= 0 else np
 
-        xs = [xp.asarray(data.tokenseqs[j], dtype='i') for j in ids]
-        ts = [xp.asarray(data.labels[0][j], dtype='i') for j in ids] if evaluate else None
+        xs = [xp.asarray(data.inputs[0][j], dtype='i') for j in ids]
+        ts = [xp.asarray(data.outputs[0][j], dtype='i') for j in ids] if evaluate else None
         fs = [data.features[j] for j in ids] if self.hparams['feature_template'] else None
 
         if evaluate:
@@ -634,7 +635,7 @@ class TaggerTrainerBase(Trainer):
         
 
     def decode(self, data, stream=sys.stdout):
-        n_ins = len(data.tokenseqs)
+        n_ins = len(data.inputs[0])
         for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=False):
             xs, fs = self.gen_inputs(data, ids, evaluate=False)
             self.decode_batch(xs, fs)
@@ -1038,29 +1039,26 @@ class ParserTrainer(Trainer):
         train = self.train
         val = self.val
         self.log('### Loaded data')
-        self.log('# train: {} ... {}\n'.format(train.tokenseqs[0], train.tokenseqs[-1]))
-        self.log('# train_gold_head: {} ... {}\n'.format(train.labels[1][0], train.labels[1][-1]))
-        self.log('# train_gold_label: {} ... {}\n'.format(train.labels[2][0], train.labels[2][-1]))
-        t2i_tmp = list(self.dic.token_indices.str2id.items())
+        self.log('# train: {} ... {}\n'.format(train.inputs[0][0], train.inputs[0][-1]))
+        self.log('# train_gold_head: {} ... {}\n'.format(train.outputs[1][0], train.outputs[1][-1]))
+        if self.dic.has_table('arc_label'):
+            self.log('# train_gold_label: {} ... {}\n'.format(train.outputs[2][0], train.outputs[2][-1]))
+        t2i_tmp = list(self.dic.tables['unigram'].str2id.items())
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
 
-        if self.dic.subtoken_indices:
-            self.log('# train_subtokens: {} ... {}\n'.format(
-                train.subtokenseqs[0], train.subtokenseqs[-1]))
-            st2i_tmp = list(self.dic.subtoken_indices.str2id.items())
-            self.log('# subtoken2id: {} ... {}\n'.format(st2i_tmp[:10], st2i_tmp[len(st2i_tmp)-10:]))
-
-        if self.dic.pos_label_indices:
-            id2pos = {v:k for k,v in self.dic.pos_label_indices.str2id.items()}
+        if self.dic.has_table('seg_label'):
+            id2seg = {v:k for k,v in self.dic.tables['seg_label'].str2id.items()}
+            self.log('# seg labels: {}\n'.format(id2seg))
+        if self.dic.has_table('pos_label'):
+            id2pos = {v:k for k,v in self.dic.tables['pos_label'].str2id.items()}
             self.log('# pos labels: {}\n'.format(id2pos))
-
-        if self.dic.arc_label_indices:
-            id2arc = {v:k for k,v in self.dic.arc_label_indices.str2id.items()}
+        if self.dic.has_table('arc_label'):
+            id2arc = {v:k for k,v in self.dic.tables['arc_label'].str2id.items()}
             self.log('# arc labels: {}\n'.format(id2arc))
         
-        self.report('[INFO] vocab: {}'.format(len(self.dic.token_indices)))
+        self.report('[INFO] vocab: {}'.format(len(self.dic.tables['unigram'])))
         self.report('[INFO] data length: train={} val={}'.format(
-            len(train.tokenseqs), len(val.tokenseqs) if val else 0))
+            len(train.inputs[0]), len(val.inputs[0]) if val else 0))
 
 
     def setup_evaluator(self):
@@ -1069,7 +1067,7 @@ class ParserTrainer(Trainer):
             self.args.ignore_labels = set()
 
             for label in tmp.split(','):
-                label_id = self.dic.get_arc_label_id(label)
+                label_id = self.dic.tables['arc_label'].get_id(label)
                 if label_id >= 0:
                     self.args.ignore_labels.add(label_id)
 
@@ -1083,18 +1081,18 @@ class ParserTrainer(Trainer):
 
     def gen_inputs(self, data, ids):
         xp = cuda.cupy if self.args.gpu >= 0 else np
-        ws = [xp.asarray(data.tokenseqs[j], dtype='i') for j in ids]
-        cs = ([[xp.asarray(subs, dtype='i') for subs in data.subtokenseqs[j]] for j in ids] 
-              if data.subtokenseqs else None)
-        ps = [xp.asarray(data.labels[0][j], dtype='i') for j in ids] if data.labels[0] else None
-        ths = [xp.asarray(data.labels[1][j], dtype='i') for j in ids]
-
+        ws = [xp.asarray(data.inputs[0][j], dtype='i') for j in ids]
+        cs = ([[xp.asarray(subs, dtype='i') for subs in data.inputs[1][j]] for j in ids] 
+              if len(data.inputs) >= 2 else None)
+        ps = [xp.asarray(data.outputs[0][j], dtype='i') for j in ids] if data.outputs[0] else None
+        ths = [xp.asarray(data.outputs[1][j], dtype='i') for j in ids]
+        
         if self.decode_type == 'tdep' or self.decode_type == 'tag_tdep':
-            tls = [xp.asarray(data.labels[2][j], dtype='i') for j in ids]
+            tls = [xp.asarray(data.outputs[2][j], dtype='i') for j in ids]
             return ws, cs, ps, ths, tls
         else:
             return ws, cs, ps, ths
-        
+
 
     def decode(self, data, stream=sys.stdout):
         pass

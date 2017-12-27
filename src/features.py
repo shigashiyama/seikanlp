@@ -110,23 +110,23 @@ class DictionaryFeatureExtractor(FeatureExtractor):
         self.dim = next_start
 
 
-    def extract_features(self, instances, dic):
+    def extract_features(self, instances, trie):
         features = [None] * len(instances)
 
         for i, x in enumerate(instances):
-            feat = self.extract_features_for_sentence(x, dic)
+            feat = self.extract_features_for_sentence(x, trie)
             features[i] = chainer.Variable(feat)
 
         return features
 
-    def extract_features_for_sentence(self, x, dic):
+    def extract_features_for_sentence(self, x, trie):
         xp = cuda.cupy if self.use_gpu else np
         feat = xp.zeros((len(x), self.dim), dtype='f')
 
         sen_len = len(x)
         found = []
         for i in range(sen_len):
-            res = dic.chunk_trie.common_prefix_search(x, i, i + self.max_len)
+            res = trie.common_prefix_search(x, i, i + self.max_len)
             found.extend(res)
 
         for b, e in found:

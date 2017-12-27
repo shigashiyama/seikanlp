@@ -7,7 +7,7 @@ class MapTrie(object):
     UNK_ID = 0
     UNK_SYMBOL = constants.UNK_SYMBOL
 
-    def __init__(self):
+    def __init__(self, UNK_SYMBOL=UNK_SYMBOL):
         self.tree = TrieNode(-1)
         self.id2chunk = {UNK_ID : UNK_SYMBOL}
         self.next_id = 1
@@ -34,7 +34,7 @@ class MapTrie(object):
             if not child:
                 if not update or token == UNK_ID:
                     return UNK_ID
-                child = TrieNode()
+                child = TrieNode(UNK_ID)
                 node.set_child(token, child)
 
             if i == len_chunk - 1:
@@ -68,7 +68,7 @@ class MapTrie(object):
 
 
 class TrieNode(object):
-    def __init__(self, id=UNK_ID):
+    def __init__(self, id):
         self.id = id            # id != UNK_ID なら終端
         self.children = {}
 
@@ -164,142 +164,122 @@ class IndexTable(object):
 
 
 class Dictionary(object):
-    def __init__(self, use_seg_label=False, use_pos_label=False, use_arc_label=False,
-                 use_subtoken=False, use_chunk_trie=False, use_root=False, use_dummy=False):
-        self.token_indices = IndexTable()
-        self.subtoken_indices = IndexTable() if use_subtoken else None
-        self.seg_label_indices = IndexTable() if use_seg_label else None
-        self.pos_label_indices = IndexTable() if use_pos_label else None
-        self.arc_label_indices = IndexTable() if use_arc_label else None
-
-        if use_dummy:
-            self.dummy_id = self.token_indices.get_id(constants.DUMMY_SYMBOL, update=True)
-            self.pos_label_indices.get_id(constants.DUMMY_SYMBOL, update=True)
-            if use_subtoken:
-                self.subtoken_indices.get_id(constants.DUMMY_SYMBOL, update=True)
-        else:
-            self.dummy_id = -1
-            
-        if use_root:
-            self.root_id = self.token_indices.get_id(constants.ROOT_SYMBOL, update=True)
-            self.pos_label_indices.get_id(constants.ROOT_SYMBOL, update=True)
-            if use_subtoken:
-                self.subtoken_indices.get_id(constants.ROOT_SYMBOL, update=True)
-        else:
-            self.root_id = -1
-
-        # unknown token
-        self.token_indices.set_unk(constants.UNK_SYMBOL)
-        if use_subtoken:
-            self.subtoken_indices.set_unk(constants.UNK_SYMBOL)
-
-        if use_chunk_trie:
-            chunk_unk_id = np.int32(0)
-            self.chunk_trie = MapTrie()
-            self.id2chunk = {chunk_unk_id : constants.UNK_SYMBOL}
-            pos_unk_id = self.pos_label_indices.set_unk(constants.UNK_SYMBOL)
-            # self.wid2pids = Key2Values()
-            # self.wid2pids.add(chunk_unk_id, pos_unk_id)
-        else:
-            self.chunk_trie = None
-            self.id2chunk = None
-            # self.wid2pids = None
+    def __init__(self):
+        self.tables = {}
+        self.tries = {}
 
 
-    def has_seg_label(self):
-        return self.seg_label_indices is not None
-
-
-    def has_pos_label(self):
-        return self.pos_label_indices is not None
-
-
-    def has_arc_label(self):
-        return self.arc_label_indices is not None
+    def create_table(self, table_name):
+        # string to index table
+        self.tables[table_name] = IndexTable()
 
 
     def create_id2strs(self):
-        if self.token_indices:
-            self.token_indices.create_id2str()
-
-        if self.subtoken_indices:
-            self.subtoken_indices.create_id2str()
-
-        if self.seg_label_indices:
-            self.seg_label_indices.create_id2str()
-
-        if self.pos_label_indices:
-            self.pos_label_indices.create_id2str()
-
-        if self.arc_label_indices:
-            self.arc_label_indices.create_id2str()
-        
-
-    def get_token(self, ti):
-        ti = int(ti)
-        return self.token_indices.id2str[ti]
+        for table in self.tables.values():
+            table.create_id2str()
 
 
-    def get_token_id(self, token):
-        return self.token_indices.get_id(token)
+    def create_trie(self, trie_name):
+        self.tries[trie_name] = MapTrie()
 
 
-    def get_subtoken(self, si):
-        si = int(si)
-        return self.subtoken_indices.id2str[si]
+    def has_table(self, table_name):
+        return table_name in self.tables
 
 
-    def get_subtoken_id(self, subtoken):
-        return self.subtoken_indices.get_id(subtoken)
+    def has_trie(self, trie_name):
+        return trie_name in self.tries
 
 
-    # def get_subtoken_ids(self, ti):
-    #     return [self.subtoken_indices.get_id(s) for s in self.get_token(ti)]
+    # def get_str(self, table_name, str_id):
+    #     index = int(index)
+    #     if self.has_table(table_name):
+    #         return self.tables[table_name].id2str[index]
+    #     else:
+    #         return None
 
 
-    def get_seg_label(self, li):
-        return self.seg_label_indices.id2str[li]
+    # def get_id(self, table_name, string, update=False):
+    #     if self.has_table(table_name):
+    #         return self.tables[table_name].get_id(string, update=update)
+    #     else:
+    #         return None
 
 
-    def get_seg_label_id(self, label):
-        return self.seg_label_indices.get_id(label)
+    # def get_chunk_str(self, trie_name, chunk_id):
+    #     if self.has_trie(trie_name):
+    #         self.tries[trie_name].get_chunk(chunk_id)
+    #     else:
+    #         return None
 
 
-    def get_pos_label(self, li):
-        return self.pos_label_indices.id2str[li]
-
-
-    def get_pos_label_id(self, label):
-        return self.pos_label_indices.get_id(label)
-
-
-    def get_arc_label(self, li):
-        return self.arc_label_indices.id2str[li]
-
-
-    def get_arc_label_id(self, label):
-        return self.arc_label_indices.get_id(label)
-
-
-    def get_chunk(self, wi):
-        if wi in self.id2chunk:
-            return self.id2chunk[wi]
-        else:
-            return constants.UNK_SYMBOL
+    # def get_chunk_id(self, trie_name, chunk_str, update=False):
+    #     if self.has_trie(trie_name):
+    #         self.tries[trie_name].get_chunk_id(chunk_str, udpate=update)
+    #     else:
+    #         return None
 
 
     # token indicates character
     # chunk indicates word
-    def get_entries(self, chunk, pos, update=False):
-        token_ids = [self.token_indices.get_id(t, update=update) for t in chunk]
+    # def get_entries(self, chunk, pos, update=False):
+    #     token_ids = [self.token_indices.get_id(t, update=update) for t in chunk]
 
-        cid = self.chunk_trie.get_chunk_id(token_ids, update)
-        pid = self.pos_label_indices.get_id(pos, update=update) if pos else None
-        if update:
-            self.id2chunk[cid] = chunk
-            # if pid:
-            #     self.wid2pids.add(cid, pid)
-        return char_ids, wid, pid
+    #     cid = self.chunk_trie.get_chunk_id(token_ids, update)
+    #     pid = self.pos_label_indices.get_id(pos, update=update) if pos else None
+    #     if update:
+    #         self.id2chunk[cid] = chunk
+    #     return char_ids, wid, pid
+
+
+def init_dictionary(
+        use_unigram=True, use_bigram=False, use_subtoken=False, use_token_type=False, 
+        use_seg_label=False, use_pos_label=False, use_arc_label=False, use_chunk_trie=False,
+        use_root=False): 
+
+    UNK_SYMBOL = constants.UNK_SYMBOL
+    ROOT_SYMBOL = constants.ROOT_SYMBOL
+    
+    dic = Dictionary()
+
+    # create tables and tries
+    if use_unigram:
+        dic.create_table('unigram')
+        dic.tables['unigram'].set_unk(UNK_SYMBOL)
+        if use_root:
+            dic.tables['unigram'].get_id(ROOT_SYMBOL, update=True)
+
+    if use_bigram:
+        # to be impelemented
+        # dic.create_table('bigram')
+        pass 
+
+    if use_subtoken:
+        dic.create_table('subtoken')
+        dic.tables['subtoken'].set_unk(UNK_SYMBOL)
+        if use_root:
+            dic.tables['subtoken'].get_id(ROOT_SYMBOL, update=True)
+
+    if use_token_type:
+        # to be impelemented
+        # dic.create_table('token_type')
+        pass
+
+    if use_seg_label:
+        dic.create_table('seg_label')
+
+    if use_pos_label:
+        dic.create_table('pos_label')
+        if use_root:
+            dic.tables['pos_label'].get_id(ROOT_SYMBOL, update=True)
+
+    if use_arc_label:
+        dic.create_table('arc_label')
+
+    if use_chunk_trie:
+        dic.create_trie('chunk')
+
+    return dic
 
 
 # load vocabulary from external dictionary resource
