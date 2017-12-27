@@ -33,8 +33,16 @@ ARC_CLM_TXT = '#ARC_COLUMN'
 
 UNK_SYMBOL = '<UNK>'
 NUM_SYMBOL = '<NUM>'
+#PADDING_SYMBOL = '<PAD>'
 ROOT_SYMBOL = '<ROOT>'
+DUMMY_SYMBOL = '<DUM>'          # dummy parent node symbol for children that do not have parent
 SEG_LABELS = 'BIES'
+
+
+### for parsing
+
+NO_PARENTS_ID = -2       # indicate that parent of the word is nothing
+UNK_PARENT_ID = -3       # indicate that parent of the word is unknown
 
 
 ### for feature extraction

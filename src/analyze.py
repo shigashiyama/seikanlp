@@ -2,13 +2,13 @@ import sys
 import os
 import copy
 
+#os.environ["CHAINER_TYPE_CHECK"] = "0"
 import chainer
 from chainer import cuda
 
 import constants
 import arguments
 import trainers
-import models
 
 
 def run(process_name):
@@ -31,6 +31,9 @@ def run(process_name):
     if process_name == 'tagging':
         args = arguments.TaggerArguments().parse_arguments()
         trainer = trainers.TaggerTrainer(args)
+    elif process_name == 'dual_tagging':
+        args = arguments.DualTaggerArguments().parse_arguments()
+        trainer = trainers.DualTaggerTrainer(args)
     elif process_name == 'parsing':
         args = arguments.ParserArguments().parse_arguments()
         trainer = trainers.ParserTrainer(args)
@@ -62,23 +65,31 @@ def run(process_name):
     if args.model_path:
         trainer.load_model(args.model_path, pretrained_token_embed_dim)
         dic_org = copy.deepcopy(trainer.dic)
+
+    elif process_name == 'dual_tagging':
+        if args.sub_model_path:
+            trainer.load_sub_model(args.sub_model_path, pretrained_token_embed_dim)
+            dic_org = copy.deepcopy(trainer.dic)
+            trainer.init_hyperparameters(args)
+        else:
+            print('Error: model_path or sub_model_path must be specified for dual sequence tagging.')
+            sys.exit()
+
     else:
+        if args.dic_obj_path:
+            trainer.load_dic(args.dic_obj_path)
         trainer.init_hyperparameters(args)
         dic_org = None
-
-        # id2token_org = {}
-        # id2slab_org = {}
-        # id2plab_org = {}
-        # id2alab_org = {}
     trainer.init_feat_extractor(use_gpu=use_gpu)
 
     ################################
     # Initialize dic of strings from external dictionary
 
-    if process_name == 'tagging' and args.dict_path and not trainer.dic:
-        dic_path = args.dict_path
-        trainer.dic = dictionary.load_dictionary(dic_path, read_pos=False)
-        trainer.log('Load dictionary: {}'.format(dic_path))
+    # TODO internal and external dictionary
+    if process_name == 'tagging' and args.ext_dic_path and not trainer.dic:
+        edic_path = args.ext_dic_path
+        trainer.dic = dictionary.load_vocabulary(edic_path, read_pos=False)
+        trainer.log('Load external dictionary: {}'.format(edic_path))
         trainer.log('Vocab size: {}'.format(len(trainer.dic.token_indices)))
 
         if not dic_path.endswith('pickle'):
@@ -104,13 +115,15 @@ def run(process_name):
     if not trainer.classifier:
         trainer.init_model(pretrained_token_embed_dim)
         if embed_model:
-            models.load_and_update_embedding_layer(
-                trainer.classifier.predictor.trained_word_embed, trainer.dic.token_indices.id2str, 
-                embed_model, finetuning=(not args.fix_pretrained_embed))
+            trainer.classifier.load_pretrained_embedding_layer(
+                trainer.dic, embed_model, finetuning=(not args.fix_pretrained_embed))
+
     else:
         trainer.classifier.grow_embedding_layers(dic_org, trainer.dic, embed_model,
                                                  train=(args.execute_mode=='train'))
         trainer.classifier.grow_inference_layers(dic_org, trainer.dic)
+
+    trainer.finalize_model()
 
     if args.gpu >= 0:
         trainer.classifier.to_gpu()

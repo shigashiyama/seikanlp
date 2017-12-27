@@ -55,6 +55,8 @@ class Arguments(object):
         parser.add_argument('--model_path', '-m',
                             help='npz File path of the trained model. \'xxx.hyp\' and \'xxx.s2i\' files'
                             + 'are also read simultaneously if you specify \'xxx_izzz.npz\' file.')
+        parser.add_argument('--dic_obj_path', 
+                            help='')
 
         # model parameters
         parser.add_argument('--freq_threshold', type=int, default=1,
@@ -79,8 +81,8 @@ class Arguments(object):
                             help='File path succeeding \'path_prefix\' of validation data')
         parser.add_argument('--test_data', default='',
                             help='File path succeeding \'path_prefix\' of test data')
-        parser.add_argument('--raw_data', '-r', default='',
-                            help='File path of input raw text which succeeds \'path_prefix\'')
+        parser.add_argument('--input_text', default='',
+                            help='File path of input text which succeeds \'path_prefix\'')
         parser.add_argument('--label_reference_data', default='',
                             help='File path succeeding \'path_prefix\''
                             + ' of data with the same format as training data to load pre-defined labels')
@@ -100,6 +102,10 @@ class Arguments(object):
         parser.add_argument('--normalize_digits',  action='store_true',
                             help='Normalize digits by the same symbol in the case of using English data')
         parser.add_argument('--ignore_labels', default=set(),
+                            help='')
+
+        # options for parsing
+        parser.add_argument('--predict_parent_existence',  action='store_true',
                             help='')
 
         # other options
@@ -125,7 +131,7 @@ class Arguments(object):
 
 class TaggerArguments(Arguments):
     def __init__(self):
-        super(TaggerArguments, self).__init__()
+        super().__init__()
         parser = self.parser
 
         # model parameters
@@ -166,17 +172,25 @@ class TaggerArguments(Arguments):
                             help='Set positive integer (use POS up to i-th hierarcy)'
                             + ' or other value (use POS with all sub POS) when set \'bccwj_seg_tag\''
                             + ' to data_format')
-        parser.add_argument('--dict_path', 
-                            help='File path of word dictionary that lists words, or words and POS')
+        parser.add_argument('--ext_dic_path', 
+                            help='File path of external word dictionary that lists words, or words and POS')
         parser.add_argument('--feature_template', default='',
                             help='Use dictionary features based on given feature template file.'
                             + ' Specify \'defualt\' to use default features defined for each task,'
                             + ' or specify the path of castomized template file.')
 
 
+class DualTaggerArguments(TaggerArguments):
+    def __init__(self):
+        super().__init__()
+        parser = self.parser
+
+        parser.add_argument('--sub_model_path', help='')
+
+
 class ParserArguments(Arguments):
     def __init__(self):
-        super(ParserArguments, self).__init__()
+        super().__init__()
         parser = self.parser
 
         # model parameters
@@ -222,3 +236,4 @@ class ParserArguments(Arguments):
                             help='Set positive integer (use POS up to i-th hierarcy)'
                             + ' or other value (use POS with all sub POS) when set \'bccwj_seg_tag\''
                             + ' to data_format')
+

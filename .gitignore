@@ -1,6 +1,8 @@
 *~
 log/
 out/
-models/
+data/
+models/main/
+models/embed/
 resources/
 !.gitkeep

@@ -1,53 +1,60 @@
-import enum
-
 import numpy as np
 
 import constants
 
 
-ValueType = enum.Enum("ValueType", "Set List")
-UNK_ID = 0
-
 class MapTrie(object):
+    UNK_ID = 0
+    UNK_SYMBOL = constants.UNK_SYMBOL
+
     def __init__(self):
         self.tree = TrieNode(-1)
-        self.next_id = 1        # 0 is used for <UNK>
+        self.id2chunk = {UNK_ID : UNK_SYMBOL}
+        self.next_id = 1
         #self.debug = True
 
 
-    # word: list of char IDs
-    def get_word_id(self, word, update=False):
-        len_word = len(word) 
+    def get_chunk(self, chunk_id):
+        if chunk_id in self.id2chunk:
+            return self.id2chunk[chunk_id]
+        else:
+            return UNK_SYMBOL
+
+
+    # chunk equals to list of token IDs
+    def get_chunk_id(self, chunk, update=False):
+        len_chunk = len(chunk) 
         node = self.tree
 
-        for i, char in enumerate(word):
-            child = node.get_child(char)
+        for i, token in enumerate(chunk):
+            child = node.get_child(token)
             # if self.debug:
-            #     print(i, char, child.id if child else None)
+            #     print(i, token, child.id if child else None)
 
             if not child:
-                if not update or char == UNK_ID:
+                if not update or token == UNK_ID:
                     return UNK_ID
                 child = TrieNode()
-                node.set_child(char, child)
+                node.set_child(token, child)
 
-            if i == len_word - 1:
+            if i == len_chunk - 1:
                 if child.id == UNK_ID and update:
                     child.id = self.next_id
+                    self.id2chunk[child.id] = chunk
                     self.next_id += 1
                 return child.id
 
             node = child
 
 
-    def common_prefix_search(self, word, begin_index=0, last_index=-1):
+    def common_prefix_search(self, chunk, begin_index=0, last_index=-1):
         res = []
         node = self.tree
 
-        seq = word[begin_index:last_index] if last_index >= 0 else word[begin_index:]
+        seq = chunk[begin_index:last_index] if last_index >= 0 else chunk[begin_index:]
         append = res.append
-        for i, char in enumerate(seq):
-            child = node.get_child(char)
+        for i, token in enumerate(seq):
+            child = node.get_child(token)
             if not child:
                 break
             #print(' ',child.id)
@@ -63,22 +70,20 @@ class MapTrie(object):
 class TrieNode(object):
     def __init__(self, id=UNK_ID):
         self.id = id            # id != UNK_ID なら終端
-        #self.is_terminal = False
         self.children = {}
 
 
-    def get_child(self, char):
-        char = int(char)
-        return self.children[char] if char in self.children else None
+    def get_child(self, token):
+        token = int(token)
+        return self.children[token] if token in self.children else None
 
 
-    def set_child(self, char, child_node):
-        self.children[char] = child_node
+    def set_child(self, token, child_node):
+        self.children[token] = child_node
 
 
 class Key2Values(object):
-    def __init__(self, val_type='set'):
-        self.val_type = ValueType.Set if val_type == 'set' else ValueType.List
+    def __init__(self):
         self.key2values = {}
 
 
@@ -94,20 +99,16 @@ class Key2Values(object):
         if key in self.key2values:
             vals = self.key2values[key]
         else:
-            vals = set() if self.val_type == ValueType.Set else []
+            vals = set()
             self.key2values[key] = vals
-
-        if self.val_type == ValueType.Set:
-            vals.add(val)
-        else:
-            vals.append(val)
+        vals.add(val)
 
 
     def get(self, key):
         if key in self.key2values:
             return self.key2values[key]
         else:
-            return set() if self.val_type == ValueType.Set else []
+            return set()
 
 
     def keys(self):
@@ -164,13 +165,21 @@ class IndexTable(object):
 
 class Dictionary(object):
     def __init__(self, use_seg_label=False, use_pos_label=False, use_arc_label=False,
-                 use_subtoken=False, use_chunk_trie=False, use_root=False):
+                 use_subtoken=False, use_chunk_trie=False, use_root=False, use_dummy=False):
         self.token_indices = IndexTable()
         self.subtoken_indices = IndexTable() if use_subtoken else None
         self.seg_label_indices = IndexTable() if use_seg_label else None
         self.pos_label_indices = IndexTable() if use_pos_label else None
         self.arc_label_indices = IndexTable() if use_arc_label else None
 
+        if use_dummy:
+            self.dummy_id = self.token_indices.get_id(constants.DUMMY_SYMBOL, update=True)
+            self.pos_label_indices.get_id(constants.DUMMY_SYMBOL, update=True)
+            if use_subtoken:
+                self.subtoken_indices.get_id(constants.DUMMY_SYMBOL, update=True)
+        else:
+            self.dummy_id = -1
+            
         if use_root:
             self.root_id = self.token_indices.get_id(constants.ROOT_SYMBOL, update=True)
             self.pos_label_indices.get_id(constants.ROOT_SYMBOL, update=True)
@@ -184,18 +193,17 @@ class Dictionary(object):
         if use_subtoken:
             self.subtoken_indices.set_unk(constants.UNK_SYMBOL)
 
-
         if use_chunk_trie:
             chunk_unk_id = np.int32(0)
             self.chunk_trie = MapTrie()
             self.id2chunk = {chunk_unk_id : constants.UNK_SYMBOL}
             pos_unk_id = self.pos_label_indices.set_unk(constants.UNK_SYMBOL)
-            self.wid2pids = Key2Values()
-            self.wid2pids.add(chunk_unk_id, pos_unk_id)
+            # self.wid2pids = Key2Values()
+            # self.wid2pids.add(chunk_unk_id, pos_unk_id)
         else:
             self.chunk_trie = None
             self.id2chunk = None
-            self.wid2pids = None
+            # self.wid2pids = None
 
 
     def has_seg_label(self):
@@ -245,6 +253,10 @@ class Dictionary(object):
         return self.subtoken_indices.get_id(subtoken)
 
 
+    # def get_subtoken_ids(self, ti):
+    #     return [self.subtoken_indices.get_id(s) for s in self.get_token(ti)]
+
+
     def get_seg_label(self, li):
         return self.seg_label_indices.id2str[li]
 
@@ -285,8 +297,8 @@ class Dictionary(object):
         pid = self.pos_label_indices.get_id(pos, update=update) if pos else None
         if update:
             self.id2chunk[cid] = chunk
-            if pid:
-                self.wid2pids.add(cid, pid)
+            # if pid:
+            #     self.wid2pids.add(cid, pid)
         return char_ids, wid, pid
 
 

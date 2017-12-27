@@ -5,7 +5,7 @@ import pickle
 from datetime import datetime
 from collections import Counter
 
-#os.environ["CHAINER_TYPE_CHECK"] = "0"
+
 import numpy as np
 import chainer
 from chainer import serializers
@@ -20,21 +20,8 @@ import data_io
 import classifiers
 import evaluators
 import features
+import optimizers
 from tools import conlleval
-
-
-class DeleteGradient(object):
-    name = 'DeleteGradient'
-
-    def __init__(self, target_params):
-        self.target_params = target_params
-
-
-    def __call__(self, optimizer):
-        for name, param in optimizer.target.namedparams():
-            for tgt in self.target_params:
-                if name.endswith(tgt):
-                    param.grad = None
 
 
 class Trainer(object):
@@ -43,7 +30,7 @@ class Trainer(object):
         if args.execute_mode == 'train':
             if not args.train_data:
                 msg = 'Error: the following argument is required for {} mode: {}'.format(
-                    'train', '--train_data/-t')
+                    args.execute_mode, '--train_data/-t')
                 err_msgs.append(msg)
             if not args.data_format and not args.model_path:
                 msg = 'Error: the following argument is required for {} mode unless resuming a trained model: {}'.format('train', '--data_format/-f')
@@ -52,29 +39,29 @@ class Trainer(object):
         elif args.execute_mode == 'eval':
             if not args.model_path:
                 msg = 'Error: the following argument is required for {} mode: {}'.format(
-                    'eval', '--model_path/-p')
+                    args.execute_mode, '--model_path/-m')
                 err_msgs.append(msg)
 
             if not args.test_data:
                 msg = 'Error: the following argument is required for {} mode: {}'.format(
-                    'eval', '--test_data')
+                    args.execute_mode, '--test_data')
                 err_msgs.append(msg)
 
         elif args.execute_mode == 'decode':
             if not args.model_path:
                 msg = 'Error: the following argument is required for {} mode: {}'.format(
-                    'decode', '--model_path/-p')
+                    args.execute_mode, '--model_path/-m')
                 err_msgs.append(msg)
 
-            if not args.raw_data:
+            if not args.input_text:
                 msg = 'Error: the following argument is required for {} mode: {}'.format(
-                    'raw', '--model_path/-p')
+                    args.execute_mode, '--input_text')
                 err_msgs.append(msg)
 
         elif args.execute_mode == 'interactive':
             if not args.model_path:
                 msg = 'Error: the following argument is required for {} mode: {}'.format(
-                    'interactive', '--model_path/-p')
+                    args.execute_mode, '--model_path/-m')
                 err_msgs.append(msg)
 
         else:
@@ -101,7 +88,7 @@ class Trainer(object):
         self.optimizer = None
         self.decode_type = None
         self.n_iter = args.epoch_begin
-        self.label_begin_index = 3
+        self.label_begin_index = 2
 
         self.log('Start time: {}\n'.format(self.start_time))
         if not self.args.quiet:
@@ -141,7 +128,15 @@ class Trainer(object):
     def init_model(self, pretrained_token_embed_dim=0):
         self.log('Initialize model from hyperparameters\n')
         self.classifier = classifiers.init_classifier(
-            self.decode_type, self.hparams, self.dic, pretrained_token_embed_dim)
+            self.decode_type, self.hparams, self.dic, pretrained_token_embed_dim,
+            self.args.predict_parent_existence)
+
+
+    def load_dic(self, dic_path):
+        with open(dic_path, 'rb') as f:
+            self.dic = pickle.load(f)
+        self.log('Load dic: {}'.format(dic_path))
+        self.log('Vocab size: {}\n'.format(len(self.dic.token_indices)))
 
 
     def load_model(self, model_path, pretrained_token_embed_dim=0):
@@ -149,11 +144,9 @@ class Trainer(object):
         dic_path = '{}.s2i'.format(array[0])
         hparam_path = '{}.hyp'.format(array[0])
         param_path = model_path
-    
-        with open(dic_path, 'rb') as f:
-            self.dic = pickle.load(f)
-        self.log('Load dic: {}'.format(dic_path))
-        self.log('Vocab size: {}\n'.format(len(self.dic.token_indices)))
+
+        # dictionary
+        self.load_dic(dic_path)
 
         # hyper parameters
         self.hparams = self.load_hyperparameters(hparam_path)
@@ -178,6 +171,11 @@ class Trainer(object):
         self.init_model(pretrained_token_embed_dim)
         chainer.serializers.load_npz(model_path, self.classifier)
         self.log('Load model parameters: {}\n'.format(model_path))
+
+
+    def finalize_model(self):
+        # to be implemented in sub-class if nessesary
+        pass
 
 
     def init_hyperparameters(self, args):
@@ -215,6 +213,7 @@ class Trainer(object):
         use_subtoken = hparams["subtoken_embed_dim"] > 0
         create_chunk_trie = ('feature_template' in hparams and hparams['feature_template'])
         subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
+        pred_parex = args.predict_parent_existence
         lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
         
@@ -236,6 +235,7 @@ class Trainer(object):
             train, self.dic = data_io.load_data(
                 data_format, train_path, read_pos=read_pos,
                 create_chunk_trie=create_chunk_trie, use_subtoken=use_subtoken, subpos_depth=subpos_depth, 
+                predict_parent_existence=pred_parex,
                 lowercase=lowercase, normalize_digits=normalize_digits, 
                 max_vocab_size=args.max_vocab_size, freq_threshold=args.freq_threshold,
                 dic=self.dic, refer_vocab=refer_vocab)
@@ -259,6 +259,7 @@ class Trainer(object):
             val, self.dic = data_io.load_data(
                 data_format, val_path, read_pos=read_pos, update_tokens=False, update_labels=False,
                 create_chunk_trie=create_chunk_trie, use_subtoken=use_subtoken, subpos_depth=subpos_depth, 
+                predict_parent_existence=pred_parex,
                 lowercase=lowercase, normalize_digits=normalize_digits, 
                 max_vocab_size=args.max_vocab_size, freq_threshold=args.freq_threshold,
                 dic=self.dic, refer_vocab=refer_vocab)
@@ -289,12 +290,14 @@ class Trainer(object):
         use_subtoken = hparams['subtoken_embed_dim'] > 0
         create_chunk_trie = ('feature_template' in hparams and hparams['feature_template'])
         subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
+        pred_parex = args.predict_parent_existence
         lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
-            
+
         test, self.dic = data_io.load_data(
             data_format, test_path, read_pos=read_pos, update_tokens=False, update_labels=False,
             create_chunk_trie=create_chunk_trie, use_subtoken=use_subtoken, subpos_depth=subpos_depth, 
+            predict_parent_existence=pred_parex,
             lowercase=lowercase, normalize_digits=normalize_digits, 
             max_vocab_size=args.max_vocab_size, freq_threshold=args.freq_threshold,
             dic=self.dic, refer_vocab=refer_vocab)
@@ -334,10 +337,13 @@ class Trainer(object):
         optimizer.setup(self.classifier)
         delparams = []
         if self.args.fix_pretrained_embed:
-            delparams.update(['pretrained_token_embed/W'])
+            delparams.append('pretrained_token_embed/W')
             self.log('Fix parameters: pretrained_token_embed/W')
+        if 'dual' in self.decode_type:
+            delparams.append('su_tagger')
+            self.log('Fix parameters: su_tagger/*')
         if delparams:
-            optimizer.add_hook(DeleteGradient(delparams))
+            optimizer.add_hook(optimizers.DeleteGradient(delparams))
 
         optimizer.add_hook(chainer.optimizer.GradientClipping(self.args.gradclip))
 
@@ -394,17 +400,21 @@ class Trainer(object):
 
 
     def run_decode_mode(self):
-        xp = cuda.cupy if args.gpu >= 0 else np
+        text_path = (self.args.path_prefix if self.args.path_prefix else '') + self.args.input_text
+        if self.decode_type == 'tag' or self.decode_type == 'dual_tag':
+            tokenseqs = data_io.load_raw_text_for_tagging(text_path, self.dic)
 
-        raw_path = (args.path_prefix if args.path_prefix else '') + self.args.raw_data
-        if self.decode_type == 'tag':
-            tokenseqs = data_io.load_raw_text_for_tagging(raw_path, self.classifier.dic)
+        elif (self.decode_type == 'seg' or self.decode_type == 'dual_seg' or
+              self.decode_type == 'seg_tag' or self.decode_type == 'dual_seg_tag'):
+            tokenseqs = data_io.load_raw_text_for_segmentation(text_path, self.dic)
         else:
-            tokenseqs = data_io.load_raw_text_for_segmentation(raw_path, self.classifier.dic)
+            # to be implemented
+            pass
+
         data = data_io.Data(tokenseqs, None)
 
         if 'feature_template' in self.hparams and self.hparams['feature_template']:
-            self.extract_features(data, self.classifier.dic)
+            self.extract_features(data, self.dic)
 
         stream = open(self.args.output_path, 'w') if self.args.output_path else sys.stdout
         self.decode(data, stream=stream)
@@ -427,13 +437,13 @@ class Trainer(object):
 
             if self.decode_type == 'tag':
                 array = line.split(' ')
-                ins = [self.classifier.dic.get_token_id(word) for word in array]
+                ins = [self.dic.get_token_id(word) for word in array]
             else:
-                ins = [self.classifier.dic.get_token_id(char) for char in line]
+                ins = [self.dic.get_token_id(char) for char in line]
             xs = [xp.asarray(ins, dtype=np.int32)]
 
             if self.hparams['feature_template']:
-                fs = self.feat_extractor.extract_features([ins], self.classifier.dic)
+                fs = self.feat_extractor.extract_features([ins], self.dic)
             else:
                 fs = None
 
@@ -461,9 +471,11 @@ class Trainer(object):
 
         i = 0
         n_ins = len(data.tokenseqs)
+        # shuffle = False
         shuffle = True if train else False
         for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=shuffle):
             inputs = self.gen_inputs(data, ids)
+
             xs = inputs[0]
             golds = inputs[self.label_begin_index:]
             # timer = util.Timer()
@@ -493,15 +505,16 @@ class Trainer(object):
                 self.log('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
 
                 i = i_max
-                self.n_iter += 1
 
             n_sen += len(xs)
             total_loss += loss.data
             counts = self.evaluator.calculate(*[xs], *golds, *outputs)
             total_counts = evaluators.merge_counts(total_counts, counts)
 
-            if train and ((self.n_iter * self.args.batchsize) % self.args.evaluation_size == 0):
-                now_e = '%.3f' % (self.n_iter * self.args.batchsize / n_ins)
+            if (train and 
+                self.n_iter > 0 and 
+                self.n_iter * self.args.batchsize % self.args.evaluation_size == 0):
+                now_e = '%.3f' % (self.args.epoch_begin-1 + (self.n_iter * self.args.batchsize / n_ins))
                 time = datetime.now().strftime('%Y%m%d_%H%M')
 
                 self.log('\n### Finish %s iterations (%s examples: %s epoch)' % (
@@ -521,66 +534,31 @@ class Trainer(object):
                     self.log('Save the model: %s\n' % mdl_path)
                     self.report('[INFO] save the model: %s\n' % mdl_path)
                     serializers.save_npz(mdl_path, classifier)
-        
+
                 if not self.args.quiet:
                     self.reporter.close() 
                     self.reporter = open('{}/{}.log'.format(constants.LOG_DIR, self.start_time), 'a')
 
                 # Reset counters
-                count = 0
+                n_sen = 0
                 total_loss = 0
+                counts = None
                 total_counts = None
 
-        if not train:
-            res = self.evaluator.report_results(n_sen, total_counts, total_loss, stream=self.logger)
-        else:
-            res = None
+            if train:
+                self.n_iter += 1
 
+
+        res = None if train else self.evaluator.report_results(n_sen, total_counts, total_loss, stream=self.logger)
         return res
 
 
-class TaggerTrainer(Trainer):
+class TaggerTrainerBase(Trainer):
     def __init__(self, args, logger=sys.stderr):
-        super(TaggerTrainer, self).__init__(args, logger)
+        super().__init__(args, logger)
 
 
-    def load_model(self, model_path, pretrained_token_embed_dim=0):
-        super().load_model(model_path, pretrained_token_embed_dim)
-        if 'dropout' in self.hparams:
-            self.classifier.change_dropout_ratio(self.hparams['dropout'])
-
-
-    def init_hyperparameters(self, args, pretrained_token_embed_dim=0):
-        self.hparams = {
-            'token_embed_dim' : args.token_embed_dim,
-            'subtoken_embed_dim' : args.subtoken_embed_dim,
-            'rnn_unit_type' : args.rnn_unit_type,
-            'rnn_bidirection' : args.rnn_bidirection,
-            'rnn_n_layers' : args.rnn_n_layers,
-            'rnn_n_units' : args.rnn_n_units,
-            'mlp_n_layers' : args.mlp_n_layers,
-            'mlp_n_units' : args.mlp_n_units,
-            'inference_layer' : args.inference_layer,
-            'rnn_dropout' : args.rnn_dropout,
-            'mlp_dropout' : args.mlp_dropout,
-            'feature_template' : args.feature_template,
-            'data_format' : args.data_format,
-            'subpos_depth' : args.subpos_depth,
-            'lowercase' : args.lowercase,
-            'normalize_digits' : args.normalize_digits,
-        }
-        self.check_data_format(self.hparams['data_format'])
-
-        self.log('Init hyperparameters')
-        self.log('### arguments')
-        for k, v in self.args.__dict__.items():
-            message = '{}={}'.format(k, v)
-            self.log('# {}'.format(message))
-            self.report('[INFO] arg: {}'.format(message))
-        self.log('')
-
-
-    def load_hyperparameters(self, hparams_path):
+    def load_hyperparameters(self, hparams_path, check_data_format=True):
         hparams = {}
         with open(hparams_path, 'r') as f:
             for line in f:
@@ -616,36 +594,18 @@ class TaggerTrainer(Trainer):
 
                 hparams[key] = val
 
-        self.check_data_format(hparams['data_format'])
+        if check_data_format:
+            self.check_data_format(hparams['data_format'])
 
         return hparams
-
-
-    def check_data_format(self, data_format):
-        if (data_format == 'wl_seg' or
-            data_format == 'sl_seg'):
-            self.decode_type = 'seg'
-
-        elif (data_format == 'wl_seg_tag' or
-              data_format == 'sl_seg_tag'):
-            self.decode_type = 'seg_tag'
-
-        elif (data_format == 'wl_tag' or
-              data_format == 'sl_tag'):
-            self.decode_type = 'tag'
-
-        else:
-            print('Error: invalid data format: {}'.format(data_format), file=sys.stderr)
-            sys.exit()
 
 
     def show_training_data(self):
         train = self.train
         val = self.val
-        n_train = len(train.tokenseqs)
         self.log('### Loaded data')
-        self.log('# train: {} ... {}\n'.format(train.tokenseqs[:3], train.tokenseqs[n_train-3:]))
-        self.log('# train_gold: {} ... {}\n'.format(train.labels[0][:3], train.labels[0][n_train-3:]))
+        self.log('# train: {} ... {}\n'.format(train.tokenseqs[0], train.tokenseqs[-1]))
+        self.log('# train_gold: {} ... {}\n'.format(train.labels[0][0], train.labels[0][-1]))
         t2i_tmp = list(self.dic.token_indices.str2id.items())
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
         if self.dic.seg_label_indices:
@@ -660,7 +620,90 @@ class TaggerTrainer(Trainer):
             len(train.tokenseqs), len(val.tokenseqs) if val else 0))
 
 
-    # for ignore labels
+    def gen_inputs(self, data, ids, evaluate=True):
+        xp = cuda.cupy if self.args.gpu >= 0 else np
+
+        xs = [xp.asarray(data.tokenseqs[j], dtype='i') for j in ids]
+        ts = [xp.asarray(data.labels[0][j], dtype='i') for j in ids] if evaluate else None
+        fs = [data.features[j] for j in ids] if self.hparams['feature_template'] else None
+
+        if evaluate:
+            return xs, fs, ts
+        else:
+            return xs, fs
+        
+
+    def decode(self, data, stream=sys.stdout):
+        n_ins = len(data.tokenseqs)
+        for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=False):
+            xs, fs = self.gen_inputs(data, ids, evaluate=False)
+            self.decode_batch(xs, fs)
+
+
+class TaggerTrainer(TaggerTrainerBase):
+    def __init__(self, args, logger=sys.stderr):
+        super().__init__(args, logger)
+
+
+    def load_model(self, model_path, pretrained_token_embed_dim=0):
+        super().load_model(model_path, pretrained_token_embed_dim)
+        if 'rnn_dropout' in self.hparams:
+            self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
+        if 'hidden_mlp_dropout' in self.hparams:
+            self.classifier.change_hidden_mlp_dropout_ratio(self.hparams['hidden_mlp_dropout'])
+
+
+    def init_hyperparameters(self, args, pretrained_token_embed_dim=0):
+        self.hparams = {
+            'token_embed_dim' : args.token_embed_dim,
+            'subtoken_embed_dim' : args.subtoken_embed_dim,
+            'rnn_unit_type' : args.rnn_unit_type,
+            'rnn_bidirection' : args.rnn_bidirection,
+            'rnn_n_layers' : args.rnn_n_layers,
+            'rnn_n_units' : args.rnn_n_units,
+            'mlp_n_layers' : args.mlp_n_layers,
+            'mlp_n_units' : args.mlp_n_units,
+            'inference_layer' : args.inference_layer,
+            'rnn_dropout' : args.rnn_dropout,
+            'mlp_dropout' : args.mlp_dropout,
+            'feature_template' : args.feature_template,
+            'data_format' : args.data_format,
+            'subpos_depth' : args.subpos_depth,
+            'lowercase' : args.lowercase,
+            'normalize_digits' : args.normalize_digits,
+        }
+        self.check_data_format(self.hparams['data_format'])
+
+        self.log('Init hyperparameters')
+        self.log('### arguments')
+        for k, v in self.args.__dict__.items():
+            message = '{}={}'.format(k, v)
+            self.log('# {}'.format(message))
+            self.report('[INFO] arg: {}'.format(message))
+        self.log('')
+
+
+    def check_data_format(self, data_format):
+        if (data_format == 'wl_seg' or
+            data_format == 'sl_seg'):
+            self.decode_type = 'seg'
+            self.label_begin_index = 2
+
+        elif (data_format == 'wl_seg_tag' or
+              data_format == 'sl_seg_tag'):
+            self.decode_type = 'seg_tag'
+            self.label_begin_index = 2
+
+        elif (data_format == 'wl_tag' or
+              data_format == 'sl_tag'):
+            self.decode_type = 'tag'
+            self.label_begin_index = 2
+
+        else:
+            print('Error: invalid data format: {}'.format(data_format), file=sys.stderr)
+            sys.exit()
+
+
     def setup_evaluator(self):
         if self.decode_type == 'tag' and self.args.ignore_labels:
             tmp = self.args.ignore_labels
@@ -679,40 +722,12 @@ class TaggerTrainer(Trainer):
         self.evaluator = classifiers.init_evaluator(self.decode_type, self.dic, self.args.ignore_labels)
 
 
-    def gen_inputs(self, data, ids):
-        xp = cuda.cupy if self.args.gpu >= 0 else np
-
-        xs = [xp.asarray(data.tokenseqs[j], dtype='i') for j in ids]
-        ts = [xp.asarray(data.labels[0][j], dtype='i') for j in ids]
-        if self.hparams['feature_template']:
-            fs = [data.features[j] for j in ids]
-        else:
-            fs = None
-
-        return xs, fs, ts
-        
-
-    def decode(self, data, stream=sys.stdout):
-        xp = cuda.cupy if args.gpu >= 0 else np
-
-        n_ins = len(data.tokenseqs)
-        for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=False):
-            xs = [xp.asarray(data.tokenseqs[j], dtype='i') for j in ids]
-            if self.hparams['feature_template']:
-                fs = [data.features[j] for j in ids]
-            else:
-                fs = None
-
-            self.decode_batch(xs, fs)
-
-
-    # TODO implement parsing
     def decode_batch(self, xs, fs, stream=sys.stdout):
         ys = self.classifier.decode(xs, fs)
 
         for x, y in zip(xs, ys):
-            x_str = [self.classifier.dic.get_token(int(xi)) for xi in x]
-            y_str = [self.classifier.dic.get_label(int(yi)) for yi in y]
+            x_str = [self.dic.get_token(int(xi)) for xi in x]
+            y_str = [self.dic.get_label(int(yi)) for yi in y]
 
             if self.decode_type == 'tag':
                 res = ['{}/{}'.format(xi_str, yi_str) for xi_str, yi_str in zip(x_str, y_str)]
@@ -736,12 +751,173 @@ class TaggerTrainer(Trainer):
             print(res, file=stream)
 
 
-class ParserTrainer(Trainer):
+class DualTaggerTrainer(TaggerTrainerBase):
     def __init__(self, args, logger=sys.stderr):
-        super(ParserTrainer, self).__init__(args, logger)
+        super().__init__(args, logger)
+        self.su_tagger = None
+
+
+    def load_sub_model(self, model_path, pretrained_token_embed_dim=0):
+        array = model_path.split('_e')
+        dic_path = '{}.s2i'.format(array[0])
+        hparam_path = '{}.hyp'.format(array[0])
+        param_path = model_path
+
+        # dictionary
+        self.load_dic(dic_path)
+
+        # decode type
+        self.check_data_format(self.args.data_format)
+        decode_type = self.decode_type.split('dual_')[1]
+
+        # hyper parameters
+        self.hparams = self.load_hyperparameters(hparam_path, False)
+        self.log('Load hyperparameters from short unit model: {}\n'.format(hparam_path))
+        for k, v in self.args.__dict__.items():
+            if 'dropout' in k:
+                self.hparams[k] = 0.0
+            elif k == 'data_fromat':
+                self.hparams[k] = v
+
+        # sub model
+        hparams_sub = self.hparams.copy()
+        self.log('Initialize short unit model from hyperparameters\n')
+        classifier_tmp = classifiers.init_classifier(
+            decode_type, hparams_sub, self.dic, pretrained_token_embed_dim)
+        chainer.serializers.load_npz(model_path, classifier_tmp)
+        self.su_tagger = classifier_tmp.predictor
+        self.log('Load short unit model parameters: {}\n'.format(model_path))
+
+
+    def init_hyperparameters(self, args, pretrained_token_embed_dim=0):
+        self.log('Initialize hyperparameters for full model\n')
+
+        # keep most loaded params from sub model and update some params from args
+        self.log('### arguments')
+        for k, v in self.args.__dict__.items():
+            if 'dropout' in k:  # update
+                self.hparams[k] = v
+                message = '{}={}'.format(k, v)            
+
+            elif k == 'data_format': # udpate
+                self.hparams[k] = v
+                message = '{}={}'.format(k, v)            
+
+            elif k in self.hparams and v != self.hparams[k]:
+                message = '{}={} (input option value {} was discarded)'.format(k, self.hparams[k], v)
+
+            else:
+                message = '{}={}'.format(k, v)
+
+            self.log('# {}'.format(message))
+            self.report('[INFO] arg: {}'.format(message))
+        self.log('')
 
 
     def load_model(self, model_path, pretrained_token_embed_dim=0):
+        super().load_model(model_path, pretrained_token_embed_dim)
+        if 'rnn_dropout' in self.hparams:
+            self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
+        if 'hidden_mlp_dropout' in self.hparams:
+            self.classifier.change_hidden_mlp_dropout_ratio(self.hparams['hidden_mlp_dropout'])
+
+
+    def finalize_model(self):
+        if self.su_tagger is not None:
+            self.classifier.integrate_submodel(self.su_tagger)
+
+
+    def check_data_format(self, data_format):
+        if (data_format == 'wl_dual_seg' or
+            data_format == 'sl_dual_seg'):
+            self.decode_type = 'dual_seg'
+            self.label_begin_index = 2
+
+        elif (data_format == 'wl_dual_seg_tag' or
+              data_format == 'sl_dual_seg_tag'):
+            self.decode_type = 'dual_seg_tag'
+            self.label_begin_index = 2
+
+        elif (data_format == 'wl_dual_tag' or
+              data_format == 'sl_dual_tag'):
+            self.decode_type = 'dual_tag'
+            self.label_begin_index = 2
+
+        else:
+            print('Error: invalid data format: {}'.format(data_format), file=sys.stderr)
+            sys.exit()
+
+
+    def setup_evaluator(self):
+        if self.decode_type == 'dual_tag' and self.args.ignore_labels:
+            tmp = self.args.ignore_labels
+            self.args.ignore_labels = set()
+
+            for label in tmp.split(','):
+                label_id = self.dic.get_pos_label_id(label)
+                if label_id >= 0:
+                    self.args.ignore_labels.add(label_id)
+
+            self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignore_labels))
+
+        else:
+            self.args.ignore_labels = set()
+
+        self.evaluator = classifiers.init_evaluator(self.decode_type, self.dic, self.args.ignore_labels)
+
+
+    def decode_batch(self, xs, fs, stream=sys.stdout):
+        sys, lys = self.classifier.decode(xs, fs)
+
+        get_token = self.dic.get_token
+        get_label = self.dic.get_seg_label if 'seg' in self.decode_type else self.dic.get_pos_label
+
+        for x, sy, ly in zip(xs, sys, lys):
+            x_str = [get_token(int(xi)) for xi in x]
+            sy_str = [get_label(int(yi)) for yi in sy]
+            ly_str = [get_label(int(yi)) for yi in ly]
+
+            if self.decode_type == 'dual_tag':
+                res1 = ['{}/{}'.format(xi_str, yi_str) for xi_str, yi_str in zip(x_str, sy_str)]
+                res1 = ' '.join(res1)
+                res2 = ['{}/{}'.format(xi_str, yi_str) for xi_str, yi_str in zip(x_str, ly_str)]
+                res2 = ' '.join(res2)
+
+            elif self.decode_type == 'dual_seg':
+                res1 = ['{}{}'.format(
+                    xi_str, ' ' if (yi_str == 'E' or yi_str == 'S') else ''
+                ) for xi_str, yi_str in zip(x_str, sy_str)]
+                res1 = ''.join(res1).rstrip()
+                res2 = ['{}{}'.format(
+                    xi_str, ' ' if (yi_str == 'E' or yi_str == 'S') else ''
+                ) for xi_str, yi_str in zip(x_str, ly_str)]
+                res2 = ''.join(res2).rstrip()
+
+            elif self.decode_type == 'dual_seg_tag':
+                res1 = ['{}{}'.format(
+                    xi_str, ('/'+yi_str[2:]+' ') if (yi_str.startswith('E-') or yi_str.startswith('S-')) else ''
+                ) for xi_str, yi_str in zip(x_str, sy_str)]
+                res1 = ''.join(res1).rstrip()
+                res2 = ['{}{}'.format(
+                    xi_str, ('/'+yi_str[2:]+' ') if (yi_str.startswith('E-') or yi_str.startswith('S-')) else ''
+                ) for xi_str, yi_str in zip(x_str, ly_str)]
+                res2 = ''.join(res2).rstrip()
+
+            else:
+                print('Error: Invalid decode type', file=self.logger)
+                sys.exit()
+
+            print('<SU>', res1, file=stream)
+            print('<LU>', res2, file=stream)
+
+
+class ParserTrainer(Trainer):
+    def __init__(self, args, logger=sys.stderr):
+        super().__init__(args, logger)
+
+
+    def load_model(self, model_path, pretrained_token_embed_dim=0):
+        # TODO give args.predict_parent_existence to init classifier
         super().load_model(model_path, pretrained_token_embed_dim)
         if 'rnn_dropout' in self.hparams:
             self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
@@ -839,9 +1015,11 @@ class ParserTrainer(Trainer):
     def check_data_format(self, data_format):
         if (data_format == 'wl_dep'):
             self.decode_type = 'dep'
+            self.label_begin_index = 3
             
         elif (data_format == 'wl_tdep'):
             self.decode_type = 'tdep'
+            self.label_begin_index = 3
 
         elif (data_format == 'wl_tag_dep'):
             self.decode_type = 'tag_dep'
@@ -859,17 +1037,16 @@ class ParserTrainer(Trainer):
     def show_training_data(self):
         train = self.train
         val = self.val
-        n_train = len(train.tokenseqs)
         self.log('### Loaded data')
-        self.log('# train: {} ... {}\n'.format(train.tokenseqs[:3], train.tokenseqs[n_train-3:]))
-        self.log('# train_gold_head: {} ... {}\n'.format(train.labels[1][:3], train.labels[1][n_train-3:]))
-        self.log('# train_gold_label: {} ... {}\n'.format(train.labels[2][:3], train.labels[2][n_train-3:]))
+        self.log('# train: {} ... {}\n'.format(train.tokenseqs[0], train.tokenseqs[-1]))
+        self.log('# train_gold_head: {} ... {}\n'.format(train.labels[1][0], train.labels[1][-1]))
+        self.log('# train_gold_label: {} ... {}\n'.format(train.labels[2][0], train.labels[2][-1]))
         t2i_tmp = list(self.dic.token_indices.str2id.items())
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
 
         if self.dic.subtoken_indices:
             self.log('# train_subtokens: {} ... {}\n'.format(
-                train.subtokenseqs[:1], train.subtokenseqs[n_train-1:]))
+                train.subtokenseqs[0], train.subtokenseqs[-1]))
             st2i_tmp = list(self.dic.subtoken_indices.str2id.items())
             self.log('# subtoken2id: {} ... {}\n'.format(st2i_tmp[:10], st2i_tmp[len(st2i_tmp)-10:]))
 
@@ -886,7 +1063,6 @@ class ParserTrainer(Trainer):
             len(train.tokenseqs), len(val.tokenseqs) if val else 0))
 
 
-    # for ignore labels
     def setup_evaluator(self):
         if (self.decode_type == 'tdep' or self.decode_type == 'tag_tdep') and self.args.ignore_labels:
             tmp = self.args.ignore_labels
@@ -908,16 +1084,13 @@ class ParserTrainer(Trainer):
     def gen_inputs(self, data, ids):
         xp = cuda.cupy if self.args.gpu >= 0 else np
         ws = [xp.asarray(data.tokenseqs[j], dtype='i') for j in ids]
-        if data.subtokenseqs:
-            cs = [[xp.asarray(subs, dtype='i') for subs in data.subtokenseqs[j]] for j in ids] 
-        else:
-            cs = None
+        cs = ([[xp.asarray(subs, dtype='i') for subs in data.subtokenseqs[j]] for j in ids] 
+              if data.subtokenseqs else None)
         ps = [xp.asarray(data.labels[0][j], dtype='i') for j in ids] if data.labels[0] else None
         ths = [xp.asarray(data.labels[1][j], dtype='i') for j in ids]
-        if self.decode_type == 'tdep' or self.decode_type == 'tag_tdep':
-            tls = [xp.asarray(data.labels[2][j], dtype='i') for j in ids]
 
         if self.decode_type == 'tdep' or self.decode_type == 'tag_tdep':
+            tls = [xp.asarray(data.labels[2][j], dtype='i') for j in ids]
             return ws, cs, ps, ths, tls
         else:
             return ws, cs, ps, ths

@@ -193,14 +193,16 @@ otherwise, the following format is expected for segmentation:
 def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_parsing=False,
                  update_tokens=True, update_labels=True, 
                  lowercase=False, normalize_digits=True,
-                 subpos_depth=-1, use_subtoken=False, create_chunk_trie=False, 
+                 subpos_depth=-1, predict_parent_existence=False,
+                 use_subtoken=False, create_chunk_trie=False, 
                  freq_tokens=set(), dic=None, refer_vocab=set()):
     read_pos = tagging or parsing
+    pred_parex = predict_parent_existence
     if not dic:
         dic = dictionary.Dictionary(
             use_seg_label=segmentation, use_pos_label=read_pos, 
             use_arc_label=typed_parsing, use_subtoken=use_subtoken,
-            use_chunk_trie=create_chunk_trie, use_root=parsing)
+            use_chunk_trie=create_chunk_trie, use_root=parsing, use_dummy=pred_parex)
 
     delim = constants.DELIM2_SYMBOL
 
@@ -218,13 +220,22 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
     dep_seqs = []        # list of dependency label sequences
     arc_seqs = []        # list of arc label sequences
 
+    dummy_id = dic.dummy_id if pred_parex else -1
+    t_seq_ = init_list(parsing, dic.root_id, init_list(pred_parex, dummy_id))
+    st_seq_ = init_list(parsing and use_subtoken, [dic.root_id],
+                        init_list(pred_parex and use_subtoken, [dummy_id]))
+    seg_seq_ = init_list()
+    pos_seq_ = init_list(parsing and read_pos, dic.root_id, init_list(pred_parex, dummy_id))
+    dep_seq_ = init_list(parsing, constants.NO_PARENTS_ID, init_list(pred_parex, constants.NO_PARENTS_ID))
+    arc_seq_ = init_list(parsing, constants.NO_PARENTS_ID, init_list(pred_parex, constants.NO_PARENTS_ID))
+
     with open(path) as f:
-        t_seq = [dic.root_id] if parsing else []
-        st_seq = [[dic.root_id]] if (parsing and use_subtoken) else []
-        seg_seq = []
-        pos_seq = [dic.root_id] if (parsing and read_pos) else []
-        dep_seq = [-1] if parsing else []
-        arc_seq = [-1] if parsing else []
+        t_seq = t_seq_.copy()
+        st_seq = st_seq_.copy()
+        seg_seq = seg_seq_.copy()
+        pos_seq = pos_seq_.copy() 
+        dep_seq = dep_seq_.copy() 
+        arc_seq = arc_seq_.copy() 
 
         for line in f:
             line = re.sub(' +', ' ', line).strip('\n\t')
@@ -232,23 +243,23 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
             if len(line) < 1:
                 if len(t_seq) - (1 if parsing else 0) > 0:
                     tokenseqs.append(t_seq)
-                    t_seq = [dic.root_id] if parsing else []
+                    t_seq = t_seq_.copy()
                     if st_seq:
                         # add_padding_to_subtokens(st_seq, dic.pad_id)
                         subtokenseqs.append(st_seq)
-                        st_seq = [[dic.root_id]] if (parsing and use_subtoken) else []
+                        st_seq = st_seq_.copy()
                     if seg_seq:
                         seg_seqs.append(seg_seq)
-                        seg_seq = []
+                        seg_seq = seg_seq_.copy()
                     if pos_seq:
                         pos_seqs.append(pos_seq)
-                        pos_seq = [dic.root_id] if (parsing and read_pos) else []
+                        pos_seq = pos_seq_.copy()
                     if dep_seq:
                         dep_seqs.append(dep_seq)
-                        dep_seq = [-1] if parsing else []
+                        dep_seq = dep_seq_.copy()
                     if arc_seq:
                         arc_seqs.append(arc_seq)
-                        arc_seq = [-1] if parsing else []
+                        arc_seq = arc_seq_.copy()
 
                     ins_cnt += 1
                     if ins_cnt % 100000 == 0:
@@ -340,15 +351,24 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
                 pos_seq.append(dic.pos_label_indices.get_id(pos, update=update_labels))
 
             if parsing:
-                dep_seq.append(int(dep.replace('-1', '0')))
+                if dep == '-1':
+                    dep = 1 if pred_parex else 0
+                elif dep == '-2' and pred_parex:
+                    dep = 0
+                else:
+                    dep = int(dep)+1 if pred_parex else int(dep)
+                dep_seq.append(dep)
 
             if typed_parsing:
                 arc_seq.append(dic.arc_label_indices.get_id(arc, update=update_labels))
                 
-        if len(t_seq) - (1 if parsing else 0) > 0:
+        if parsing:
+            n_non_words = 2 if pred_parex else 1
+        else:
+            n_non_words = 0
+        if len(t_seq) - n_non_words > 0:
             tokenseqs.append(t_seq)
             if subtokenseqs:
-                # add_padding_to_subtokens(st_seq, dic.pad_id)                
                 subtokenseqs.append(st_seq)
             if seg_seq:
                 seg_seqs.append(seg_seq)
@@ -372,6 +392,16 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
         label_seqs_list.append(arc_seqs)
 
     return Data(tokenseqs, label_seqs_list, subtokenseqs), dic
+
+
+def init_list(cond=False, elem=None, org_list=None):
+    if org_list is not None:
+        ret = org_list.copy()
+    else:
+        ret = []
+    if cond:
+        ret.append(elem)
+    return ret
 
 
 # def add_padding_to_subtokens(subtokenseq, padding_id):
@@ -546,8 +576,8 @@ def get_label_BIES(index, last, cate=None):
 
 
 def load_data(data_format, path, read_pos=True, update_tokens=True, update_labels=True, 
-              use_subtoken=False, create_chunk_trie=False,
-              subpos_depth=-1, lowercase=False, normalize_digits=False, 
+              use_subtoken=False, create_chunk_trie=False, subpos_depth=-1, predict_parent_existence=False,
+              lowercase=False, normalize_digits=False, 
               #no_freq_update=False,
               max_vocab_size=-1, freq_threshold=1, dic=None, refer_vocab=set(), limit=-1):
     pos_seqs = []
@@ -559,6 +589,7 @@ def load_data(data_format, path, read_pos=True, update_tokens=True, update_label
     use_subtoken = use_subtoken and not segmentation
 
     if (data_format == 'wl_seg' or data_format == 'wl_seg_tag' or data_format == 'wl_tag' or
+        data_format == 'wl_dual_seg' or data_format == 'wl_dual_seg_tag' or data_format == 'wl_dual_tag' or
         data_format == 'wl_dep' or data_format == 'wl_tdep' or
         data_format == 'wl_tag_dep' or data_format == 'wl_tag_tdep'
     ):
@@ -579,7 +610,8 @@ def load_data(data_format, path, read_pos=True, update_tokens=True, update_label
             path, segmentation=segmentation, tagging=tagging, parsing=parsing, typed_parsing=typed_parsing,
             update_tokens=update_tokens, update_labels=update_labels, 
             lowercase=lowercase, normalize_digits=normalize_digits,
-            subpos_depth=subpos_depth, use_subtoken=use_subtoken, create_chunk_trie=create_chunk_trie,
+            subpos_depth=subpos_depth, predict_parent_existence=predict_parent_existence,
+            use_subtoken=use_subtoken, create_chunk_trie=create_chunk_trie,
             freq_tokens=freq_tokens, dic=dic, refer_vocab=refer_vocab)
 
     elif data_format == 'sl_seg' or data_format == 'sl_seg_tag' or data_format == 'sl_tag':
@@ -605,6 +637,8 @@ def load_data(data_format, path, read_pos=True, update_tokens=True, update_label
         
     else:
         data = None
+        print('Invalid data format: {}'.format(data_format))
+        sys.exit()
 
     return data, dic
 
@@ -620,7 +654,7 @@ def load_pickled_data(filename_wo_ext, load_dic=True):
     return Data(tokenseqs, labels)
 
 
-def dump_pickled_data(filename_wo_ext, data, pos_labels=None):
+def dump_pickled_data(filename_wo_ext, data):
     dump_path = filename_wo_ext + '.pickle'
 
     with open(dump_path, 'wb') as f:
