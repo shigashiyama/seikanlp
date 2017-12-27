@@ -125,10 +125,10 @@ class Trainer(object):
             self.hparams.update({'additional_feat_dim' : feat_dim})
 
 
-    def init_model(self, pretrained_token_embed_dim=0):
+    def init_model(self, pretrained_unigram_embed_dim=0):
         self.log('Initialize model from hyperparameters\n')
         self.classifier = classifiers.init_classifier(
-            self.decode_type, self.hparams, self.dic, pretrained_token_embed_dim,
+            self.decode_type, self.hparams, self.dic, pretrained_unigram_embed_dim,
             self.args.predict_parent_existence)
 
 
@@ -139,7 +139,7 @@ class Trainer(object):
         self.log('Vocab size: {}\n'.format(len(self.dic.tables['unigram'])))
 
 
-    def load_model(self, model_path, pretrained_token_embed_dim=0):
+    def load_model(self, model_path, pretrained_unigram_embed_dim=0):
         array = model_path.split('_e')
         dic_path = '{}.s2i'.format(array[0])
         hparam_path = '{}.hyp'.format(array[0])
@@ -168,7 +168,7 @@ class Trainer(object):
         self.log('')
 
         # model
-        self.init_model(pretrained_token_embed_dim)
+        self.init_model(pretrained_unigram_embed_dim)
         chainer.serializers.load_npz(model_path, self.classifier)
         self.log('Load model parameters: {}\n'.format(model_path))
 
@@ -337,8 +337,8 @@ class Trainer(object):
         optimizer.setup(self.classifier)
         delparams = []
         if self.args.fix_pretrained_embed:
-            delparams.append('pretrained_token_embed/W')
-            self.log('Fix parameters: pretrained_token_embed/W')
+            delparams.append('pretrained_unigram_embed/W')
+            self.log('Fix parameters: pretrained_unigram_embed/W')
         if 'dual' in self.decode_type:
             delparams.append('su_tagger')
             self.log('Fix parameters: su_tagger/*')
@@ -400,58 +400,15 @@ class Trainer(object):
 
 
     def run_decode_mode(self):
-        text_path = (self.args.path_prefix if self.args.path_prefix else '') + self.args.input_text
-        if self.decode_type == 'tag' or self.decode_type == 'dual_tag':
-            tokenseqs = data_io.load_raw_text_for_tagging(text_path, self.dic)
-
-        elif (self.decode_type == 'seg' or self.decode_type == 'dual_seg' or
-              self.decode_type == 'seg_tag' or self.decode_type == 'dual_seg_tag'):
-            tokenseqs = data_io.load_raw_text_for_segmentation(text_path, self.dic)
-        else:
-            # to be implemented
-            pass
-
-        inputs = [tokenseqs]
-        data = data_io.Data(inputs, None)
-
-        if 'feature_template' in self.hparams and self.hparams['feature_template']:
-            self.extract_features(data)
-
-        stream = open(self.args.output_path, 'w') if self.args.output_path else sys.stdout
-        self.decode(data, stream=stream)
-
-        if self.args.output_path:
-            stream.close()
+        # to be implemented in sub-class
+        pass
 
 
-    # TODO modify
     def run_interactive_mode(self):
-        xp = cuda.cupy if args.gpu >= 0 else np
+        # to be implemented in sub-class
+        pass
 
-        print('Please input text or type \'q\' to quit this mode:')
-        while True:
-            line = sys.stdin.readline().rstrip()
-            if len(line) == 0:
-                continue
-            elif line == 'q':
-                break
-
-            if self.decode_type == 'tag':
-                array = line.split(' ')
-                ins = [self.dic.get_token_id(word) for word in array]
-            else:
-                ins = [self.dic.get_token_id(char) for char in line]
-            xs = [xp.asarray(ins, dtype=np.int32)]
-
-            if self.hparams['feature_template']:
-                fs = self.feat_extractor.extract_features([ins], self.dic.tries['chunk'])
-            else:
-                fs = None
-
-            self.decode_batch(xs, fs)
-            print()
-
-
+    
     def gen_inputs(self, data, ids):
         # to be implemented in sub-class
         return None
@@ -571,7 +528,7 @@ class TaggerTrainerBase(Trainer):
                 key = kv[0]
                 val = kv[1]
 
-                if (key == 'token_embed_dim' or
+                if (key == 'unigram_embed_dim' or
                     key == 'subtoken_embed_dim' or
                     key == 'additional_feat_dim' or
                     key == 'rnn_n_layers' or
@@ -634,11 +591,75 @@ class TaggerTrainerBase(Trainer):
             return xs, fs
         
 
-    def decode(self, data, stream=sys.stdout):
+    def decode(self, data, orgseqs, stream=sys.stdout):
         n_ins = len(data.inputs[0])
+
+        timer = util.Timer()
+        timer.start()
         for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=False):
             xs, fs = self.gen_inputs(data, ids, evaluate=False)
-            self.decode_batch(xs, fs)
+            os = [orgseqs[j] for j in ids]
+            self.decode_batch(xs, fs, os)
+        timer.stop()
+
+        print('Parsed %d sentences. Elapsed time: %.4f sec (total) / %.4f sec (ave)' % (
+            n_ins, timer.elapsed, timer.elapsed/n_ins), file=sys.stderr)
+
+
+    def run_decode_mode(self):
+        text_path = (self.args.path_prefix if self.args.path_prefix else '') + self.args.input_text
+
+        tokenseqs = orgseqs = posseqs = None
+        if self.decode_type == 'tag' or self.decode_type == 'dual_tag':
+            tokenseqs, orgseqs = data_io.load_text_for_tagger(text_path, self.dic, seg=False)
+
+        elif (self.decode_type == 'seg' or self.decode_type == 'dual_seg' or
+              self.decode_type == 'seg_tag' or self.decode_type == 'dual_seg_tag'):
+            tokenseqs, orgseqs = data_io.load_text_for_tagger(text_path, self.dic, seg=True)
+
+        inputs = [tokenseqs]
+        outputs = [posseqs] if posseqs else None
+        data = data_io.Data(inputs, outputs)
+
+        if 'feature_template' in self.hparams and self.hparams['feature_template']:
+            self.extract_features(data)
+
+        stream = open(self.args.output_path, 'w') if self.args.output_path else sys.stdout
+        self.decode(data, orgseqs, stream=stream)
+
+        if self.args.output_path:
+            stream.close()
+
+
+    def run_interactive_mode(self):
+        xp = cuda.cupy if self.args.gpu >= 0 else np
+        get_token_id = self.dic.tables['unigram'].get_id
+
+        print('Please input text or type \'q\' to quit this mode:')
+        while True:
+            line = sys.stdin.readline().rstrip()
+            if len(line) == 0:
+                continue
+            elif line == 'q':
+                break
+
+            if self.decode_type == 'tag':
+                array = line.split(' ')
+                ins = [get_token_id(word) for word in array]
+                org = [word for word in array]
+            else:
+                ins = [get_token_id(char) for char in line]
+                org = [char for char in line]
+            xs = [xp.asarray(ins, dtype=np.int32)]
+            orgseqs = [org]
+
+            if self.hparams['feature_template']:
+                fs = self.feat_extractor.extract_features([ins], self.dic.tries['chunk'])
+            else:
+                fs = None
+
+            self.decode_batch(xs, fs, orgseqs)
+            print()
 
 
 class TaggerTrainer(TaggerTrainerBase):
@@ -646,17 +667,17 @@ class TaggerTrainer(TaggerTrainerBase):
         super().__init__(args, logger)
 
 
-    def load_model(self, model_path, pretrained_token_embed_dim=0):
-        super().load_model(model_path, pretrained_token_embed_dim)
+    def load_model(self, model_path, pretrained_unigram_embed_dim=0):
+        super().load_model(model_path, pretrained_unigram_embed_dim)
         if 'rnn_dropout' in self.hparams:
             self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
         if 'hidden_mlp_dropout' in self.hparams:
             self.classifier.change_hidden_mlp_dropout_ratio(self.hparams['hidden_mlp_dropout'])
 
 
-    def init_hyperparameters(self, args, pretrained_token_embed_dim=0):
+    def init_hyperparameters(self, args, pretrained_unigram_embed_dim=0):
         self.hparams = {
-            'token_embed_dim' : args.token_embed_dim,
+            'unigram_embed_dim' : args.unigram_embed_dim,
             'subtoken_embed_dim' : args.subtoken_embed_dim,
             'rnn_unit_type' : args.rnn_unit_type,
             'rnn_bidirection' : args.rnn_bidirection,
@@ -723,12 +744,12 @@ class TaggerTrainer(TaggerTrainerBase):
         self.evaluator = classifiers.init_evaluator(self.decode_type, self.dic, self.args.ignore_labels)
 
 
-    def decode_batch(self, xs, fs, stream=sys.stdout):
+    def decode_batch(self, xs, fs, orgseqs, stream=sys.stdout):
         ys = self.classifier.decode(xs, fs)
+        id2label = self.dic.tables['seg_label' if 'seg' in self.decode_type else 'pos_label'].id2str
 
-        for x, y in zip(xs, ys):
-            x_str = [self.dic.get_token(int(xi)) for xi in x]
-            y_str = [self.dic.get_label(int(yi)) for yi in y]
+        for x_str, y in zip(orgseqs, ys):
+            y_str = [id2label[int(yi)] for yi in y]
 
             if self.decode_type == 'tag':
                 res = ['{}/{}'.format(xi_str, yi_str) for xi_str, yi_str in zip(x_str, y_str)]
@@ -758,7 +779,7 @@ class DualTaggerTrainer(TaggerTrainerBase):
         self.su_tagger = None
 
 
-    def load_sub_model(self, model_path, pretrained_token_embed_dim=0):
+    def load_sub_model(self, model_path, pretrained_unigram_embed_dim=0):
         array = model_path.split('_e')
         dic_path = '{}.s2i'.format(array[0])
         hparam_path = '{}.hyp'.format(array[0])
@@ -784,13 +805,13 @@ class DualTaggerTrainer(TaggerTrainerBase):
         hparams_sub = self.hparams.copy()
         self.log('Initialize short unit model from hyperparameters\n')
         classifier_tmp = classifiers.init_classifier(
-            decode_type, hparams_sub, self.dic, pretrained_token_embed_dim)
+            decode_type, hparams_sub, self.dic, pretrained_unigram_embed_dim)
         chainer.serializers.load_npz(model_path, classifier_tmp)
         self.su_tagger = classifier_tmp.predictor
         self.log('Load short unit model parameters: {}\n'.format(model_path))
 
 
-    def init_hyperparameters(self, args, pretrained_token_embed_dim=0):
+    def init_hyperparameters(self, args, pretrained_unigram_embed_dim=0):
         self.log('Initialize hyperparameters for full model\n')
 
         # keep most loaded params from sub model and update some params from args
@@ -815,8 +836,8 @@ class DualTaggerTrainer(TaggerTrainerBase):
         self.log('')
 
 
-    def load_model(self, model_path, pretrained_token_embed_dim=0):
-        super().load_model(model_path, pretrained_token_embed_dim)
+    def load_model(self, model_path, pretrained_unigram_embed_dim=0):
+        super().load_model(model_path, pretrained_unigram_embed_dim)
         if 'rnn_dropout' in self.hparams:
             self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
         if 'hidden_mlp_dropout' in self.hparams:
@@ -870,13 +891,13 @@ class DualTaggerTrainer(TaggerTrainerBase):
     def decode_batch(self, xs, fs, stream=sys.stdout):
         sys, lys = self.classifier.decode(xs, fs)
 
-        get_token = self.dic.get_token
-        get_label = self.dic.get_seg_label if 'seg' in self.decode_type else self.dic.get_pos_label
+        id2token = self.dic.tables['unigram'].id2str
+        id2label = self.dic.tables['seg_label' if 'seg' in self.decode_type else 'pos_label'].id2str
 
         for x, sy, ly in zip(xs, sys, lys):
-            x_str = [get_token(int(xi)) for xi in x]
-            sy_str = [get_label(int(yi)) for yi in sy]
-            ly_str = [get_label(int(yi)) for yi in ly]
+            x_str = [id2token[int(xi)] for xi in x]
+            sy_str = [id2label[int(yi)] for yi in sy]
+            ly_str = [id2label[int(yi)] for yi in ly]
 
             if self.decode_type == 'dual_tag':
                 res1 = ['{}/{}'.format(xi_str, yi_str) for xi_str, yi_str in zip(x_str, sy_str)]
@@ -917,9 +938,9 @@ class ParserTrainer(Trainer):
         super().__init__(args, logger)
 
 
-    def load_model(self, model_path, pretrained_token_embed_dim=0):
+    def load_model(self, model_path, pretrained_unigram_embed_dim=0):
         # TODO give args.predict_parent_existence to init classifier
-        super().load_model(model_path, pretrained_token_embed_dim)
+        super().load_model(model_path, pretrained_unigram_embed_dim)
         if 'rnn_dropout' in self.hparams:
             self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
         if 'hidden_mlp_dropout' in self.hparams:
@@ -930,7 +951,7 @@ class ParserTrainer(Trainer):
 
     def init_hyperparameters(self, args):
         self.hparams = {
-            'token_embed_dim' : args.token_embed_dim,
+            'unigram_embed_dim' : args.unigram_embed_dim,
             'subtoken_embed_dim' : args.subtoken_embed_dim,
             'pos_embed_dim' : args.pos_embed_dim,
             'rnn_unit_type' : args.rnn_unit_type,
@@ -976,9 +997,9 @@ class ParserTrainer(Trainer):
                 key = kv[0]
                 val = kv[1]
 
-                if (key == 'token_embed_dim' or
+                if (key == 'unigram_embed_dim' or
                     key == 'subtoken_embed_dim' or
-                    key == 'pretrained_token_embed_dim' or
+                    key == 'pretrained_unigram_embed_dim' or
                     key == 'pos_embed_dim' or
                     key == 'rnn_n_layers' or
                     key == 'rnn_n_units' or
@@ -1079,23 +1100,125 @@ class ParserTrainer(Trainer):
         self.evaluator = classifiers.init_evaluator(self.decode_type, self.dic, self.args.ignore_labels)
 
 
-    def gen_inputs(self, data, ids):
+    def gen_inputs(self, data, ids, evaluate=True):
         xp = cuda.cupy if self.args.gpu >= 0 else np
         ws = [xp.asarray(data.inputs[0][j], dtype='i') for j in ids]
         cs = ([[xp.asarray(subs, dtype='i') for subs in data.inputs[1][j]] for j in ids] 
               if len(data.inputs) >= 2 else None)
         ps = [xp.asarray(data.outputs[0][j], dtype='i') for j in ids] if data.outputs[0] else None
-        ths = [xp.asarray(data.outputs[1][j], dtype='i') for j in ids]
-        
-        if self.decode_type == 'tdep' or self.decode_type == 'tag_tdep':
-            tls = [xp.asarray(data.outputs[2][j], dtype='i') for j in ids]
-            return ws, cs, ps, ths, tls
+
+        if evaluate:
+            ths = [xp.asarray(data.outputs[1][j], dtype='i') for j in ids]
+            if self.decode_type == 'tdep' or self.decode_type == 'tag_tdep':
+                tls = [xp.asarray(data.outputs[2][j], dtype='i') for j in ids]
+                return ws, cs, ps, ths, tls
+            else:
+                return ws, cs, ps, ths
         else:
-            return ws, cs, ps, ths
+            return ws, cs, ps
 
 
-    def decode(self, data, stream=sys.stdout):
-        pass
+    def decode(self, data, orgseqs, orgposs, stream=sys.stdout):
+        n_ins = len(data.inputs[0])
+
+        timer = util.Timer()
+        timer.start()
+        for ids in batch_generator(n_ins, batchsize=self.args.batchsize, shuffle=False):
+            ws, cs, ps  = self.gen_inputs(data, ids, evaluate=False)
+            ows = [orgseqs[j] for j in ids]
+            ops = [orgposs[j] for j in ids]
+            self.decode_batch(ws, cs, ps, ows, ops)
+        timer.stop()
+
+        print('Parsed %d sentences. Elapsed time: %.4f sec (total) / %.4f sec (ave)' % (
+            n_ins, timer.elapsed, timer.elapsed/n_ins), file=sys.stderr)
+
+
+    def decode_batch(self, ws, cs, ps, orgseqs, orgposs, stream=sys.stdout):
+        use_pos = ps is not None
+        label_prediction = False #self.decode_type == 'tdep' # TODO
+
+        ret = self.classifier.decode(ws, cs, ps, label_prediction)
+
+        if label_prediction:
+            hs = ret[0]
+            ls = ret[1]
+            id2label = self.dic.tables['arc_label'].id2str
+        else:
+            hs = ret
+            ls = [None] * len(ws)
+        if not use_pos:
+            ps = [None] * len(ws)
+
+        for x_str, p_str, h, l in zip(orgseqs, orgposs, hs, ls):
+            h = h[1:]
+            if label_prediction:
+                l = l[1:]
+                l_str = [id2label[int(li)] for li in l] 
+
+            if label_prediction:
+                if use_pos:
+                    res = ['{}\t{}\t{}\t{}'.format(
+                        xi_str, pi_str, hi, li_str) for xi_str, pi_str, hi, li_str in zip(x_str, p_str, h, l_str)]
+                else:
+                    res = ['{}\t{}\t{}'.format(
+                        xi_str, hi, li_str) for xi_str, hi, li_str in zip(x_str, h, l_str)]
+            else:
+                if use_pos:
+                    res = ['{}\t{}\t{}'.format(
+                        xi_str, pi_str, hi) for xi_str, pi_str, hi in zip(x_str, p_str, h)]
+                else:
+                    res = ['{}\t{}'.format(
+                        xi_str, hi) for xi_str, hi in zip(x_str, h)]
+            res = '\n'.join(res).rstrip()
+
+            print(res+'\n', file=stream)
+
+
+    def run_decode_mode(self):
+        text_path = (self.args.path_prefix if self.args.path_prefix else '') + self.args.input_text
+
+        tokenseqs = orgseqs = posseqs = orgposseqs = None
+        if self.decode_type == 'dep' or self.decode_type == 'tdep':
+            tokenseqs, posseqs, orgseqs, orgposseqs = data_io.load_text_for_parser(
+                text_path, self.dic, read_pos=True) # TODO
+
+        inputs = [tokenseqs]
+        outputs = [posseqs] if posseqs else None
+        data = data_io.Data(inputs, outputs)
+
+        stream = open(self.args.output_path, 'w') if self.args.output_path else sys.stdout
+        self.decode(data, orgseqs, orgposseqs, stream=stream)
+
+        if self.args.output_path:
+            stream.close()
+
+
+    def run_interactive_mode(self): # TODO
+        xp = cuda.cupy if self.args.gpu >= 0 else np
+        get_token_id = self.dic.tables['unigram'].get_id
+        get_pos_id = self.dic.tables['pos'].get_id
+
+        print('Please input text or type \'q\' to quit this mode:')
+        while True:
+            line = sys.stdin.readline().rstrip()
+            if len(line) == 0:
+                continue
+            elif line == 'q':
+                break
+
+            if self.decode_type == 'tag':
+                array = line.split(' ')
+                ins = [get_token_id(word) for word in array]
+                org = [word for word in array]
+            else:
+                ins = [get_token_id(char) for char in line]
+                org = [char for char in line]
+            xs = [xp.asarray(ins, dtype=np.int32)]
+            orgseqs = [org]
+
+            self.decode_batch(xs, fs, orgseqs)
+            print()
 
 
 def batch_generator(len_data, batchsize=100, shuffle=True):

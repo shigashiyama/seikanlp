@@ -16,45 +16,74 @@ class Data(object):
         self.featvecs = featvecs  # feature vectors other than input sequences
 
 
-def load_raw_text_for_segmentation(path, dic):
+def load_text_for_tagger(path, dic, seg=False):
     tokenseqs = []
+    orgseqs = []
     ins_cnt = 0
 
+    get_id = dic.tables['unigram'].get_id
     with open(path) as f:
         for line in f:
-            line = line.strip()
+            line = line.strip(' \t\n')
             if len(line) < 1:
                 continue
 
-            ins = [dic.get_token_id(char) for char in line]
-            tokenseqs.append(ins)
+            if seg:
+                ts = [get_id(char) for char in line]
+                os = [char for char in line]
+            else:
+                ts = [get_id(word) for word in array]
+                os = [word for word in array]
+            tokenseqs.append(ts)
+            orgseqs.append(os)
 
             ins_cnt += 1
             if ins_cnt % 100000 == 0:
                 print('read', ins_cnt, 'sentences', file=sys.stderr)
 
-    return tokenseqs
+    return tokenseqs, orgseqs
 
 
-def load_raw_text_for_tagging(path, dic):
+def load_text_for_parser(path, dic, read_pos=False):
     tokenseqs = []
+    posseqs = []
+    orgseqs = []
+    orgposseqs = []
     ins_cnt = 0
+
+    get_token_id = dic.tables['unigram'].get_id
+    get_pos_id = dic.tables['pos_label'].get_id
+    root_token_id = dic.tables['unigram'].get_id(constants.ROOT_SYMBOL)
+    if read_pos:
+        root_pos_id = dic.tables['pos_label'].get_id(constants.ROOT_SYMBOL)
 
     with open(path) as f:
         for line in f:
-            line = line.strip()
+            line = line.strip(' \t\n')
             if len(line) < 1:
                 continue
 
             array = line.split(' ')
-            ins = [dic.get_token_id(word) for word in array]
-            tokenseqs.append(ins)
+            elems = [elem.split('/') for elem in array]
+            ts = [get_token_id(elem[0]) for elem in elems]
+            ts.insert(0, root_token_id)
+            tokenseqs.append(ts)
+
+            ots = [elem[0] for elem in elems]
+            orgseqs.append(ots)
+
+            if read_pos:
+                ops = [elem[1] for elem in elems]
+                orgposseqs.append(ops)
+                ps = [get_pos_id(elem[1]) for elem in elems]
+                ps.insert(0, root_pos_id)
+                posseqs.append(ps)
 
             ins_cnt += 1
             if ins_cnt % 100000 == 0:
                 print('read', ins_cnt, 'sentences', file=sys.stderr)
 
-    return tokenseqs
+    return tokenseqs, posseqs, orgseqs, orgposseqs
 
 
 """
@@ -309,7 +338,7 @@ def load_data_WL(path, segmentation=True, tagging=False, parsing=False, typed_pa
 
                 if segmentation and update_labels:
                     for seg_lab in constants.SEG_LABELS:
-                        dic.seg_label_indices.get_id('{}-{}'.format(seg_lab, pos) , True)
+                        dic.tables['seg_label'].get_id('{}-{}'.format(seg_lab, pos) , True)
             else:
                 pos = None
 

@@ -11,28 +11,28 @@ from models.tagging import RNNTagger, RNNCRFTagger
 
 class DualRNNTagger(chainer.Chain):
     def __init__(
-            self, n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            self, n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp_n_layers, mlp_n_units, n_labels, use_crf=True, feat_dim=0, mlp_n_additional_units=0,
-            rnn_dropout=0, mlp_dropout=0, pretrained_token_embed_dim=0, file=sys.stderr):
+            rnn_dropout=0, mlp_dropout=0, pretrained_unigram_embed_dim=0, file=sys.stderr):
         super().__init__()
         with self.init_scope():
             print('### Short unit model', file=file)
             self.su_tagger = models.util.construct_RNNTagger(
-                n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+                n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
                 rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
                 mlp_n_layers, mlp_n_units, n_labels, use_crf=use_crf, feat_dim=feat_dim, 
                 mlp_n_additional_units=mlp_n_additional_units,
                 rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-                pretrained_token_embed_dim=pretrained_token_embed_dim, file=file)
+                pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, file=file)
             print('### Long unit model', file=file)
             self.lu_tagger = models.util.construct_RNNTagger(
-                n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+                n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
                 rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
                 mlp_n_layers, mlp_n_units, n_labels, use_crf=use_crf, feat_dim=feat_dim, 
                 mlp_n_additional_units=mlp_n_additional_units,
                 rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-                pretrained_token_embed_dim=pretrained_token_embed_dim, file=file)
+                pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, file=file)
 
 
     def __call__(self, ws, fs=None, ls=None, calculate_loss=True):

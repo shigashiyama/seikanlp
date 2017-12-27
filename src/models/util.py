@@ -47,42 +47,42 @@ def construct_RNN(unit_type, bidirection, n_layers, n_input, n_units, dropout, f
 
 
 def construct_RNNTagger(
-        n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+        n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
         rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
         mlp_n_layers, mlp_n_units, n_labels, use_crf=True,
         feat_dim=0, mlp_n_additional_units=0,
-        rnn_dropout=0, mlp_dropout=0, pretrained_token_embed_dim=0, file=sys.stderr):
+        rnn_dropout=0, mlp_dropout=0, pretrained_unigram_embed_dim=0, file=sys.stderr):
 
     tagger = None
     if use_crf:
         tagger = RNNCRFTagger(
-            n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
             mlp_n_additional_units=mlp_n_additional_units,
             rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-            pretrained_token_embed_dim=pretrained_token_embed_dim, file=file)
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, file=file)
     else:
         tagger = RNNTagger(
-            n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
             mlp_n_additional_units=mlp_n_additional_units,
             rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-            pretrained_token_embed_dim=pretrained_token_embed_dim, file=file)
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, file=file)
 
     return tagger
 
 
-def load_pretrained_embedding_layer(id2token, pretrained_embed, external_model, finetuning=False):
-    n_vocab = len(id2token)
+def load_pretrained_embedding_layer(id2unigram, pretrained_embed, external_model, finetuning=False):
+    n_vocab = len(id2unigram)
     dim = external_model.wv.syn0[0].shape[0]
     initialW = initializers.normal.Normal(1.0)
 
     weight = []
     count = 0
     for i in range(n_vocab):
-        key = id2token[i]
+        key = id2unigram[i]
         if key in external_model.wv.vocab:
             vec = external_model.wv[key]
             count += 1
@@ -139,7 +139,7 @@ def load_pretrained_embedding_layer(id2token, pretrained_embed, external_model, 
 #     crf_from.cost = chainer.Parameter(initializer=crf_to.cost.data, name='cost')
 
 
-def grow_embedding_layers(id2token_org, id2token_grown, rand_embed, 
+def grow_embedding_layers(id2unigram_org, id2unigram_grown, rand_embed, 
                           pretrained_embed=None, external_model=None, train=False, file=sys.stderr):
     n_vocab = rand_embed.W.shape[0]
     d_rand = rand_embed.W.shape[1]
@@ -150,7 +150,7 @@ def grow_embedding_layers(id2token_org, id2token_grown, rand_embed,
     w2_pretrained = []
 
     count = 0
-    for i in range(len(id2token_org), len(id2token_grown)):
+    for i in range(len(id2unigram_org), len(id2unigram_grown)):
         if train:               # resume training
             vec_rand = initializers.generate_array(initialW, (d_rand, ), np)
         else:                   # test
@@ -158,7 +158,7 @@ def grow_embedding_layers(id2token_org, id2token_grown, rand_embed,
         w2_rand.append(vec_rand)
 
         if external_model:
-            key = id2token_grown[i]
+            key = id2unigram_grown[i]
             if key in external_model.wv.vocab:
                 vec_pretrained = external_model.wv[key]
                 count += 1
@@ -166,7 +166,7 @@ def grow_embedding_layers(id2token_org, id2token_grown, rand_embed,
                 vec_pretrained = np.zeros(d_pretrained, dtype='f')
             w2_pretrained.append(vec_pretrained)
 
-    diff = len(id2token_grown) - len(id2token_org)
+    diff = len(id2unigram_grown) - len(id2unigram_org)
     w2_rand = np.reshape(w2_rand, (diff, d_rand))
     w_rand = F.concat((rand_embed.W, w2_rand), 0)
     rand_embed.W = chainer.Parameter(initializer=w_rand.data, name='W')

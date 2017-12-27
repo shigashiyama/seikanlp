@@ -66,8 +66,8 @@ class Arguments(object):
                             help='')
         parser.add_argument('--no_freq_update', action='store_true',
                             help='')
-        parser.add_argument('--token_embed_dim', '-d', type=int, default=300,
-                            help='The number of dimension of token (character or word) embedding'
+        parser.add_argument('--unigram_embed_dim', '-d', type=int, default=300,
+                            help='The number of dimension of token (character or word) unigram embedding'
                             + '(Default: 300)')
         parser.add_argument('--subtoken_embed_dim', type=int, default=0,
                             help='The number of dimension of subtoken (usually character) embedding'
@@ -81,7 +81,7 @@ class Arguments(object):
                             help='File path succeeding \'path_prefix\' of validation data')
         parser.add_argument('--test_data', default='',
                             help='File path succeeding \'path_prefix\' of test data')
-        parser.add_argument('--input_text', default='',
+        parser.add_argument('--input_text', '-i', default='',
                             help='File path of input text which succeeds \'path_prefix\'')
         parser.add_argument('--label_reference_data', default='',
                             help='File path succeeding \'path_prefix\''
@@ -91,8 +91,8 @@ class Arguments(object):
         parser.add_argument('--dump_train_data', action='store_true',
                             help='Dump data specified as \'train_data\''
                             + ' using new file name endding with \'.pickle\'')
-        parser.add_argument('--token_embed_model_path', 
-                            help='File path of pretrained model of token (character or word) embedding')
+        parser.add_argument('--unigram_embed_model_path', 
+                            help='File path of pretrained model of token (character or word) unigram embedding')
         parser.add_argument('--fix_pretrained_embed', action='store_true',
                             help='')
 

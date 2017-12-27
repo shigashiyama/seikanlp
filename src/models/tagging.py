@@ -15,10 +15,10 @@ import models.util
 # Base model that consists of embedding layer, recurrent network (RNN) layers and affine layer.
 class RNNTaggerBase(chainer.Chain):
     def __init__(
-            self, n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            self, n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp_n_layers, mlp_n_units, n_labels, feat_dim=0, mlp_n_additional_units=0,
-            rnn_dropout=0, mlp_dropout=0, pretrained_token_embed_dim=0, file=sys.stderr):
+            rnn_dropout=0, mlp_dropout=0, pretrained_unigram_embed_dim=0, file=sys.stderr):
         super().__init__()
 
         with self.init_scope():
@@ -26,23 +26,23 @@ class RNNTaggerBase(chainer.Chain):
 
             # embedding layer(s)
 
-            self.token_embed = L.EmbedID(n_vocab, token_embed_dim)
-            print('# Embedding matrix: W={}'.format(self.token_embed.W.shape), file=file)
+            self.unigram_embed = L.EmbedID(n_vocab, unigram_embed_dim)
+            print('# Unigram embedding matrix: W={}'.format(self.unigram_embed.W.shape), file=file)
 
-            if pretrained_token_embed_dim > 0:
-                self.pretrained_token_embed = L.EmbedID(n_vocab, pretrained_token_embed_dim)
-                print('# Pretrained embedding matrix: W={}'.format(
-                    self.pretrained_token_embed.W.shape), file=file)
+            if pretrained_unigram_embed_dim > 0:
+                self.pretrained_unigram_embed = L.EmbedID(n_vocab, pretrained_unigram_embed_dim)
+                print('# Pretrained unigram embedding matrix: W={}'.format(
+                    self.pretrained_unigram_embed.W.shape), file=file)
             else:
-                self.pretrained_token_embed = None
-            self.pretrained_token_embed_dim = pretrained_token_embed_dim
+                self.pretrained_unigram_embed = None
+            self.pretrained_unigram_embed_dim = pretrained_unigram_embed_dim
 
             self.additional_feat_dim = feat_dim
             if feat_dim > 0:
                 print('# Additional features dimension: {}'.format(feat_dim), file=file)
 
-            embed_dim = token_embed_dim + pretrained_token_embed_dim + feat_dim
-            #embed_dim = token_embed_dim + pretrained_token_embed_dim + feat_dim + mlp_n_additional_units
+            embed_dim = unigram_embed_dim + pretrained_unigram_embed_dim + feat_dim
+            #embed_dim = unigram_embed_dim + pretrained_unigram_embed_dim + feat_dim + mlp_n_additional_units
 
             # subtoken embedding layer
 
@@ -66,6 +66,7 @@ class RNNTaggerBase(chainer.Chain):
             self.mlp = MLP(mlp_in, n_labels, n_hidden_units=mlp_n_units, n_layers=mlp_n_layers,
                            output_activation=F.identity, dropout=mlp_dropout, file=file)
 
+
     def __call__(self, ws, fs=None, ls=None, calculate_loss=True):
         xs = self.get_features(ws, fs)
         rs = self.rnn_output(xs)
@@ -79,9 +80,9 @@ class RNNTaggerBase(chainer.Chain):
 
         if self.additional_feat_dim > 0:
             for w, f in zip(ws, fs):
-                we = self.token_embed(w)
-                if self.pretrained_token_embed_dim > 0:
-                    twe = self.pretrained_token_embed(w)
+                we = self.unigram_embed(w)
+                if self.pretrained_unigram_embed_dim > 0:
+                    twe = self.pretrained_unigram_embed(w)
                     xe = F.concat((we, twe, f), 1)
                 else:
                     xe = F.concat((we, f), 1)
@@ -89,9 +90,9 @@ class RNNTaggerBase(chainer.Chain):
 
         else:
             for w in ws:
-                we = self.token_embed(w)
-                if self.pretrained_token_embed_dim > 0:
-                    twe = self.pretrained_token_embed(w)
+                we = self.unigram_embed(w)
+                if self.pretrained_unigram_embed_dim > 0:
+                    twe = self.pretrained_unigram_embed(w)
                     xe = F.concat((we, twe), 1)
                 else:
                     xe = we
@@ -122,17 +123,17 @@ class RNNTaggerBase(chainer.Chain):
 
 class RNNTagger(RNNTaggerBase):
     def __init__(
-            self, n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            self, n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp_n_layers, mlp_n_units, n_labels, feat_dim=0, mlp_n_additional_units=0,
-            rnn_dropout=0, mlp_dropout=0, pretrained_token_embed_dim=0, file=sys.stderr):
+            rnn_dropout=0, mlp_dropout=0, pretrained_unigram_embed_dim=0, file=sys.stderr):
         super().__init__(
-            n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
             mlp_n_additional_units=mlp_n_additional_units,
             rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-            pretrained_token_embed_dim=pretrained_token_embed_dim, file=file)
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, file=file)
 
         self.softmax_cross_entropy = softmax_cross_entropy.softmax_cross_entropy
 
@@ -155,17 +156,17 @@ class RNNTagger(RNNTaggerBase):
 
 class RNNCRFTagger(RNNTaggerBase):
     def __init__(
-            self, n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            self, n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp_n_layers, mlp_n_units, n_labels, feat_dim=0, mlp_n_additional_units=0,
-            rnn_dropout=0, mlp_dropout=0, pretrained_token_embed_dim=0, file=sys.stderr):
+            rnn_dropout=0, mlp_dropout=0, pretrained_unigram_embed_dim=0, file=sys.stderr):
         super().__init__(
-            n_vocab, token_embed_dim, n_subtokens, subtoken_embed_dim,
+            n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
             mlp_n_additional_units=mlp_n_additional_units,
             rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-            pretrained_token_embed_dim=pretrained_token_embed_dim, file=file)
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, file=file)
 
         with self.init_scope():
             self.crf = L.CRF1d(n_labels)

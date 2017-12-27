@@ -52,23 +52,23 @@ def run(process_name):
     ################################
     # Load word embedding model
 
-    if args.token_embed_model_path and args.execute_mode != 'interactive':
-        embed_model = trainers.load_embedding_model(args.token_embed_model_path)
-        pretrained_token_embed_dim = embed_model.wv.syn0[0].shape[0]
+    if args.unigram_embed_model_path and args.execute_mode != 'interactive':
+        embed_model = trainers.load_embedding_model(args.unigram_embed_model_path)
+        pretrained_unigram_embed_dim = embed_model.wv.syn0[0].shape[0]
     else:
         embed_model = None
-        pretrained_token_embed_dim = 0
+        pretrained_unigram_embed_dim = 0
 
     ################################
     # Load feature extractor and classifier model
 
     if args.model_path:
-        trainer.load_model(args.model_path, pretrained_token_embed_dim)
+        trainer.load_model(args.model_path, pretrained_unigram_embed_dim)
         dic_org = copy.deepcopy(trainer.dic)
 
     elif process_name == 'dual_tagging':
         if args.sub_model_path:
-            trainer.load_sub_model(args.sub_model_path, pretrained_token_embed_dim)
+            trainer.load_sub_model(args.sub_model_path, pretrained_unigram_embed_dim)
             dic_org = copy.deepcopy(trainer.dic)
             trainer.init_hyperparameters(args)
         else:
@@ -90,7 +90,7 @@ def run(process_name):
         edic_path = args.ext_dic_path
         trainer.dic = dictionary.load_vocabulary(edic_path, read_pos=False)
         trainer.log('Load external dictionary: {}'.format(edic_path))
-        trainer.log('Vocab size: {}'.format(len(trainer.dic.token_indices)))
+        trainer.log('Vocab size: {}'.format(len(trainer.dic.tokens['unigram'])))
 
         if not dic_path.endswith('pickle'):
             base = dic_path.split('.')[0]
@@ -113,7 +113,7 @@ def run(process_name):
     trainer.setup_evaluator()
 
     if not trainer.classifier:
-        trainer.init_model(pretrained_token_embed_dim)
+        trainer.init_model(pretrained_unigram_embed_dim)
         if embed_model:
             trainer.classifier.load_pretrained_embedding_layer(
                 trainer.dic, embed_model, finetuning=(not args.fix_pretrained_embed))

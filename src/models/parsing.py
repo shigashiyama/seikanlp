@@ -73,14 +73,14 @@ class BiaffineCombination(chainer.Chain):
 
 class RNNBiaffineParser(chainer.Chain):
     def __init__(
-            self, n_tokens, token_embed_dim, n_pos, pos_embed_dim, n_subtokens, subtoken_embed_dim,
+            self, n_vocab, unigram_embed_dim, n_pos, pos_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp4arcrep_n_layers, mlp4arcrep_n_units,
             mlp4labelrep_n_layers, mlp4labelrep_n_units, 
             mlp4labelpred_n_layers, mlp4labelpred_n_units,
             mlp4pospred_n_layers=0, mlp4pospred_n_units=0,
             n_labels=0, rnn_dropout=0, hidden_mlp_dropout=0, pred_layers_dropout=0,
-            pretrained_token_embed_dim=0,
+            pretrained_unigram_embed_dim=0,
             file=sys.stderr):
         super().__init__()
 
@@ -97,21 +97,21 @@ class RNNBiaffineParser(chainer.Chain):
             print('acl=label:', self.common_arc_label, file=file)
             print('head=mod:', self.common_head_mod, file=file)
 
-            # token embedding layer(s)
+            # unigram embedding layer(s)
 
-            if pretrained_token_embed_dim > 0:
-                self.pretrained_token_embed = L.EmbedID(n_tokens, pretrained_token_embed_dim)
-                print('# Pretrained token embedding matrix: W={}'.format(
-                    self.pretrained_token_embed.W.shape), file=file)
+            if pretrained_unigram_embed_dim > 0:
+                self.pretrained_unigram_embed = L.EmbedID(n_vocab, pretrained_unigram_embed_dim)
+                print('# Pretrained unigram embedding matrix: W={}'.format(
+                    self.pretrained_unigram_embed.W.shape), file=file)
                 if not self.concat_pretraind_embeddings:
-                    token_embed_dim = pretrained_token_embed_dim
+                    unigram_embed_dim = pretrained_unigram_embed_dim
 
             else:
-                self.pretrained_token_embed = None
-            self.pretrained_token_embed_dim = pretrained_token_embed_dim
+                self.pretrained_unigram_embed = None
+            self.pretrained_unigram_embed_dim = pretrained_unigram_embed_dim
 
-            self.token_embed = L.EmbedID(n_tokens, token_embed_dim)
-            print('# Token embedding matrix: W={}'.format(self.token_embed.W.shape), file=file)
+            self.unigram_embed = L.EmbedID(n_vocab, unigram_embed_dim)
+            print('# Unigram embedding matrix: W={}'.format(self.unigram_embed.W.shape), file=file)
 
             # subtoken embedding layer
 
@@ -129,9 +129,9 @@ class RNNBiaffineParser(chainer.Chain):
 
             # recurrent layers
 
-            embed_dim = token_embed_dim + subtoken_embed_dim + pos_embed_dim
+            embed_dim = unigram_embed_dim + subtoken_embed_dim + pos_embed_dim
             if self.concat_pretraind_embeddings:
-                embed_dim += pretrained_token_embed_dim
+                embed_dim += pretrained_unigram_embed_dim
 
             self.rnn_unit_type = rnn_unit_type
             self.rnn = models.util.construct_RNN(
@@ -144,7 +144,7 @@ class RNNBiaffineParser(chainer.Chain):
             self.pos_prediction = (mlp4pospred_n_layers > 0 and mlp4pospred_n_units > 0)
             if self.pos_prediction:
                 print('# MLP for POS prediction', file=file)
-                input_dim = token_embed_dim + pretrained_token_embed_dim + subtoken_embed_dim
+                input_dim = unigram_embed_dim + pretrained_unigram_embed_dim + subtoken_embed_dim
                 self.mlp_pos = MLP(
                     input_dim, n_pos, n_hidden_units=mlp4pospred_n_units, n_layers=mlp4pospred_n_layers,
                     output_activation=F.identity, dropout=pred_layers_dropout, file=file)
@@ -214,9 +214,9 @@ class RNNBiaffineParser(chainer.Chain):
             cs = [None] * size
 
         for w, c, p in zip(ws, cs, ps):
-            xe = self.token_embed(w)
-            if self.pretrained_token_embed_dim > 0:
-                twe = self.pretrained_token_embed(w)
+            xe = self.unigram_embed(w)
+            if self.pretrained_unigram_embed_dim > 0:
+                twe = self.pretrained_unigram_embed(w)
                 if self.concat_pretraind_embeddings:
                     xe = F.concat((xe, twe), 1)
                 else:
@@ -250,7 +250,7 @@ class RNNBiaffineParser(chainer.Chain):
 
 
     def predict_pos(self, w, xp=np):
-        x = self.token_embed(w)
+        x = self.unigram_embed(w)
         scores = self.mlp_pos(x, per_element=False)
 
         yp = minmax.argmax(scores, axis=1).data
@@ -312,8 +312,9 @@ class RNNBiaffineParser(chainer.Chain):
         return scores, yl
 
 
-    # batch of tokens, pos tags, gold head labels, gold arc labels
-    def __call__(self, ws, cs=None, ps=None, ghs=None, gls=None, train=True, calculate_loss=True):
+    # batch of unigrams, pos tags, gold head labels, gold arc labels
+    def __call__(
+            self, ws, cs=None, ps=None, ghs=None, gls=None, train=True, calculate_loss=True):
         data_size = len(ws)
 
         if train:
@@ -389,7 +390,7 @@ class RNNBiaffineParser(chainer.Chain):
             yhs.append(yh)
 
             if self.label_prediction:
-                n = len(m_label)      # the number of tokens except root
+                n = len(m_label)      # the number of unigrams except root
                 heads = gh if train else yh
                 hm_label = F.reshape(F.concat([h_label[heads[i]] for i in range(1, n+1)], axis=0), (n, ldim))
                 scores_l, yl = self.predict_labels(m_label, hm_label, xp)
@@ -426,36 +427,37 @@ class RNNBiaffineParser(chainer.Chain):
                 return loss, yhs
 
 
-    def decode(self, ws, cs=None, ps=None):
+    def decode(self, ws, cs=None, ps=None, label_prediction=False):
+        self.label_prediction=label_prediction
         with chainer.no_backprop_mode():
-            ret = self.__call__(ws, cs=cs, ps=ps, train=False, calculate_loss=False)
-
-        return ret[self.n_dummy:]
+            ret = self.__call__(
+                ws, cs=cs, ps=ps, train=False, calculate_loss=False)
+        return ret[1:]
 
 
 class RNNBiaffineFlexibleParser(RNNBiaffineParser):
     def __init__(
-            self, n_tokens, token_embed_dim, n_pos, pos_embed_dim, n_subtokens, subtoken_embed_dim,
+            self, n_vocab, unigram_embed_dim, n_pos, pos_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp4arcrep_n_layers, mlp4arcrep_n_units,
             mlp4labelrep_n_layers, mlp4labelrep_n_units, 
             mlp4labelpred_n_layers, mlp4labelpred_n_units,
             mlp4pospred_n_layers=0, mlp4pospred_n_units=0,
             n_labels=0, rnn_dropout=0, hidden_mlp_dropout=0, pred_layers_dropout=0,
-            pretrained_token_embed_dim=0, file=sys.stderr):
+            pretrained_unigram_embed_dim=0, file=sys.stderr):
         super().__init__(
-            n_tokens, token_embed_dim, n_pos, pos_embed_dim, n_subtokens, subtoken_embed_dim,
+            n_vocab, unigram_embed_dim, n_pos, pos_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp4arcrep_n_layers, mlp4arcrep_n_units,
             mlp4labelrep_n_layers, mlp4labelrep_n_units, 
             mlp4labelpred_n_layers, mlp4labelpred_n_units,
             mlp4pospred_n_layers, mlp4pospred_n_units,
             n_labels, rnn_dropout, hidden_mlp_dropout, pred_layers_dropout,
-            pretrained_token_embed_dim, file=sys.stderr)
+            pretrained_unigram_embed_dim, file=sys.stderr)
 
         self.n_dummy = 2
 
-    # batch of tokens, pos tags, gold head labels, gold arc labels
+    # batch of unigrams, pos tags, gold head labels, gold arc labels
     # def __call__(self, ws, cs=None, ps=None, ghs=None, gls=None, train=True, calculate_loss=True):
     #     data_size = len(ws)
 
@@ -524,7 +526,7 @@ class RNNBiaffineFlexibleParser(RNNBiaffineParser):
     #         yhs.append(yh)
 
     #         if self.label_prediction:
-    #             n = len(m_label)      # the number of tokens except root
+    #             n = len(m_label)      # the number of unigrams except root
     #             heads = gh if train else yh
     #             hm_label = F.reshape(F.concat([h_label[heads[i]] for i in range(1, n+1)], axis=0), (n, ldim))
     #             scores_l, yl = self.predict_labels(m_label, hm_label, xp)

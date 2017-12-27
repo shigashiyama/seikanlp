@@ -20,9 +20,9 @@ class Classifier(chainer.link.Chain):
     
 
     def load_pretrained_embedding_layer(self, dic, external_model, finetuning=False):
-        id2token = dic.tables['unigram'].id2str
+        id2unigram = dic.tables['unigram'].id2str
         models.util.load_pretrained_embedding_layer(
-            id2token, self.predictor.pretrained_token_embed, external_model, finetuning=finetuning)
+            id2unigram, self.predictor.pretrained_unigram_embed, external_model, finetuning=finetuning)
 
         
 class SequenceTagger(Classifier):
@@ -37,7 +37,7 @@ class SequenceTagger(Classifier):
         return ret
 
 
-    def decode(self, xs, fs):
+    def decode(self, ws, fs):
         ys = self.predictor.decode(ws, fs)
         return ys
 
@@ -59,12 +59,12 @@ class SequenceTagger(Classifier):
 
 
     def grow_embedding_layers(self, dic_org, dic_grown, external_model=None, train=True):
-        id2token_grown = dic_grown.tables['unigram'].id2str
-        id2token_org = dic_org.tables['unigram'].id2str
-        if len(id2token_grown) > len(id2token_org):
+        id2unigram_grown = dic_grown.tables['unigram'].id2str
+        id2unigram_org = dic_org.tables['unigram'].id2str
+        if len(id2unigram_grown) > len(id2unigram_org):
             models.util.grow_embedding_layers(
-                id2token_org, id2token_grown, 
-                self.predictor.token_embed, self.predictor.pretrained_token_embed, external_model, train=train)
+                id2unigram_org, id2unigram_grown, 
+                self.predictor.unigram_embed, self.predictor.pretrained_unigram_embed, external_model, train=train)
 
         
     def grow_inference_layers(self, dic_org, dic_grown):
@@ -117,8 +117,8 @@ class DualSequenceTagger(Classifier):
 
     def integrate_submodel(self, short_unit_model, file=sys.stderr):
         self.predictor.su_tagger = short_unit_model
-        semb = self.predictor.su_tagger.token_embed
-        lemb = self.predictor.lu_tagger.token_embed
+        semb = self.predictor.su_tagger.unigram_embed
+        lemb = self.predictor.lu_tagger.unigram_embed
         dim = semb.W.shape[1]
         n_vocab_org = semb.W.shape[0]
         n_vocab_grown = lemb.W.shape[0]
@@ -129,44 +129,28 @@ class DualSequenceTagger(Classifier):
             semb.W = chainer.Parameter(initializer=new_W.data, name='W')
         print('Copied parameters from loaded short unit model', file=file)
 
-        # tagger_from = su_tagger
-        # tagger_to = self.predictor.su_tagger
-
-        # models.util.copy_embed_parameters(tagger_from.token_embed, tagger_to.token_embed)
-        # if tagger_to.pretrained_token_embed_dim > 0:
-        #     models.util.copy_embed_parameters(tagger_from.pretrained_token_embed, tagger_to.pretrained_token_embed)
-        # if tagger_to.subtoken_embed_dim > 0:
-        #     models.util.copy_embed_parameters(tagger_from.subtoken_embed, tagger_to.subtoken_embed)
-
-        # models.util.copy_rnn_parameters(tagger_from.rnn, tagger_to.rnn)
-
-        # models.util.copy_mlp_parameters(tagger_from.mlp, tagger_to.mlp)
-
-        # if isinstance(tagger_to, RNNCRFTagger):
-        #     models.util.copy_crf_parameters(tagger_from.crf, tagger_to.crf)
-
 
     # TODO confirm
     def load_pretrained_embedding_layer(self, dic, external_model, finetuning=False):
-        id2token = dic.tables['unigram'].id2str
+        id2unigram = dic.tables['unigram'].id2str
         models.util.load_pretrained_embedding_layer(
-            id2token, self.predictor.su_tagger.pretrained_token_embed, external_model, finetuning=False)
+            id2unigram, self.predictor.su_tagger.pretrained_unigram_embed, external_model, finetuning=False)
         models.util.load_pretrained_embedding_layer(
-            id2token, self.predictor.lu_tagger.pretrained_token_embed, external_model, finetuning=finetuning)
+            id2unigram, self.predictor.lu_tagger.pretrained_unigram_embed, external_model, finetuning=finetuning)
 
 
     # TODO confirm
     def grow_embedding_layers(self, dic_org, dic_grown, external_model=None, train=True):
-        id2token_grown = dic_grown.tables['unigram'].id2str
-        id2token_org = dic_org.tables['unigram'].id2str
-        if len(id2token_grown) > len(id2token_org):
+        id2unigram_grown = dic_grown.tables['unigram'].id2str
+        id2unigram_org = dic_org.tables['unigram'].id2str
+        if len(id2unigram_grown) > len(id2unigram_org):
             models.util.grow_embedding_layers(
-                id2token_org, id2token_grown, self.predictor.su_tagger.token_embed, 
-                self.predictor.su_tagger.pretrained_token_embed, external_model, train=train)
+                id2unigram_org, id2unigram_grown, self.predictor.su_tagger.unigram_embed, 
+                self.predictor.su_tagger.pretrained_unigram_embed, external_model, train=train)
 
             models.util.grow_embedding_layers(
-                id2token_org, id2token_grown, self.predictor.lu_tagger.token_embed, 
-                self.predictor.lu_tagger.pretrained_token_embed, external_model, train=train)
+                id2unigram_org, id2unigram_grown, self.predictor.lu_tagger.unigram_embed, 
+                self.predictor.lu_tagger.pretrained_unigram_embed, external_model, train=train)
 
         
     # TODO confirm
@@ -192,13 +176,13 @@ class DependencyParser(Classifier):
         super(DependencyParser, self).__init__(predictor=predictor)
 
         
-    def __call__(self, ws, cs, ps, ths=None, tls=None, train=True):
+    def __call__(self, ws, cs, ps, ths=None, tls=None, train=False):
         ret = self.predictor(ws, cs, ps, ths, tls, train=train)
         return ret
 
 
-    def decode(self, ws, cs, ps):
-        ret = self.predictor.decode(ws, cs, ps)
+    def decode(self, ws, cs, ps, label_prediction=False):
+        ret = self.predictor.decode(ws, cs, ps, label_prediction)
         return ret
 
 
@@ -232,12 +216,12 @@ class DependencyParser(Classifier):
 
 
     def grow_embedding_layers(self, dic_org, dic_grown, external_model=None, train=True):
-        id2token_grown = dic_grown.tables['unigram'].id2str
-        id2token_org = dic_org.tables['unigram'].id2str
-        if len(id2token_grown) > len(id2token_org):
+        id2unigram_grown = dic_grown.tables['unigram'].id2str
+        id2unigram_org = dic_org.tables['unigram'].id2str
+        if len(id2unigram_grown) > len(id2unigram_org):
             models.util.grow_embedding_layers(
-                id2token_org, id2token_grown, 
-                self.predictor.token_embed, self.predictor.pretrained_token_embed, external_model, train=train)
+                id2unigram_org, id2unigram_grown, 
+                self.predictor.unigram_embed, self.predictor.pretrained_unigram_embed, external_model, train=train)
 
         id2pos_grown = dic_grown.tables['pos_label'].id2str
         id2pos_org = dic_org.tables['pos_label'].id2str
@@ -259,7 +243,7 @@ class DependencyParser(Classifier):
 
 def init_classifier(
         classifier_type, hparams, dic, 
-        pretrained_token_embed_dim=0, predict_parent_existence=False):
+        pretrained_unigram_embed_dim=0, predict_parent_existence=False):
     n_vocab = len(dic.tables['unigram'])
     n_subtokens = len(dic.tables['subtoken']) if hparams['subtoken_embed_dim'] > 0 else 0
 
@@ -274,13 +258,13 @@ def init_classifier(
         mlp_n_additional_units=0
 
         predictor = models.util.construct_RNNTagger(
-            n_vocab, hparams['token_embed_dim'], 
+            n_vocab, hparams['unigram_embed_dim'], 
             n_subtokens, hparams['subtoken_embed_dim'], hparams['rnn_unit_type'], 
             hparams['rnn_bidirection'], hparams['rnn_n_layers'], hparams['rnn_n_units'], 
             hparams['mlp_n_layers'], hparams['mlp_n_units'], n_labels, use_crf=use_crf,
             feat_dim=hparams['additional_feat_dim'], mlp_n_additional_units=mlp_n_additional_units,
             rnn_dropout=hparams['rnn_dropout'], mlp_dropout=hparams['mlp_dropout'],
-            pretrained_token_embed_dim=pretrained_token_embed_dim)
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim)
 
         classifier = SequenceTagger(predictor, task=classifier_type)
 
@@ -294,13 +278,13 @@ def init_classifier(
         mlp_n_additional_units = 0
 
         predictor = DualRNNTagger(
-            n_vocab, hparams['token_embed_dim'], 
+            n_vocab, hparams['unigram_embed_dim'], 
             n_subtokens, hparams['subtoken_embed_dim'], hparams['rnn_unit_type'], 
             hparams['rnn_bidirection'], hparams['rnn_n_layers'], hparams['rnn_n_units'], 
             hparams['mlp_n_layers'], hparams['mlp_n_units'], n_labels, 
             feat_dim=hparams['additional_feat_dim'], mlp_n_additional_units=mlp_n_additional_units,
             rnn_dropout=hparams['rnn_dropout'], mlp_dropout=hparams['mlp_dropout'],
-            pretrained_token_embed_dim=pretrained_token_embed_dim)
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim)
 
         classifier = DualSequenceTagger(predictor, task=classifier_type)
 
@@ -323,7 +307,7 @@ def init_classifier(
 
         if predict_parent_existence:
             predictor = RNNBiaffineFlexibleParser(
-                n_vocab, hparams['token_embed_dim'], n_pos, hparams['pos_embed_dim'],
+                n_vocab, hparams['unigram_embed_dim'], n_pos, hparams['pos_embed_dim'],
                 n_subtokens, hparams['subtoken_embed_dim'],
                 hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_n_layers'], 
                 hparams['rnn_n_units'], 
@@ -335,11 +319,11 @@ def init_classifier(
                 n_labels=n_labels, rnn_dropout=hparams['rnn_dropout'], 
                 hidden_mlp_dropout=hparams['hidden_mlp_dropout'], 
                 pred_layers_dropout=hparams['pred_layers_dropout'],
-                pretrained_token_embed_dim=pretrained_token_embed_dim)
+                pretrained_unigram_embed_dim=pretrained_unigram_embed_dim)
             
         else:
             predictor = RNNBiaffineParser(
-                n_vocab, hparams['token_embed_dim'], n_pos, hparams['pos_embed_dim'],
+                n_vocab, hparams['unigram_embed_dim'], n_pos, hparams['pos_embed_dim'],
                 n_subtokens, hparams['subtoken_embed_dim'],
                 hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_n_layers'], 
                 hparams['rnn_n_units'], 
@@ -351,7 +335,7 @@ def init_classifier(
                 n_labels=n_labels, rnn_dropout=hparams['rnn_dropout'], 
                 hidden_mlp_dropout=hparams['hidden_mlp_dropout'], 
                 pred_layers_dropout=hparams['pred_layers_dropout'],
-                pretrained_token_embed_dim=pretrained_token_embed_dim)
+                pretrained_unigram_embed_dim=pretrained_unigram_embed_dim)
 
         classifier = DependencyParser(predictor)
 

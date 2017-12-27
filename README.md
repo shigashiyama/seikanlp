@@ -1,12 +1,12 @@
-# SeikaNLP (version 0.0.1)
+# SeikaNLP (version 0.0.1b)
 
-SeikaNLP is a Natural Language Processing Toolkit including word segmenter, POS tagger and general sequence tagger.
+SeikaNLP is a Natural Language Processing Toolkit including word segmenter, general sequence tagger and dependency parser.
 
 
 ## Requirements
 
 - Python 3 (tested with 3.6.0)
-- Chainer v2 (tested with 2.0.0)
+- Chainer v3 (tested with 3.2.0)
 - numpy (tested with 1.13.0)
 - gensim 2.3.0 or lator
 
@@ -38,7 +38,11 @@ Only need to clone/download the git repository of this software.
 ## How to Use
 
 ~~~~
-$ python src/segmenter.py [--options]
+# sequence_tagging (word segmentation, pos tagging etc.)
+$ python src/sequence_tagginig.py [--options]
+
+# dependency parsing
+$ python src/parsing.py [--options]
 ~~~~
 
 Descriptions of options are shown by executing with --help or -h option
@@ -48,6 +52,8 @@ See Also sample.sh to confirm typical usages.
 
 ## Change Log
 
+- 2017-12-27 version 0.0.1b
+    - Add dependency parsing modules
 - 2017-10-30 version 0.0.1
     - Initial release
 
