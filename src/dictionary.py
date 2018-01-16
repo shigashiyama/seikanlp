@@ -7,9 +7,10 @@ class MapTrie(object):
     UNK_ID = 0
     UNK_SYMBOL = constants.UNK_SYMBOL
 
-    def __init__(self, UNK_SYMBOL=UNK_SYMBOL):
+    def __init__(self, UNK_ID=UNK_ID, UNK_SYMBOL=UNK_SYMBOL):
         self.tree = TrieNode(-1)
         self.id2chunk = {UNK_ID : UNK_SYMBOL}
+        self.unk_id = UNK_ID
         self.next_id = 1
         #self.debug = True
 
@@ -32,13 +33,13 @@ class MapTrie(object):
             #     print(i, token, child.id if child else None)
 
             if not child:
-                if not update or token == UNK_ID:
-                    return UNK_ID
-                child = TrieNode(UNK_ID)
+                if not update or token == self.unk_id:
+                    return self.unk_id
+                child = TrieNode(self.unk_id)
                 node.set_child(token, child)
 
             if i == len_chunk - 1:
-                if child.id == UNK_ID and update:
+                if child.id == self.unk_id and update:
                     child.id = self.next_id
                     self.id2chunk[child.id] = chunk
                     self.next_id += 1
@@ -59,7 +60,7 @@ class MapTrie(object):
                 break
             #print(' ',child.id)
 
-            if child.id != UNK_ID:
+            if child.id != self.unk_id:
                 append((begin_index, begin_index + i + 1))
                 #append((begin_index + i + 1, child.id))
             node = child
@@ -69,7 +70,7 @@ class MapTrie(object):
 
 class TrieNode(object):
     def __init__(self, id):
-        self.id = id            # id != UNK_ID なら終端
+        self.id = id            # id != unk_id indicates terminal node
         self.children = {}
 
 
@@ -191,51 +192,10 @@ class Dictionary(object):
         return trie_name in self.tries
 
 
-    # def get_str(self, table_name, str_id):
-    #     index = int(index)
-    #     if self.has_table(table_name):
-    #         return self.tables[table_name].id2str[index]
-    #     else:
-    #         return None
-
-
-    # def get_id(self, table_name, string, update=False):
-    #     if self.has_table(table_name):
-    #         return self.tables[table_name].get_id(string, update=update)
-    #     else:
-    #         return None
-
-
-    # def get_chunk_str(self, trie_name, chunk_id):
-    #     if self.has_trie(trie_name):
-    #         self.tries[trie_name].get_chunk(chunk_id)
-    #     else:
-    #         return None
-
-
-    # def get_chunk_id(self, trie_name, chunk_str, update=False):
-    #     if self.has_trie(trie_name):
-    #         self.tries[trie_name].get_chunk_id(chunk_str, udpate=update)
-    #     else:
-    #         return None
-
-
-    # token indicates character
-    # chunk indicates word
-    # def get_entries(self, chunk, pos, update=False):
-    #     token_ids = [self.token_indices.get_id(t, update=update) for t in chunk]
-
-    #     cid = self.chunk_trie.get_chunk_id(token_ids, update)
-    #     pid = self.pos_label_indices.get_id(pos, update=update) if pos else None
-    #     if update:
-    #         self.id2chunk[cid] = chunk
-    #     return char_ids, wid, pid
-
-
 def init_dictionary(
         use_unigram=True, use_bigram=False, use_subtoken=False, use_token_type=False, 
-        use_seg_label=False, use_pos_label=False, use_arc_label=False, use_chunk_trie=False,
-        use_root=False): 
+        use_seg_label=False, use_pos_label=False, use_arc_label=False, use_attr_label=False,
+        use_chunk_trie=False, use_root=False): 
 
     UNK_SYMBOL = constants.UNK_SYMBOL
     ROOT_SYMBOL = constants.ROOT_SYMBOL
@@ -270,39 +230,17 @@ def init_dictionary(
 
     if use_pos_label:
         dic.create_table('pos_label')
+        dic.tables['pos_label'].set_unk(UNK_SYMBOL)
         if use_root:
             dic.tables['pos_label'].get_id(ROOT_SYMBOL, update=True)
 
     if use_arc_label:
         dic.create_table('arc_label')
 
+    if use_attr_label:
+        dic.create_table('attr_label')
+
     if use_chunk_trie:
         dic.create_trie('chunk')
 
     return dic
-
-
-# load vocabulary from external dictionary resource
-def load_vocabulary(path, read_pos=True):
-    if path.endswith('pickle'):
-        with open(path, 'rb') as f:
-            dic = pickle.load(f)
-            dic.create_id2strs()
-        return dic
-
-    dic = Dictionary()
-    with open(path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            arr = line.split('/')
-            if len(arr) < 2 or len(arr[0]) == 0:
-                continue
-
-            word = arr[0]
-            pos = arr[1] if read_pos else None
-            dic.get_entries(word, pos, update=True)
-
-    dic.create_id2strs()
-    return dic
-
-

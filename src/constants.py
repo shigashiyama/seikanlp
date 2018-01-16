@@ -16,25 +16,28 @@ MODEL_DIR = 'models/main'
 
 ### for data io
 
-DELIM1_SYMBOL       = '_'
-DELIM2_SYMBOL       = '\t'
-KEY_VALUE_SEPARATOR = '='
-POS_SEPARATOR       = '-'
-COMMENT_SYM         = '#'
-DELIM_TXT           = '#DELIMITER'
-WORD_CLM_TXT        = '#WORD_COLUMN'
-POS_CLM_TXT         = '#POS_COLUMN'
-HEAD_CLM_TXT        = '#HEAD_COLUMN'
-ARC_CLM_TXT         = '#ARC_COLUMN'
+SL_TOKEN_DELIM  = ' '
+SL_ATTR_DELIM   = '/'
+WL_TOKEN_DELIM  = '\n'
+WL_ATTR_DELIM   = '\t'
+KEY_VALUE_DELIM = '='
+POS_SEPARATOR   = '-'
+COMMENT_SYM     = '#'
+ATTR_DELIM_TXT  = '#ATTRIBUTE_DELIMITER'
+WORD_CLM_TXT    = '#WORD_COLUMN'
+POS_CLM_TXT     = '#POS_COLUMN'
+HEAD_CLM_TXT    = '#HEAD_COLUMN'
+ARC_CLM_TXT     = '#ARC_COLUMN'
+ATTR_CLM_TXT    = '#ATTR_COLUMN'
 
 
 ### for dictionary
 
 UNK_SYMBOL      = '<UNK>'
 NUM_SYMBOL      = '<NUM>'
-#PADDING_SYMBOL = '<PAD>'
+NONE_SYMBOL     = '<NONE>'
 ROOT_SYMBOL     = '<ROOT>'
-DUMMY_SYMBOL    = '<DUM>' # dummy parent node symbol for children that do not have parent
+# PADDING_SYMBOL = '<PAD>'
 SEG_LABELS      = 'BIES'
 
 

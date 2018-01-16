@@ -94,8 +94,8 @@ class RNNBiaffineParser(chainer.Chain):
             self.softmax_cross_entropy = softmax_cross_entropy.softmax_cross_entropy
 
             print('### Parameters', file=file)
-            print('acl=label:', self.common_arc_label, file=file)
-            print('head=mod:', self.common_head_mod, file=file)
+            # print('acl=label:', self.common_arc_label, file=file)
+            # print('head=mod:', self.common_head_mod, file=file)
 
             # unigram embedding layer(s)
 
@@ -207,6 +207,7 @@ class RNNBiaffineParser(chainer.Chain):
     def get_features(self, ws, cs=None, ps=None):
         xs = []
 
+        xp = cuda.get_array_module(ws[0])
         size = len(ws)
         if ps is None:
             ps = [None] * size
@@ -232,8 +233,15 @@ class RNNBiaffineParser(chainer.Chain):
                 # ce = sums / divider
                 xe = F.concat((xe, ce), 1)
 
+            # if self.pos_embed_dim > 0:
+            #     pe = self.pos_embed(p)
+            #     xe = F.concat((xe, pe), 1)
+
             if self.pos_embed_dim > 0:
-                pe = self.pos_embed(p)
+                if p is not None:
+                    pe = self.pos_embed(p)
+                else:
+                    pe = chainer.Variable(xp.zeros((len(w), self.pos_embed_dim), dtype='f'))
                 xe = F.concat((xe, pe), 1)
 
             xs.append(xe)
@@ -388,6 +396,10 @@ class RNNBiaffineParser(chainer.Chain):
                 hs_arc, ms_arc, hs_label, ms_label, ghs, gls): # for each sentence in mini-batch
             scores_a, yh = self.predict_arcs(m_arc, h_arc, train, xp)
             yhs.append(yh)
+
+            if m_arc.shape[0] == 0:
+                print('Warning: skipped a length 0 sentence', file=sys.stderr)
+                continue
 
             if self.label_prediction:
                 n = len(m_label)      # the number of unigrams except root

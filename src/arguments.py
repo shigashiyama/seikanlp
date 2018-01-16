@@ -1,5 +1,7 @@
 import argparse
 
+import constants
+
 
 class Arguments(object):
     def __init__(self):
@@ -12,24 +14,25 @@ class Arguments(object):
         parser.add_argument('--execute_mode', '-x', required=True,
                             help='Choose a mode from among \'train\', \'eval\', \'decode\'' 
                             + 'and \'interactive\'')
+
         # gpu options
         parser.add_argument('--gpu', '-g', type=int, default=-1, help=
                             'GPU device ID (Use CPU if unspecify any values or specify a negative value)')
-        parser.add_argument('--cudnn', dest='use_cudnn', action='store_true',
-                            help='Use cuDNN')
+        parser.add_argument('--cudnn', dest='use_cudnn', action='store_true', help='Use cuDNN')
 
         # training parameters
+        parser.add_argument('--task', '-t', default='')
         parser.add_argument('--epoch_begin', type=int, default=1, 
                             help='Conduct training from i-th epoch (Default: 1)')
         parser.add_argument('--epoch_end', '-e', type=int, default=5,
                             help='Conduct training up to i-th epoch (Default: 5)')
-        parser.add_argument('--evaluation_size', type=int, default=10000, 
+        parser.add_argument('--step_size', '-s', type=int, default=10000, 
                             help='The number of examples which'
                             + ' trained model is evaluated and saved at each multiple of'
                             + ' (Default: 10000)')
-        parser.add_argument('--batchsize', '-b', type=int, default=100,
+        parser.add_argument('--batch_size', '-b', type=int, default=100,
                             help='The number of examples in each mini-batch (Default: 100)')
-        parser.add_argument('--gradclip', '-c', type=float, default=5,
+        parser.add_argument('--grad_clip', '-c', type=float, default=5,
                             help='Gradient norm threshold to clip')
 
         # optimizer parameters
@@ -42,13 +45,13 @@ class Arguments(object):
         parser.add_argument('--adam_alpha', type=float, default=0.001, help='alpha for Adam')
         parser.add_argument('--adam_beta1', type=float, default=0.9, help='beta1 for Adam')
         parser.add_argument('--adam_beta2', type=float, default=0.999, help='beta2 for Adam')
-        parser.add_argument('--lrdecay', default='', 
+        parser.add_argument('--lr_decay', default='', 
                             help='Specify information on learning rate decay'
                             + ' by format \'start:width:rate\''
                             + ' where start indicates the number of epochs to start decay,'
                             + ' width indicates the number epochs maintaining the same decayed learning rate,'
                             + ' and rate indicates the decay late to multipy privious learning late')
-        parser.add_argument('--weightdecay', type=float, default=0.0, 
+        parser.add_argument('--weight_decay', type=float, default=0.0, 
                             help='Weight decay ratio (Default: 0.0)')
 
         # options to resume training
@@ -64,9 +67,8 @@ class Arguments(object):
                             + '(Default: 1)')
         parser.add_argument('--max_vocab_size', type=int, default=-1,
                             help='')
-        parser.add_argument('--no_freq_update', action='store_true',
-                            help='')
-        parser.add_argument('--unigram_embed_dim', '-d', type=int, default=300,
+        parser.add_argument('--no_freq_update', action='store_true', help='')
+        parser.add_argument('--unigram_embed_dim', type=int, default=300,
                             help='The number of dimension of token (character or word) unigram embedding'
                             + '(Default: 300)')
         parser.add_argument('--subtoken_embed_dim', type=int, default=0,
@@ -75,18 +77,18 @@ class Arguments(object):
 
         # data paths and related options
         parser.add_argument('--path_prefix', '-p', help='Path prefix of input data')
-        parser.add_argument('--train_data', '-t', default='',
+        parser.add_argument('--train_data', default='',
                             help='File path succeeding \'path_prefix\' of training data')
-        parser.add_argument('--valid_data', '-v', default='',
-                            help='File path succeeding \'path_prefix\' of validation data')
+        parser.add_argument('--devel_data', default='',
+                            help='File path succeeding \'path_prefix\' of development data')
         parser.add_argument('--test_data', default='',
                             help='File path succeeding \'path_prefix\' of test data')
-        parser.add_argument('--input_text', '-i', default='',
+        parser.add_argument('--decode_data', default='',
                             help='File path of input text which succeeds \'path_prefix\'')
-        parser.add_argument('--label_reference_data', default='',
-                            help='File path succeeding \'path_prefix\''
-                            + ' of data with the same format as training data to load pre-defined labels')
-        parser.add_argument('--output_path', '-o', default='',
+        # parser.add_argument('--label_reference_data', default='',
+        #                     help='File path succeeding \'path_prefix\''
+        #                     + ' of data with the same format as training data to load pre-defined labels')
+        parser.add_argument('--output_data_path', '-o', default='',
                             help='File path to output parsed text')
         parser.add_argument('--dump_train_data', action='store_true',
                             help='Dump data specified as \'train_data\''
@@ -95,8 +97,16 @@ class Arguments(object):
                             help='File path of pretrained model of token (character or word) unigram embedding')
         parser.add_argument('--fix_pretrained_embed', action='store_true',
                             help='')
+        parser.add_argument('--input_data_format', '-f', default='wl',
+                        help='Choose format of input data among from')
+        parser.add_argument('--output_data_format', default='wl')
+        parser.add_argument('--output_attribute_delimiter_sl', default=constants.SL_ATTR_DELIM)
 
         # options for data pre/post-processing
+        parser.add_argument('--subpos_depth', type=int, default=-1,
+                            help='Set positive integer (use POS up to i-th hierarcy)'
+                            + ' or other value (use POS with all sub POS) when set \'bccwj_seg_tag\''
+                            + ' to data_format')
         parser.add_argument('--lowercase',  action='store_true',
                             help='Lowercase alphabets in the case of using English data')
         parser.add_argument('--normalize_digits',  action='store_true',
@@ -104,27 +114,39 @@ class Arguments(object):
         parser.add_argument('--ignore_labels', default=set(),
                             help='')
 
-        # options for parsing
-        parser.add_argument('--predict_parent_existence',  action='store_true',
-                            help='')
-
         # other options
         parser.add_argument('--quiet', '-q', action='store_true',
                             help='Do not output log file and serialized model file')
 
+
     def parse_arguments(self):
         args = self.parser.parse_args()
-        if args.lrdecay:
-            self.parser.add_argument('lrdecay_start')
-            self.parser.add_argument('lrdecay_width')
-            self.parser.add_argument('lrdecay_rate')
-            array = args.lrdecay.split(':')
-            args.lrdecay_start = int(array[0])
-            args.lrdecay_width = int(array[1])
-            args.lrdecay_rate = float(array[2])
+        if args.lr_decay:
+            self.parser.add_argument('lr_decay_start')
+            self.parser.add_argument('lr_decay_width')
+            self.parser.add_argument('lr_decay_rate')
+            array = args.lr_decay.split(':')
+            args.lr_decay_start = int(array[0])
+            args.lr_decay_width = int(array[1])
+            args.lr_decay_rate = float(array[2])
 
         if args.execute_mode == 'interactive':
             args.quiet = True
+
+        if args.output_data_format == 'sl':
+            self.parser.add_argument('output_attr_delim')
+            self.parser.add_argument('output_token_delim')
+            self.parser.add_argument('output_empty_line')
+            args.output_attr_delim = args.output_attribute_delimiter_sl
+            args.output_token_delim = constants.SL_TOKEN_DELIM
+            args.output_empty_line = False
+        elif args.output_data_format == 'wl':
+            self.parser.add_argument('output_attr_delim')
+            self.parser.add_argument('output_token_delim')
+            self.parser.add_argument('output_empty_line')
+            args.output_attr_delim = constants.WL_ATTR_DELIM
+            args.output_token_delim = constants.WL_TOKEN_DELIM
+            args.output_empty_line = True
 
         return args
 
@@ -157,27 +179,20 @@ class TaggerArguments(Arguments):
                             + ' (Default: crf)')
 
         # data paths and related options
-        parser.add_argument('--data_format', '-f', 
-                        help='Choose format of input data among from'
-                        # + ' \'seg\' (word segmentation on data where words are split with single spaces),'
-                        # + ' \'seg_tag\' (word segmentation w/ POS tagging on data '
-                        # + ' where \'words_pos\' pairs are split with single spaces),'
-                        # + ' \'bccwj_seg\' (word segmentation on data with BCCWJ format),'
-                        # + ' \'bccwj_seg_tag\' (word segmentation w/ POS tagging on data with BCCWJ format),'
-                        # + ' \'bccwj_tag\' (POS tagging from gold words on data with BCCWJ format),'
-                        # + ' \'wsj\' (POS tagging on data with CoNLL-2005 format),'
-                        # + ' \'conll2003\' (NER on data with CoNLL-2003 format),'
-        )
-        parser.add_argument('--subpos_depth', '-s', type=int, default=-1,
-                            help='Set positive integer (use POS up to i-th hierarcy)'
-                            + ' or other value (use POS with all sub POS) when set \'bccwj_seg_tag\''
-                            + ' to data_format')
-        parser.add_argument('--ext_dic_path', 
+        parser.add_argument('--external_dic_path', 
                             help='File path of external word dictionary that lists words, or words and POS')
         parser.add_argument('--feature_template', default='',
                             help='Use dictionary features based on given feature template file.'
                             + ' Specify \'defualt\' to use default features defined for each task,'
                             + ' or specify the path of castomized template file.')
+
+    def parse_arguments(self):
+        args = super().parse_arguments()
+
+        if args.external_dic_path and not args.feature_template:
+            args.feature_template = 'default'
+
+        return args
 
 
 class DualTaggerArguments(TaggerArguments):
@@ -185,7 +200,8 @@ class DualTaggerArguments(TaggerArguments):
         super().__init__()
         parser = self.parser
 
-        parser.add_argument('--sub_model_path', help='')
+        parser.add_argument('--submodel_path', help='')
+        parser.add_argument('--submodel_usage', default='independent', help='independent, concat, add')
 
 
 class ParserArguments(Arguments):
@@ -228,12 +244,7 @@ class ParserArguments(Arguments):
         parser.add_argument('--mlp4labelpred_n_units', type=int, default=200,
                             help='')
 
-        # data paths and related options
-        parser.add_argument('--data_format', '-f', 
-                        help='Choose format of input data among from'
-        )
-        parser.add_argument('--subpos_depth', '-s', type=int, default=-1,
-                            help='Set positive integer (use POS up to i-th hierarcy)'
-                            + ' or other value (use POS with all sub POS) when set \'bccwj_seg_tag\''
-                            + ' to data_format')
 
+class AttributeAnnotatorArguments(Arguments):
+    def __init__(self):
+        super().__init__()

@@ -210,7 +210,7 @@ class FMeasureCalculator(object):
             if i == len(x):
                 raise StopIteration
             x_str = str(x[i])
-            t_str = self.id2label[int(t[i])]
+            t_str = self.id2label[int(t[i])] if int(t[i]) > -1 else 'NONE'
             y_str = self.id2label[int(y[i])]
 
             yield [x_str, t_str, y_str]
@@ -240,7 +240,7 @@ class DoubleFMeasureCalculator(object):
             if i == len(x):
                 raise StopIteration
             x_str = str(x[i])
-            t_str = self.id2label[int(t[i])] 
+            t_str = self.id2label[int(t[i])] if int(t[i]) > -1 else 'NONE'
             y_str = self.id2label[int(y[i])] 
             tseg_str = t_str.split('-')[0]
             yseg_str = y_str.split('-')[0]
@@ -255,7 +255,7 @@ class DoubleFMeasureCalculator(object):
             if i == len(x):
                 raise StopIteration
             x_str = str(x[i])
-            t_str = self.id2label[int(t[i])] 
+            t_str = self.id2label[int(t[i])] if int(t[i]) > -1 else 'NONE' 
             y_str = self.id2label[int(y[i])] 
 
             yield [x_str, t_str, y_str]
@@ -272,17 +272,17 @@ class SegmenterEvaluator(object):
         return counts
 
 
-    def report_results(self, sen_counter, counts, loss, stream=sys.stderr):
+    def report_results(self, sen_counter, counts, loss, file=sys.stderr):
         ave_loss = loss / counts.token_counter
         met = conlleval.calculate_metrics(
             counts.correct_chunk, counts.found_guessed, counts.found_correct)
         
-        print('ave loss: %.5f'% ave_loss, file=stream)
+        print('ave loss: %.5f'% ave_loss, file=file)
         print('sen, token, chunk, chunk_pred: {} {} {} {}'.format(
-            sen_counter, counts.token_counter, counts.found_correct, counts.found_guessed), file=stream)
-        print('TP, FP, FN: %d %d %d' % (met.tp, met.fp, met.fn), file=stream)
+            sen_counter, counts.token_counter, counts.found_correct, counts.found_guessed), file=file)
+        print('TP, FP, FN: %d %d %d' % (met.tp, met.fp, met.fn), file=file)
         print('A, P, R, F:%6.2f %6.2f %6.2f %6.2f' % 
-              (100.*met.acc, 100.*met.prec, 100.*met.rec, 100.*met.fscore), file=stream)
+              (100.*met.acc, 100.*met.prec, 100.*met.rec, 100.*met.fscore), file=file)
 
         res = '%.2f\t%.2f\t%.2f\t%.2f\t%.4f' % (
             (100.*met.acc), (100.*met.prec), (100.*met.rec), (100.*met.fscore), ave_loss)
@@ -299,23 +299,23 @@ class JointSegmenterEvaluator(object):
         return counts
 
 
-    def report_results(self, sen_counter, counts, loss, stream=sys.stderr):
+    def report_results(self, sen_counter, counts, loss, file=sys.stderr):
         ave_loss = loss / counts.l1.token_counter
         met1 = conlleval.calculate_metrics(
             counts.l1.correct_chunk, counts.l1.found_guessed, counts.l1.found_correct)
         met2 = conlleval.calculate_metrics(
             counts.l2.correct_chunk, counts.l2.found_guessed, counts.l2.found_correct)
         
-        print('ave loss: %.5f'% ave_loss, file=stream)
+        print('ave loss: %.5f'% ave_loss, file=file)
         print('sen, token, chunk, chunk_pred: {} {} {} {}'.format(
             sen_counter, counts.l1.token_counter, counts.l1.found_correct, counts.l1.found_guessed), 
-              file=stream)
+              file=file)
         print('SEG - TP, FP, FN / A, P, R, F: %d %d %d /\t%6.2f %6.2f %6.2f %6.2f' % (
             met1.tp, met1.fp, met1.fn, 100.*met1.acc, 100.*met1.prec, 100.*met1.rec, 100.*met1.fscore),
-              file=stream)
+              file=file)
         print('TAG - TP, FP, FN / A, P, R, F: %d %d %d /\t%6.2f %6.2f %6.2f %6.2f' % (
             met2.tp, met2.fp, met2.fn, 100.*met2.acc, 100.*met2.prec, 100.*met2.rec, 100.*met2.fscore),
-              file=stream)
+              file=file)
 
         res = '%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.4f' % (
             (100.*met1.acc), (100.*met1.prec), (100.*met1.rec), (100.*met1.fscore), 
@@ -335,16 +335,21 @@ class AccuracyEvaluator(object):
         return counts
 
 
-    def report_results(self, sen_counter, counts, loss, stream=sys.stderr):
-        ave_loss = loss / counts.total
+    def report_results(self, sen_counter, counts, loss=None, file=sys.stderr):
+        ave_loss = loss / counts.total if loss is not None else None
         acc = 1.*counts.correct / counts.total
         
-        print('ave loss: %.5f'% ave_loss, file=stream)
+        if ave_loss is not None:
+            print('ave loss: %.5f'% ave_loss, file=file)
         print('sen, token, correct: {} {} {}'.format(
-            sen_counter, counts.total, counts.correct), file=stream)
-        print('A:%6.2f' % (100.*acc), file=stream)
+            sen_counter, counts.total, counts.correct), file=file)
+        print('A:%6.2f' % (100.*acc), file=file)
 
-        res = '%.2f\t%.4f' % ((100.*acc), ave_loss)
+        if ave_loss is not None:
+            res = '%.2f\t%.4f' % ((100.*acc), ave_loss)
+        else:
+            res = '%.2f' % (100.*acc)
+
         return res
 
 
@@ -393,15 +398,15 @@ class TypedParserEvaluator(DoubleAccuracyEvaluator):
         super().__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
 
 
-    def report_results(self, sen_counter, counts, loss, stream=sys.stderr):
+    def report_results(self, sen_counter, counts, loss, file=sys.stderr):
         ave_loss = loss / counts.l1.total
         uas = 1.*counts.l1.correct / counts.l1.total
         las = 1.*counts.l2.correct / counts.l2.total
         
-        print('ave loss: %.5f'% ave_loss, file=stream)
+        print('ave loss: %.5f'% ave_loss, file=file)
         print('sen, token, correct head, correct label: {} {} {} {}'.format(
-            sen_counter, counts.l1.total, counts.l1.correct, counts.l2.correct), file=stream)
-        print('UAS, LAS:%6.2f %6.2f' % ((100.*uas), (100.*las)), file=stream)
+            sen_counter, counts.l1.total, counts.l1.correct, counts.l2.correct), file=file)
+        print('UAS, LAS:%6.2f %6.2f' % ((100.*uas), (100.*las)), file=file)
 
         res = '%.2f\t%.2f\t%.4f' % ((100.*uas), (100.*las), ave_loss)
         return res
@@ -412,15 +417,15 @@ class TaggerParserEvaluator(DoubleAccuracyEvaluator):
         super().__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
 
 
-    def report_results(self, sen_counter, counts, loss, stream=sys.stderr):
+    def report_results(self, sen_counter, counts, loss, file=sys.stderr):
         ave_loss = loss / counts.l1.total
         uas = 1.*counts.l1.correct / counts.l1.total
         las = 1.*counts.l2.correct / counts.l2.total
         
-        print('ave loss: %.5f'% ave_loss, file=stream)
+        print('ave loss: %.5f'% ave_loss, file=file)
         print('sen, token, correct head, correct label: {} {} {} {}'.format(
-            sen_counter, counts.l1.total, counts.l1.correct, counts.l2.correct), file=stream)
-        print('POS, UAS:%6.2f %6.2f' % ((100.*uas), (100.*las)), file=stream)
+            sen_counter, counts.l1.total, counts.l1.correct, counts.l2.correct), file=file)
+        print('POS, UAS:%6.2f %6.2f' % ((100.*uas), (100.*las)), file=file)
 
         res = '%.2f\t%.2f\t%.4f' % ((100.*uas), (100.*las), ave_loss)
         return res
@@ -431,17 +436,17 @@ class TaggerTypedParserEvaluator(TripleAccuracyEvaluator):
         super().__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
 
 
-    def report_results(self, sen_counter, counts, loss, stream=sys.stderr):
+    def report_results(self, sen_counter, counts, loss, file=sys.stderr):
         ave_loss = loss / counts.l1.total
         pos = 1.*counts.l1.correct / counts.l1.total
         uas = 1.*counts.l2.correct / counts.l2.total
         las = 1.*counts.l3.correct / counts.l3.total
         
-        print('ave loss: %.5f'% ave_loss, file=stream)
+        print('ave loss: %.5f'% ave_loss, file=file)
         print('sen, token, correct pos, correct head, correct label: {} {} {} {} {}'.format(
             sen_counter, counts.l1.total, counts.l1.correct, counts.l2.correct, counts.l3.correct), 
-              file=stream)
-        print('POS, UAS, LAS:%6.2f %6.2f %6.2f' % ((100.*pos), (100.*uas), (100.*las)), file=stream)
+              file=file)
+        print('POS, UAS, LAS:%6.2f %6.2f %6.2f' % ((100.*pos), (100.*uas), (100.*las)), file=file)
 
         res = '%.2f\t%.2f\t%.4f' % ((100.*uas), (100.*las), ave_loss)
         return res

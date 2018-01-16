@@ -119,6 +119,7 @@ class DictionaryFeatureExtractor(FeatureExtractor):
 
         return features
 
+
     def extract_features_for_sentence(self, x, trie):
         xp = cuda.cupy if self.use_gpu else np
         feat = xp.zeros((len(x), self.dim), dtype='f')
