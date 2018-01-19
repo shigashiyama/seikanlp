@@ -100,9 +100,9 @@ class DFCounts(object):
 
 
 class AccuracyCalculator(object):
-    def __init__(self, ignore_head=False, ignore_labels=set()):
+    def __init__(self, ignore_head=False, ignored_labels=set()):
         self.ignore_head = ignore_head
-        self.ignore_labels = ignore_labels
+        self.ignored_labels = ignored_labels
 
 
     def __call__(self, ts, ys):
@@ -113,7 +113,7 @@ class AccuracyCalculator(object):
                 y = y[1:]
 
             for ti, yi in zip(t, y):
-                if int(ti) in self.ignore_labels:
+                if int(ti) in self.ignored_labels:
                     continue
                 
                 counts.total += 1 
@@ -124,9 +124,9 @@ class AccuracyCalculator(object):
 
 
 class DoubleAccuracyCalculator(object):
-    def __init__(self, ignore_head=False, ignore_labels=set()):
+    def __init__(self, ignore_head=False, ignored_labels=set()):
         self.ignore_head = ignore_head
-        self.ignore_labels = ignore_labels
+        self.ignored_labels = ignored_labels
         
 
     def __call__(self, t1s, t2s, y1s, y2s):
@@ -140,7 +140,7 @@ class DoubleAccuracyCalculator(object):
                 y2 = y2[1:]                
 
             for t1i, t2i, y1i, y2i in zip(t1, t2, y1, y2):
-                if int(t2i) in self.ignore_labels:
+                if int(t2i) in self.ignored_labels:
                     continue
 
                 counts.l1.total += 1
@@ -155,9 +155,9 @@ class DoubleAccuracyCalculator(object):
 
 
 class TripleAccuracyCalculator(object):
-    def __init__(self, ignore_head=False, ignore_labels=set()):
+    def __init__(self, ignore_head=False, ignored_labels=set()):
         self.ignore_head = ignore_head
-        self.ignore_labels = ignore_labels
+        self.ignored_labels = ignored_labels
         
 
     def __call__(self, t1s, t2s, t3s, y1s, y2s, y3s):
@@ -173,7 +173,7 @@ class TripleAccuracyCalculator(object):
                 y3 = y3[1:]
 
             for t1i, t2i, t3i, y1i, y2i, y3i in zip(t1, t2, t3, y1, y2, y3):
-                if int(t3i) in self.ignore_labels:
+                if int(t3i) in self.ignored_labels:
                     continue
 
                 counts.l1.total += 1
@@ -324,8 +324,8 @@ class JointSegmenterEvaluator(object):
 
 
 class AccuracyEvaluator(object):
-    def __init__(self, ignore_head=False, ignore_labels=set()):
-        self.calculator = AccuracyCalculator(ignore_head, ignore_labels)
+    def __init__(self, ignore_head=False, ignored_labels=set()):
+        self.calculator = AccuracyCalculator(ignore_head, ignored_labels)
 
 
     def calculate(self, *inputs):
@@ -354,8 +354,8 @@ class AccuracyEvaluator(object):
 
 
 class DoubleAccuracyEvaluator(object):
-    def __init__(self, ignore_head=False, ignore_labels=set()):
-        self.calculator = DoubleAccuracyCalculator(ignore_head, ignore_labels)
+    def __init__(self, ignore_head=False, ignored_labels=set()):
+        self.calculator = DoubleAccuracyCalculator(ignore_head, ignored_labels)
 
 
     def calculate(self, *inputs):
@@ -368,8 +368,8 @@ class DoubleAccuracyEvaluator(object):
 
 
 class TripleAccuracyEvaluator(object):
-    def __init__(self, ignore_head=False, ignore_labels=set()):
-        self.calculator = TripleAccuracyCalculator(ignore_head, ignore_labels)
+    def __init__(self, ignore_head=False, ignored_labels=set()):
+        self.calculator = TripleAccuracyCalculator(ignore_head, ignored_labels)
 
 
     def calculate(self, *inputs):
@@ -384,18 +384,18 @@ class TripleAccuracyEvaluator(object):
 
 
 class TaggerEvaluator(AccuracyEvaluator):
-    def __init__(self, ignore_head=False, ignore_labels=set()):
-        super(TaggerEvaluator, self).__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
+    def __init__(self, ignore_head=False, ignored_labels=set()):
+        super().__init__(ignore_head=ignore_head, ignored_labels=ignored_labels)
 
 
 class ParserEvaluator(AccuracyEvaluator):
-    def __init__(self, ignore_head=True, ignore_labels=set()):
-        super(ParserEvaluator, self).__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
+    def __init__(self, ignore_head=True):
+        super().__init__(ignore_head=ignore_head, ignored_labels=set())
 
 
 class TypedParserEvaluator(DoubleAccuracyEvaluator):
-    def __init__(self, ignore_head=True, ignore_labels=set()):
-        super().__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
+    def __init__(self, ignore_head=True, ignored_labels=set()):
+        super().__init__(ignore_head=ignore_head, ignored_labels=ignored_labels)
 
 
     def report_results(self, sen_counter, counts, loss, file=sys.stderr):
@@ -413,8 +413,8 @@ class TypedParserEvaluator(DoubleAccuracyEvaluator):
 
 
 class TaggerParserEvaluator(DoubleAccuracyEvaluator):
-    def __init__(self, ignore_head=True, ignore_labels=set()):
-        super().__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
+    def __init__(self, ignore_head=True, ignored_labels=set()):
+        super().__init__(ignore_head=ignore_head, ignored_labels=ignored_labels)
 
 
     def report_results(self, sen_counter, counts, loss, file=sys.stderr):
@@ -432,8 +432,8 @@ class TaggerParserEvaluator(DoubleAccuracyEvaluator):
 
 
 class TaggerTypedParserEvaluator(TripleAccuracyEvaluator):
-    def __init__(self, ignore_head=True, ignore_labels=set()):
-        super().__init__(ignore_head=ignore_head, ignore_labels=ignore_labels)
+    def __init__(self, ignore_head=True, ignored_labels=set()):
+        super().__init__(ignore_head=ignore_head, ignored_labels=ignored_labels)
 
 
     def report_results(self, sen_counter, counts, loss, file=sys.stderr):

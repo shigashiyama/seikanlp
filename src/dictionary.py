@@ -204,10 +204,10 @@ def init_dictionary(
 
     # create tables and tries
     if use_unigram:
-        dic.create_table('unigram')
-        dic.tables['unigram'].set_unk(UNK_SYMBOL)
+        dic.create_table(constants.UNIGRAM)
+        dic.tables[constants.UNIGRAM].set_unk(UNK_SYMBOL)
         if use_root:
-            dic.tables['unigram'].get_id(ROOT_SYMBOL, update=True)
+            dic.tables[constants.UNIGRAM].get_id(ROOT_SYMBOL, update=True)
 
     if use_bigram:
         # to be impelemented
@@ -215,10 +215,10 @@ def init_dictionary(
         pass 
 
     if use_subtoken:
-        dic.create_table('subtoken')
-        dic.tables['subtoken'].set_unk(UNK_SYMBOL)
+        dic.create_table(constants.SUBTOKEN)
+        dic.tables[constants.SUBTOKEN].set_unk(UNK_SYMBOL)
         if use_root:
-            dic.tables['subtoken'].get_id(ROOT_SYMBOL, update=True)
+            dic.tables[constants.SUBTOKEN].get_id(ROOT_SYMBOL, update=True)
 
     if use_token_type:
         # to be impelemented
@@ -226,21 +226,21 @@ def init_dictionary(
         pass
 
     if use_seg_label:
-        dic.create_table('seg_label')
+        dic.create_table(constants.SEG_LABEL)
 
     if use_pos_label:
-        dic.create_table('pos_label')
-        dic.tables['pos_label'].set_unk(UNK_SYMBOL)
+        dic.create_table(constants.POS_LABEL)
+        dic.tables[constants.POS_LABEL].set_unk(UNK_SYMBOL)
         if use_root:
-            dic.tables['pos_label'].get_id(ROOT_SYMBOL, update=True)
+            dic.tables[constants.POS_LABEL].get_id(ROOT_SYMBOL, update=True)
 
     if use_arc_label:
-        dic.create_table('arc_label')
+        dic.create_table(constants.ARC_LABEL)
 
     if use_attr_label:
-        dic.create_table('attr_label')
+        dic.create_table(constants.ATTR_LABEL)
 
     if use_chunk_trie:
-        dic.create_trie('chunk')
+        dic.create_trie(constants.CHUNK)
 
     return dic

@@ -171,7 +171,7 @@ class RNNBiaffineParser(chainer.Chain):
 
             # MLPs for label prediction
 
-            self.label_prediction = (n_labels > 0)
+            self.label_prediction = n_labels > 0
             if self.label_prediction:
                 if not self.common_arc_label:
                     print('# MLP for label heads', file=file)
@@ -445,118 +445,6 @@ class RNNBiaffineParser(chainer.Chain):
             ret = self.__call__(
                 ws, cs=cs, ps=ps, train=False, calculate_loss=False)
         return ret[1:]
-
-
-class RNNBiaffineFlexibleParser(RNNBiaffineParser):
-    def __init__(
-            self, n_vocab, unigram_embed_dim, n_pos, pos_embed_dim, n_subtokens, subtoken_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp4arcrep_n_layers, mlp4arcrep_n_units,
-            mlp4labelrep_n_layers, mlp4labelrep_n_units, 
-            mlp4labelpred_n_layers, mlp4labelpred_n_units,
-            mlp4pospred_n_layers=0, mlp4pospred_n_units=0,
-            n_labels=0, rnn_dropout=0, hidden_mlp_dropout=0, pred_layers_dropout=0,
-            pretrained_unigram_embed_dim=0, file=sys.stderr):
-        super().__init__(
-            n_vocab, unigram_embed_dim, n_pos, pos_embed_dim, n_subtokens, subtoken_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp4arcrep_n_layers, mlp4arcrep_n_units,
-            mlp4labelrep_n_layers, mlp4labelrep_n_units, 
-            mlp4labelpred_n_layers, mlp4labelpred_n_units,
-            mlp4pospred_n_layers, mlp4pospred_n_units,
-            n_labels, rnn_dropout, hidden_mlp_dropout, pred_layers_dropout,
-            pretrained_unigram_embed_dim, file=sys.stderr)
-
-        self.n_dummy = 2
-
-    # batch of unigrams, pos tags, gold head labels, gold arc labels
-    # def __call__(self, ws, cs=None, ps=None, ghs=None, gls=None, train=True, calculate_loss=True):
-    #     data_size = len(ws)
-
-    #     if train:
-    #         calclulate_loss = True
-    #     if not ghs:
-    #         ghs = [None] * data_size
-    #     if not gls:
-    #         gls = [None] * data_size
-
-    #     # embed
-    #     xs = self.get_features(ws, cs, ps)
-
-    #     # rnn layers
-    #     rs = self.rnn_output(xs)
-
-    #     # MLP for arc
-    #     # head representations
-    #     hs_arc = self.mlp_arc_head(rs)
-
-    #     # modifier representations
-    #     if self.common_head_mod:
-    #         ms_arc = [h_arc[2:] for h_arc in hs_arc]
-    #     else:
-    #         rs_words = [r[2:] for r in rs]
-    #         ms_arc = self.mlp_arc_mod(rs_words)
-
-    #     # MLP for label
-    #     if self.label_prediction:
-    #         # head representations
-    #         if self.common_arc_label:
-    #             hs_label = hs_arc
-    #         else:
-    #             hs_label = self.mlp_label_head(rs)
-
-    #         # modifier representations
-    #         if self.common_head_mod:
-    #             ms_label = [h_label[2:] for h_label in hs_label]
-    #         else:
-    #             if self.common_arc_label:
-    #                 ms_label = ms_arc
-    #             else:
-    #                 ms_label = self.mlp_label_mod(rs_words)
-
-    #     else:
-    #         hs_label = [None] * data_size
-    #         ms_label = [None] * data_size            
-            
-    #     xp = cuda.get_array_module(xs[0])
-    #     if self.label_prediction:
-    #         if self.common_arc_label:
-    #             ldim = self.mlp_arc_head.layers[-1].W.shape[0]
-    #         else:
-    #             ldim = self.mlp_label_head.layers[-1].W.shape[0]
-
-    #     loss = chainer.Variable(xp.array(0, dtype='f'))
-    #     yps = []                # predicted label
-    #     yhs = []                # predicted head
-    #     yls = []                # predicted arc label
-
-    #     # (bi)affine layers for arc and label prediction
-    #     cnt = 0
-    #     for h_arc, m_arc, h_label, m_label, gh, gl in zip(
-    #             hs_arc, ms_arc, hs_label, ms_label, ghs, gls): # for each sentence in mini-batch
-    #         scores_a, yh = self.predict_arcs(m_arc, h_arc, train, xp)
-    #         yhs.append(yh)
-
-    #         if self.label_prediction:
-    #             n = len(m_label)      # the number of unigrams except root
-    #             heads = gh if train else yh
-    #             hm_label = F.reshape(F.concat([h_label[heads[i]] for i in range(1, n+1)], axis=0), (n, ldim))
-    #             scores_l, yl = self.predict_labels(m_label, hm_label, xp)
-    #             yls.append(yl)
-
-    #         if calculate_loss:
-    #             # print('cnt:',cnt)
-    #             loss += self.softmax_cross_entropy(scores_a, gh[self.n_dummy:])
-    #             #loss += global_likelihood_loss(scores_a, gh[self.n_dummy:])
-    #             #loss += structured_margin_loss(scores_a, gh[self.n_dummy:])
-    #             if self.label_prediction:
-    #                 loss += self.softmax_cross_entropy(scores_l, gl[self.n_dummy:])
-    #         cnt += 1
-
-    #     if self.label_prediction:
-    #         return loss, yhs, yls
-    #     else:
-    #         return loss, yhs
 
 
 def masking_matrix(sen_len, n_dummy=0, xp=np):

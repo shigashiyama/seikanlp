@@ -98,7 +98,6 @@ def load_pretrained_embedding_layer(id2unigram, pretrained_embed, external_model
     embed.W = chainer.Parameter(initializer=weight)
 
     if count >= 1:
-
         print('Use {} pretrained embedding vectors\n'.format(count), file=sys.stderr)
 
 
@@ -110,7 +109,7 @@ def grow_embedding_layers(
     if n_vocab_org == n_vocab_grown:
         return
 
-    if (pretrained_embed is not None and external_model and id2unigram_grown):
+    if pretrained_embed is not None:
         grow_embedding_layers_with_pretrained_model(
             n_vocab_org, n_vocab_grown, rand_embed, 
             pretrained_embed, external_model, id2unigram_grown, train=train, file=file)
@@ -143,7 +142,7 @@ def grow_embedding_layers_with_pretrained_model(
     w2_rand = []
     w2_pretrained = []
 
-    for i in range(n_vocab, n_vocab_grown):
+    for i in range(n_vocab_org, n_vocab_grown):
         if train:               # resume training
             vec_rand = initializers.generate_array(initialW, (d_rand, ), np)
         else:                   # test
@@ -164,10 +163,11 @@ def grow_embedding_layers_with_pretrained_model(
 
     w2_pretrained = np.reshape(w2_pretrained, (diff, d_pretrained))
     w_pretrained = F.concat((pretrained_embed.W, w2_pretrained), 0)
-    pretrained_embed = L.EmbedID(0, 0)
     pretrained_embed.W = chainer.Parameter(initializer=w_pretrained.data, name='W')
 
-    print('Grow embedding matrix: {} -> {}'.format(n_vocab, rand_embed.W.shape[0]), file=file)
+    print('Grow embedding matrix: {} -> {}'.format(n_vocab_org, rand_embed.W.shape[0]), file=file)
+    print('Grow pretrained embedding matrix: {} -> {}'.format(
+        n_vocab_org, pretrained_embed.W.shape[0]), file=file)
     if count >= 1:
         print('Add {} pretrained embedding vectors'.format(count), file=file)
 

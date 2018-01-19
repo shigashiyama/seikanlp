@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import chainer
 from chainer import cuda
@@ -44,6 +46,7 @@ class DictionaryFeatureExtractor(FeatureExtractor):
             }
 
         else:
+            print('Load feature template from: {}\n'.format(template), file=sys.stderr)
             self.read_template(template)        
 
 
@@ -80,7 +83,7 @@ class DictionaryFeatureExtractor(FeatureExtractor):
                 if len(position) != 1 or not position in valid_positions:
                     continue
 
-                if task == constants.SEG:
+                if task == constants.TASK_SEG:
                     for k, span in enumerate(spans):
                         if constants.FEAT_TEMP_RANGE_SYM in span:
                             first, last = span.split(constants.FEAT_TEMP_RANGE_SYM)
@@ -92,7 +95,7 @@ class DictionaryFeatureExtractor(FeatureExtractor):
                         for i in range(first, last+1):
                             self.seg_lg[position].update({i:k})
 
-                elif task == constants.SEG_TAG:
+                elif task == constants.TASK_SEGTAG:
                     pass
 
         next_start = 0

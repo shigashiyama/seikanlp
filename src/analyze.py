@@ -13,8 +13,8 @@ import trainers
 
 
 def run(process_name):
-    if int(chainer.__version__[0]) < 2:
-        print("chainer version>=2.0.0 is required.")
+    if int(chainer.__version__[0]) < 3:
+        print("chainer version>=3.0.0 is required.")
         sys.exit()
 
     ################################
@@ -28,26 +28,24 @@ def run(process_name):
     ################################
     # Get arguments and intialize trainer
 
+    args = arguments.SelectiveArgumentParser().parse_args()
+
     if process_name == 'tagging':
-        args = arguments.TaggerArguments().parse_arguments()
         trainer = trainers.TaggerTrainer(args)
     elif process_name == 'dual_tagging':
-        args = arguments.DualTaggerArguments().parse_arguments()
         trainer = trainers.DualTaggerTrainer(args)
     elif process_name == 'parsing':
-        args = arguments.ParserArguments().parse_arguments()
         trainer = trainers.ParserTrainer(args)
     elif process_name == 'attribute_annotation':
-        args = arguments.AttributeAnnotatorArguments().parse_arguments()
         trainer = trainers.AttributeAnnotatorTrainer(args)
     else:
-        print('Invalide task name: {}'.format(args.task), file=sys.stderr)
+        print('Error: invalid process name: {}'.format(process_name), file=sys.stderr)
         sys.exit()
 
     ################################
     # Prepare GPU
-    use_gpu = args.gpu >= 0
-    if use_gpu:
+    use_gpu = 'gpu' in args and args.gpu >= 0
+    if process_name != 'attrribute_annotation' and use_gpu:
         # Make the specified GPU current
         cuda.get_device_from_id(args.gpu).use()
         chainer.config.cudnn_deterministic = args.use_cudnn
@@ -55,13 +53,12 @@ def run(process_name):
     ################################
     # Load external token unigram (typically word) embedding model
 
-    if args.unigram_embed_model_path and args.execute_mode != 'interactive':
-        trainers.load_unigram_embedding_model(args.unigram_embed_model_path)
+    if ('unigram_embed_model_path' in args and args.unigram_embed_model_path):
+        trainer.load_external_embedding_model(args.unigram_embed_model_path)
 
     ################################
     # Load feature extractor and classifier model
 
-    # self.pretrained_unigram_embed_dim = self.embed_model.wv.syn0[0].shape[0] 
     if args.model_path:
         trainer.load_model(args.model_path)
 
@@ -74,8 +71,8 @@ def run(process_name):
             sys.exit()
 
     else:
-        if args.dic_obj_path:
-            trainer.load_dic(args.dic_obj_path)
+        # if args.dic_obj_path:
+        #     trainer.load_dic(args.dic_obj_path)
         trainer.init_hyperparameters(args)
     trainer.init_feat_extractor(use_gpu=use_gpu)
 
@@ -92,31 +89,35 @@ def run(process_name):
         trainer.load_data_for_training()
     elif args.execute_mode == 'eval':
         trainer.load_data_for_test()
+    elif args.execute_mode == 'decode':
+        trainer.load_decode_data()
 
     ################################
-    # Set up evaluator, classifier and optimizer
-
-    trainer.setup_evaluator()
+    # Set up classifier
 
     if not trainer.classifier:
         trainer.init_model()
     else:
         trainer.update_model()
 
-    if args.gpu >= 0:
+    if 'gpu' in args and args.gpu >= 0:
         trainer.classifier.to_gpu()
-
-    trainer.setup_optimizer()
 
     ################################
     # Run
 
     if args.execute_mode == 'train':
+        trainer.setup_optimizer()
+        trainer.setup_evaluator()
         trainer.run_train_mode()
+
     elif args.execute_mode == 'eval':
+        trainer.setup_evaluator()
         trainer.run_eval_mode()
+
     elif args.execute_mode == 'decode':
         trainer.run_decode_mode()
+
     elif args.execute_mode == 'interactive':
         trainer.run_interactive_mode()
 

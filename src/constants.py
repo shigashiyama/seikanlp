@@ -1,12 +1,17 @@
 import numpy as np
 
 
-### common
+### task
 
-SEG = 'seg'
-TAG = 'tag'
-SEG_TAG = 'seg_tag'
-
+TASK_SEG = 'seg'
+TASK_TAG = 'tag'
+TASK_SEGTAG = 'segtag'
+TASK_DUAL_SEG = 'dual_seg'
+TASK_DUAL_TAG = 'dual_tag'
+TASK_DUAL_SEGTAG = 'dual_segtag'
+TASK_DEP = 'dep'
+TASK_TDEP = 'tdep'
+TASK_ATTR = 'attr'
 
 ### for analyzer
 
@@ -30,6 +35,9 @@ HEAD_CLM_TXT    = '#HEAD_COLUMN'
 ARC_CLM_TXT     = '#ARC_COLUMN'
 ATTR_CLM_TXT    = '#ATTR_COLUMN'
 
+SL_FORMAT = 'sl'
+WL_FORMAT = 'wl'
+
 
 ### for dictionary
 
@@ -37,7 +45,15 @@ UNK_SYMBOL      = '<UNK>'
 NUM_SYMBOL      = '<NUM>'
 NONE_SYMBOL     = '<NONE>'
 ROOT_SYMBOL     = '<ROOT>'
-# PADDING_SYMBOL = '<PAD>'
+
+UNIGRAM    = 'unigram'   
+SUBTOKEN   = 'subtoken'
+SEG_LABEL  = 'seg_label' 
+POS_LABEL  = 'pos_label'
+ARC_LABEL  = 'arc_label'
+ATTR_LABEL = 'attr_label'
+CHUNK      = 'chunk'
+
 SEG_LABELS      = 'BIES'
 
 

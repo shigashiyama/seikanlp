@@ -6,6 +6,7 @@ import chainer
 import chainer.functions as F
 import chainer.links as L
 from chainer import cuda
+from chainer.functions.loss import softmax_cross_entropy
 from chainer.links.connection.n_step_rnn import argsort_list_descent, permutate_list
 
 from models.common import MLP

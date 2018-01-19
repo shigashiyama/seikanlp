@@ -7,11 +7,13 @@ import chainer.functions as F
 import chainer.links as L
 from chainer import initializers
 
+import common
+import constants
 import evaluators
 import models.util
 from models.tagger import RNNCRFTagger
 from models.dual_tagger import DualRNNTagger
-from models.parser import RNNBiaffineParser, RNNBiaffineFlexibleParser
+from models.parser import RNNBiaffineParser
 from models.attribute_annotator import AttributeAnnotator
 
 
@@ -21,7 +23,7 @@ class Classifier(chainer.link.Chain):
     
 
     def load_pretrained_embedding_layer(self, dic, external_model, finetuning=False):
-        id2unigram = dic.tables['unigram'].id2str
+        id2unigram = dic.tables[constants.UNIGRAM].id2str
         models.util.load_pretrained_embedding_layer(
             id2unigram, self.predictor.pretrained_unigram_embed, external_model, finetuning=finetuning)
 
@@ -64,7 +66,7 @@ class PatternMatcher(object):
 
 
 class SequenceTagger(Classifier):
-    def __init__(self, predictor, task='seg'):
+    def __init__(self, predictor, task=constants.TASK_SEG):
         super().__init__(predictor=predictor)
         self.task = task
 
@@ -96,15 +98,15 @@ class SequenceTagger(Classifier):
 
 
     def grow_embedding_layers(self, dic_grown, external_model=None, train=True):
-        id2unigram_grown = dic_grown.tables['unigram'].id2str
+        id2unigram_grown = dic_grown.tables[constants.UNIGRAM].id2str
         n_vocab_org = self.predictor.unigram_embed.W.shape[0]
         n_vocab_grown = len(id2unigram_grown)
         models.util.grow_embedding_layers(
             n_vocab_org, n_vocab_grown, self.predictor.unigram_embed, 
             self.predictor.pretrained_unigram_embed, external_model, id2unigram_grown, train=train)
 
-        if 'subtoken' in dic_grown.tables:
-            id2subtoken_grown = dic_grown.tables['subtoken'].id2str
+        if constants.SUBTOKEN in dic_grown.tables:
+            id2subtoken_grown = dic_grown.tables[constants.SUBTOKEN].id2str
             n_subtokens_org = self.predictor.subtoken_embed.W.shape[0]
             n_subtokens_grown = len(id2subtoken_grown)
             models.util.grow_embedding_layers(
@@ -113,10 +115,10 @@ class SequenceTagger(Classifier):
         
     def grow_inference_layers(self, dic_grown):
         n_labels_org = self.predictor.mlp.layers[-1].W.shape[0]
-        if self.task == 'seg' or self.task == 'seg_tag':
-            n_labels_grown = len(dic_grown.tables['seg_label'].id2str)
+        if common.is_segmentation_task(self.task):
+            n_labels_grown = len(dic_grown.tables[constants.SEG_LABEL].id2str)
         else:
-            n_labels_grown = len(dic_grown.tables['pos_label'].id2str)
+            n_labels_grown = len(dic_grown.tables[constants.POS_LABEL].id2str)
 
         models.util.grow_MLP(n_labels_org, n_labels_grown, self.predictor.mlp.layers[-1])
         if isinstance(self.predictor, RNNCRFTagger):
@@ -124,7 +126,7 @@ class SequenceTagger(Classifier):
                 
 
 class DualSequenceTagger(Classifier):
-    def __init__(self, predictor, task='seg'):
+    def __init__(self, predictor, task=constants.TASK_SEG):
         super().__init__(predictor=predictor)
         self.task = task
 
@@ -174,14 +176,13 @@ class DualSequenceTagger(Classifier):
 
 
     def load_pretrained_embedding_layer(self, dic, external_model, finetuning=False):
-        id2unigram = dic.tables['unigram'].id2str
+        id2unigram = dic.tables[constants.UNIGRAM].id2str
         models.util.load_pretrained_embedding_layer(
             id2unigram, self.predictor.lu_tagger.pretrained_unigram_embed, external_model, finetuning=finetuning)
 
 
     def grow_embedding_layers(self, dic_grown, external_model=None, train=True):
-        # id2unigram_org = dic_org.tables['unigram'].id2str
-        id2unigram_grown = dic_grown.tables['unigram'].id2str
+        id2unigram_grown = dic_grown.tables[constants.UNIGRAM].id2str
         n_vocab_org = self.predictor.su_tagger.unigram_embed.W.shape[0]
         n_vocab_grown = len(id2unigram_grown)
 
@@ -192,8 +193,8 @@ class DualSequenceTagger(Classifier):
             n_vocab_org, n_vocab_grown, self.predictor.lu_tagger.unigram_embed, 
             self.predictor.lu_tagger.pretrained_unigram_embed, external_model, id2unigram_grown, train=train)
             
-        if 'subtoken' in dic_grown.tables:
-            id2subtoken_grown = dic_grown.tables['subtoken'].id2str
+        if constants.SUBTOKEN in dic_grown.tables:
+            id2subtoken_grown = dic_grown.tables[constants.SUBTOKEN].id2str
             n_subtokens_org = self.predictor.subtoken_embed.W.shape[0]
             n_subtokens_grown = len(id2subtoken_grown)
             models.util.grow_embedding_layers(
@@ -202,10 +203,10 @@ class DualSequenceTagger(Classifier):
         
     def grow_inference_layers(self, dic_grown):
         n_labels_org = self.predictor.su_tagger.mlp.layers[-1].W.shape[0]
-        if self.task == 'dual_seg' or self.task == 'dual_seg_tag':
-            n_labels_grown = len(dic_grown.tables['seg_label'].id2str)
+        if common.is_dual_st_task(self.task):
+            n_labels_grown = len(dic_grown.tables[constants.SEG_LABEL].id2str)
         else:
-            n_labels_grown = len(dic_grown.tables['pos_label'].id2str)
+            n_labels_grown = len(dic_grown.tables[constants.POS_LABEL].id2str)
 
         models.util.grow_MLP(n_labels_org, n_labels_grown, self.predictor.su_tagger.mlp.layers[-1])
         models.util.grow_MLP(n_labels_org, n_labels_grown, self.predictor.lu_tagger.mlp.layers[-1])
@@ -259,22 +260,22 @@ class DependencyParser(Classifier):
 
 
     def grow_embedding_layers(self, dic_grown, external_model=None, train=True):
-        id2unigram_grown = dic_grown.tables['unigram'].id2str
+        id2unigram_grown = dic_grown.tables[constants.UNIGRAM].id2str
         n_vocab_org = self.predictor.unigram_embed.W.shape[0]
         n_vocab_grown = len(id2unigram_grown)
         models.util.grow_embedding_layers(
             n_vocab_org, n_vocab_grown, self.predictor.unigram_embed, 
             self.predictor.pretrained_unigram_embed, external_model, id2unigram_grown, train=train)
 
-        if 'pos_label' in dic_grown.tables:
-            id2pos_grown = dic_grown.tables['pos_label'].id2str
+        if constants.POS_LABEL in dic_grown.tables:
+            id2pos_grown = dic_grown.tables[constants.POS_LABEL].id2str
             n_pos_org = self.predictor.pos_embed.W.shape[0]
             n_pos_grown = len(id2pos_grown)
             models.util.grow_embedding_layers(
                 n_pos_org, n_pos_grown, self.predictor.pos_embed, train=train)
 
-        if 'subtoken' in dic_grown.tables:
-            id2subtoken_grown = dic_grown.tables['subtoken'].id2str
+        if constants.SUBTOKEN in dic_grown.tables:
+            id2subtoken_grown = dic_grown.tables[constants.SUBTOKEN].id2str
             n_subtokens_org = self.predictor.subtoken_embed.W.shape[0]
             n_subtokens_grown = len(id2subtoken_grown)
             models.util.grow_embedding_layers(
@@ -283,7 +284,7 @@ class DependencyParser(Classifier):
 
     def grow_inference_layers(self, dic_grown):
         if self.predictor.label_prediction:
-            id2label_grown = dic_grown.tables['arc_label'].id2str
+            id2label_grown = dic_grown.tables[constants.ARC_LABEL].id2str
             n_labels_org = self.predictor.mlp_label.layers[-1].W.shape[0]
             n_labels_grown = len(id2label_grown)
             models.util.grow_MLP(n_labels_org, n_labels_grown, self.predictor.mlp_label.layers[-1])
@@ -292,16 +293,16 @@ class DependencyParser(Classifier):
 def init_classifier(task, hparams, dic):
     n_vocab = len(dic.tables['unigram'])
     if 'subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0:
-        n_subtokens = len(dic.tables['subtoken'])
+        n_subtokens = len(dic.tables[constants.SUBTOKEN])
     else:
         n_subtokens = 0
 
     # single tagger
-    if task == 'seg' or task == 'seg_tag' or task == 'tag':
-        if 'seg' in task:
-            n_labels = len(dic.tables['seg_label'])
+    if common.is_single_st_task(task):
+        if common.is_segmentation_task(task):
+            n_labels = len(dic.tables[constants.SEG_LABEL])
         else:
-            n_labels = len(dic.tables['pos_label'])
+            n_labels = len(dic.tables[constants.POS_LABEL])
 
         use_crf = hparams['inference_layer'] == 'crf'
 
@@ -317,11 +318,11 @@ def init_classifier(task, hparams, dic):
         classifier = SequenceTagger(predictor, task=task)
 
     # dual tagger
-    elif task == 'dual_seg' or task == 'dual_seg_tag' or task == 'dual_tag':
-        if 'seg' in task:
-            n_labels = len(dic.tables['seg_label'])
+    elif common.is_dual_st_task(task):
+        if common.is_segmentation_task(task):
+            n_labels = len(dic.tables[constants.SEG_LABEL])
         else:
-            n_labels = len(dic.tables['pos_label'])
+            n_labels = len(dic.tables[constants.POS_LABEL])
             
         predictor = DualRNNTagger(
             n_vocab, hparams['unigram_embed_dim'], 
@@ -336,9 +337,9 @@ def init_classifier(task, hparams, dic):
         classifier = DualSequenceTagger(predictor, task=task)
 
     # parser
-    elif task == 'dep' or task == 'tdep':
-        n_pos = len(dic.tables['pos_label']) if hparams['pos_embed_dim'] > 0 else 0
-        n_labels = len(dic.tables['arc_label']) if task == 'tdep' else 0
+    elif common.is_parsing_task(task):
+        n_pos = len(dic.tables[constants.POS_LABEL]) if hparams['pos_embed_dim'] > 0 else 0
+        n_labels = len(dic.tables[constants.ARC_LABEL]) if common.is_typed_parsing_task(task) else 0
         mlp4pospred_n_layers = 0
         mlp4pospred_n_units = 0
 
@@ -351,7 +352,7 @@ def init_classifier(task, hparams, dic):
             hparams['mlp4labelrep_n_layers'], hparams['mlp4labelrep_n_units'],
             mlp4labelpred_n_layers=hparams['mlp4labelpred_n_layers'], 
             mlp4labelpred_n_units=hparams['mlp4labelpred_n_units'],
-            mlp4pospred_n_layers=mlp4pospred_n_layers, mlp4pospred_n_units=mlp4pospred_n_units,
+            # mlp4pospred_n_layers=mlp4pospred_n_layers, mlp4pospred_n_units=mlp4pospred_n_units,
             n_labels=n_labels, rnn_dropout=hparams['rnn_dropout'], 
             hidden_mlp_dropout=hparams['hidden_mlp_dropout'], 
             pred_layers_dropout=hparams['pred_layers_dropout'],
@@ -359,14 +360,14 @@ def init_classifier(task, hparams, dic):
 
         classifier = DependencyParser(predictor)
 
-    elif task == 'attr':
+    elif common.is_attribute_annotation_task(task):
         predictor = AttributeAnnotator()
         classifier = PatternMatcher(predictor)
 
     # tagger and parser
     # elif task == 'tag_dep' or task == 'tag_tdep':
-    #     n_pos = len(dic.tables['pos_label']) if hparams['pos_embed_dim'] > 0 else 0
-    #     n_labels = len(dic.tables['arc_label']) if task == 'tag_tdep' else 0
+    #     n_pos = len(dic.tables[constants.POS_LABEL]) if hparams['pos_embed_dim'] > 0 else 0
+    #     n_labels = len(dic.tables[constants.ARC_LABEL]) if task == 'tag_tdep' else 0
     #     mlp4pospred_n_layers = hparams['mlp4pospred_n_layers']
     #     mlp4pospred_n_units = hparams['mlp4pospred_n_units']
 
@@ -394,30 +395,30 @@ def init_classifier(task, hparams, dic):
     return classifier
     
 
-def init_evaluator(task, dic, ignore_labels):
-    if task == 'seg' or task == 'dual_seg':
-        return evaluators.SegmenterEvaluator(dic.tables['seg_label'].id2str)
+def init_evaluator(task, dic, ignored_labels):
+    if task == constants.TASK_SEG or task == constants.TASK_DUAL_SEG:
+        return evaluators.SegmenterEvaluator(dic.tables[constants.SEG_LABEL].id2str)
 
-    elif task == 'seg_tag' or task == 'dual_seg_tag':
-        return evaluators.JointSegmenterEvaluator(dic.tables['seg_label'].id2str)
+    elif task == constants.TASK_SEGTAG or task == constants.TASK_DUAL_SEGTAG:
+        return evaluators.JointSegmenterEvaluator(dic.tables[constants.SEG_LABEL].id2str)
 
-    elif task == 'tag' or task == 'dual_tag':
-        return evaluators.TaggerEvaluator(ignore_head=False, ignore_labels=ignore_labels)
+    elif task == constants.TASK_TAG or task == constants.TASK_DUAL_TAG:
+        return evaluators.TaggerEvaluator(ignore_head=False, ignored_labels=ignored_labels)
 
-    elif task == 'dep':
-        return evaluators.ParserEvaluator(ignore_head=True, ignore_labels=ignore_labels)
+    elif task == constants.TASK_DEP:
+        return evaluators.ParserEvaluator(ignore_head=True)
 
-    elif task == 'tdep':
-        return evaluators.TypedParserEvaluator(ignore_head=True, ignore_labels=ignore_labels)
+    elif task == constants.TASK_TDEP:
+        return evaluators.TypedParserEvaluator(ignore_head=True, ignored_labels=ignored_labels)
 
-    elif task == 'tag_dep':
-        return evaluators.TagerParserEvaluator(ignore_head=True, ignore_labels=ignore_labels)
+    # elif task == 'tag_dep':
+    #     return evaluators.TagerParserEvaluator(ignore_head=True, ignored_labels=ignored_labels)
 
-    elif task == 'tag_tdep':
-        return evaluators.TaggerTypedParserEvaluator(ignore_head=True, ignore_labels=ignore_labels)
+    # elif task == 'tag_tdep':
+    #     return evaluators.TaggerTypedParserEvaluator(ignore_head=True, ignored_labels=ignored_labels)
 
-    elif task == 'attr':
-        return evaluators.AccuracyEvaluator(ignore_head=False, ignore_labels=ignore_labels)
+    elif task == constants.TASK_ATTR:
+        return evaluators.AccuracyEvaluator(ignore_head=False, ignored_labels=ignored_labels)
 
     else:
         return None

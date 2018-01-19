@@ -14,6 +14,7 @@ import gensim
 from gensim.models import keyedvectors
 from gensim.models import word2vec
 
+import common
 import util
 import constants
 import data_io
@@ -86,6 +87,7 @@ class Trainer(object):
         self.train = None
         self.dev = None
         self.test = None
+        self.decode_txt = None
         self.hparams = None
         self.dic = None
         self.classifier = None
@@ -93,7 +95,7 @@ class Trainer(object):
         self.feat_extractor = None
         self.optimizer = None
         self.external_embed_model = None
-        self.n_iter = args.epoch_begin
+        self.n_iter = 1
         self.label_begin_index = 2
 
         self.log('Start time: {}\n'.format(self.start_time))
@@ -131,23 +133,33 @@ class Trainer(object):
             self.hparams.update({'additional_feat_dim' : feat_dim})
 
 
-    def load_unigram_embedding_model(self, model_path):
+    def load_external_embedding_model(self, model_path):
         self.external_embed_model = load_embedding_model(model_path)
 
 
     def init_model(self):
         self.log('Initialize model from hyperparameters\n')
         self.classifier = classifiers.init_classifier(self.task, self.hparams, self.dic)
+        finetuning = not self.hparams['fix_pretrained_embed']
         if self.external_embed_model:
             self.classifier.load_pretrained_embedding_layer(
-                self.dic, self.external_embed_model, finetuning=(not self.args.fix_pretrained_embed))
+                self.dic, self.external_embed_model, finetuning=finetuning)
 
 
     def load_dic(self, dic_path):
         with open(dic_path, 'rb') as f:
             self.dic = pickle.load(f)
         self.log('Load dic: {}'.format(dic_path))
-        self.log('Vocab size: {}\n'.format(len(self.dic.tables['unigram'])))
+        self.log('Vocab size: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
+        if constants.SUBTOKEN in self.dic.tables:
+            self.log('subtokens size: {}'.format(len(self.dic.tables[constants.SUBTOKEN])))
+        if constants.SEG_LABEL in self.dic.tables:
+            self.log('seg labels size: {}'.format(len(self.dic.tables[constants.SEG_LABEL])))
+        if constants.POS_LABEL in self.dic.tables:
+            self.log('pos labels size: {}'.format(len(self.dic.tables[constants.POS_LABEL])))
+        if constants.ARC_LABEL in self.dic.tables:
+            self.log('arc labels size: {}'.format(len(self.dic.tables[constants.ARC_LABEL])))
+        self.log('')
 
 
     def load_model(self, model_path):
@@ -180,7 +192,7 @@ class Trainer(object):
                     k, v, ' (original value ' + str(self.hparams[k]) + ' was updated)' if update else '')
                 self.hparams[k] = v
 
-            elif (k == 'task' and v == 'seg' and self.hparams[k] == 'seg_tag' and 
+            elif (k == 'task' and v == 'seg' and self.hparams[k] == constants.TASK_SEGTAG and 
                   (self.args.execute_mode == 'decode' or self.args.execute_mode == 'interactive')):
                 self.task = self.hparams[k] = v
                 message = '{}={}'.format(k, v)            
@@ -198,7 +210,8 @@ class Trainer(object):
 
     def update_model(self):
         if (self.args.execute_mode == 'train' or
-            self.args.execute_mode == 'eval'):
+            self.args.execute_mode == 'eval' or
+            self.args.execute_mode == 'decode'):
 
             self.classifier.grow_embedding_layers(
                 self.dic, self.external_embed_model, train=(self.args.execute_mode=='train'))
@@ -237,16 +250,12 @@ class Trainer(object):
         input_data_format = args.input_data_format
 
         task = hparams['task']
-        if 'tag' in self.task:
-            read_pos = True
-        elif 'dep' in self.task and 'pos_embed_dim' in hparams and hparams['pos_embed_dim'] > 0:
-            read_pos = True
-        elif self.task == 'attr':
-            read_pos = True
-        else:
-            read_pos = False
+        read_pos = (
+            common.is_tagging_task(task) or 
+            (common.is_parsing_task(task) and 'pos_embed_dim' in hparams and hparams['pos_embed_dim'] > 0) or
+            common.is_attribute_annotation_task(task))
         use_subtoken = ('subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0)
-        create_chunk_trie = ('feature_template' in hparams and hparams['feature_template'] is not None)
+        create_chunk_trie = ('feature_template' in hparams and hparams['feature_template'])
         subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
         lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
@@ -267,22 +276,22 @@ class Trainer(object):
                 max_vocab_size=max_vocab_size, freq_threshold=freq_threshold,
                 dic=self.dic, refer_vocab=refer_vocab)
         
-            if self.args.dump_train_data:
-                name, ext = os.path.splitext(train_path)
-                if args.max_vocab_size > 0 or args.freq_threshold > 1:
-                    name = '{}_{}k'.format(name, int(len(self.dic.tables['unigram']) / 1000))
-                data_io.dump_pickled_data(name, train)
-                self.log('Dumpped training data: {}.pickle'.format(name))
+            # if self.args.dump_train_data:
+            #     name, ext = os.path.splitext(train_path)
+            #     if args.max_vocab_size > 0 or args.freq_threshold > 1:
+            #         name = '{}_{}k'.format(name, int(len(self.dic.tables[constants.UNIGRAM]) / 1000))
+            #     data_io.dump_pickled_data(name, train)
+            #     self.log('Dumpped training data: {}.pickle'.format(name))
 
         self.log('Load training data: {}'.format(train_path))
         self.log('Data length: {}'.format(len(train.inputs[0])))
-        self.log('Vocab size: {}\n'.format(len(self.dic.tables['unigram'])))
+        self.log('Vocab size: {}\n'.format(len(self.dic.tables[constants.UNIGRAM])))
         if 'feature_template' in self.hparams and self.hparams['feature_template']:
             self.log('Start feature extraction for training data\n')
             self.extract_features(train)
 
         if args.devel_data:
-            read_pos = 'pos_label' in self.dic.tables
+            read_pos = constants.POS_LABEL in self.dic.tables
 
             # dic can be updated if embed_model are used
             dev, self.dic = data_io.load_annotated_data(
@@ -293,7 +302,7 @@ class Trainer(object):
 
             self.log('Load development data: {}'.format(dev_path))
             self.log('Data length: {}'.format(len(dev.inputs[0])))
-            self.log('Vocab size: {}\n'.format(len(self.dic.tables['unigram'])))
+            self.log('Vocab size: {}\n'.format(len(self.dic.tables[constants.UNIGRAM])))
             if 'feature_template' in self.hparams and self.hparams['feature_template']:
                 self.log('Start feature extraction for development data\n')
                 self.extract_features(dev)
@@ -314,17 +323,9 @@ class Trainer(object):
         input_data_format = args.input_data_format
 
         task = hparams['task']
-        read_pos = 'pos_label' in self.dic.tables
-        # if 'tag' in self.task:
-        #     read_pos = True
-        # elif 'dep' in self.task and 'pos_embed_dim' in hparams and hparams['pos_embed_dim'] > 0:
-        #     read_pos = True
-        # elif self.task == 'attr':
-        #     read_pos = True
-        # else:
-        #     read_pos = False
+        read_pos = constants.POS_LABEL in self.dic.tables
         use_subtoken = ('subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0)
-        create_chunk_trie = ('feature_template' in hparams and hparams['feature_template'] is not None)
+        create_chunk_trie = ('feature_template' in hparams and hparams['feature_template'])
         subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
         lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
@@ -337,7 +338,7 @@ class Trainer(object):
 
         self.log('Load test data: {}'.format(test_path))
         self.log('Data length: {}'.format(len(test.inputs[0])))
-        self.log('Vocab size: {}\n'.format(len(self.dic.tables['unigram'])))
+        self.log('Vocab size: {}\n'.format(len(self.dic.tables[constants.UNIGRAM])))
         if 'feature_template' in self.hparams and self.hparams['feature_template']:
             self.log('Start feature extraction for test data\n')
             self.extract_features(test)
@@ -346,8 +347,34 @@ class Trainer(object):
         self.dic.create_id2strs()
 
 
+    def load_decode_data(self):
+        text_path = (self.args.path_prefix if self.args.path_prefix else '') + self.args.decode_data
+        refer_vocab = self.external_embed_model.wv if self.external_embed_model else set()
+        if 'input_data_format' in self.args:
+            data_format = self.args.input_data_format
+        else:
+            data_format = constants.SL_FORMAT
+
+        read_pos = constants.POS_LABEL in self.dic.tables
+        use_subtoken = ('subtoken_embed_dim' in self.hparams and self.hparams['subtoken_embed_dim'] > 0)
+        subpos_depth = self.hparams['subpos_depth'] if 'subpos_depth' in self.hparams else -1
+        lowercase = self.hparams['lowercase'] if 'lowercase' in self.hparams else False
+        normalize_digits = self.hparams['normalize_digits'] if 'normalize_digits' else False
+
+        rdata = data_io.load_decode_data(
+            text_path, self.dic, self.task, data_format=data_format,
+            read_pos=read_pos, use_subtoken=use_subtoken, subpos_depth=subpos_depth,
+            lowercase=lowercase, normalize_digits=normalize_digits, refer_vocab=refer_vocab)
+
+        if 'feature_template' in self.hparams and self.hparams['feature_template']:
+            self.extract_features(rdata)
+
+        self.decode_data = rdata
+        self.dic.create_id2strs()
+        
+
     def extract_features(self, data):
-        featvecs = self.feat_extractor.extract_features(data.inputs[0], self.dic.tries['chunk'])
+        featvecs = self.feat_extractor.extract_features(data.inputs[0], self.dic.tries[constants.CHUNK])
         data.featvecs = featvecs
 
 
@@ -367,12 +394,18 @@ class Trainer(object):
         elif self.args.optimizer == 'adagrad':
             optimizer = chainer.optimizers.AdaGrad(lr=self.args.learning_rate)
 
+        elif self.args.optimizer == 'adadelta':
+            optimizer = chainer.optimizers.AdaDelta(rho=self.args.adadelta_rho)
+            
+        elif self.args.optimizer == 'rmsprop':
+            optimizer = chainer.optimizers.RMSprop(lr=self.args.learning_rate, alpha=self.args.rmsprop_alpha)
+
         optimizer.setup(self.classifier)
         delparams = []
-        if self.args.fix_pretrained_embed:
+        if self.external_embed_model and self.args.fix_pretrained_embed:
             delparams.append('pretrained_unigram_embed/W')
             self.log('Fix parameters: pretrained_unigram_embed/W')
-        if 'dual' in self.task:
+        if common.is_dual_st_task(self.task):
             delparams.append('su_tagger')
             self.log('Fix parameters: su_tagger/*')
         if delparams:
@@ -380,8 +413,8 @@ class Trainer(object):
 
         optimizer.add_hook(chainer.optimizer.GradientClipping(self.args.grad_clip))
 
-        if self.args.weight_decay > 0:
-            optimizer.add_hook(chainer.optimizer.WeightDecay(self.args.weight_decay))
+        if self.args.weight_decay_ratio > 0:
+            optimizer.add_hook(chainer.optimizer.WeightDecay(self.args.weight_decay_ratio))
 
         self.optimizer = optimizer
 
@@ -408,11 +441,11 @@ class Trainer(object):
             self.report('[INFO] Start epoch {} at {}'.format(e, time))
 
             # learning rate decay
-            if self.args.lr_decay and self.args.optimizer == 'sgd':
-                if (e >= self.args.lr_decay_start and
-                    (e - self.args.lr_decay_start) % self.args.lr_decay_width == 0):
+            if self.args.optimizer == 'sgd' and self.args.sgd_lr_decay:
+                if (e >= self.args.sgd_lr_decay_start and
+                    (e - self.args.sgd_lr_decay_start) % self.args.sgd_lr_decay_width == 0):
                     lr_tmp = self.optimizer.lr
-                    self.optimizer.lr = self.optimizer.lr * self.args.lr_decay_rate
+                    self.optimizer.lr = self.optimizer.lr * self.args.sgd_lr_decay_rate
                     self.log('Learning rate decay: {} -> {}\n'.format(lr_tmp, self.optimizer.lr))
                     self.report('Learning rate decay: {} -> {}'.format(lr_tmp, self.optimizer.lr))
 
@@ -434,26 +467,11 @@ class Trainer(object):
 
 
     def run_decode_mode(self):
-        text_path = (self.args.path_prefix if self.args.path_prefix else '') + self.args.decode_data
-        read_pos = 'pos_label' in self.dic.tables
-        # read_pos = 'tag' in self.task or ('pos_embed_dim' in self.hparams and self.hparams['pos_embed_dim'] > 0)
-        use_subtoken = ('subtoken_embed_dim' in self.hparams and self.hparams['subtoken_embed_dim'] > 0)
-        subpos_depth = self.hparams['subpos_depth'] if 'subpos_depth' in self.hparams else -1
-        lowercase = self.hparams['lowercase'] if 'lowercase' in self.hparams else False
-        normalize_digits = self.hparams['normalize_digits'] if 'normalize_digits' else False
+        read_pos = constants.POS_LABEL in self.dic.tables
+        file = open(self.args.output_data, 'w') if self.args.output_data else sys.stdout
+        self.decode(self.decode_data, read_pos=read_pos, file=file)
 
-        rdata = data_io.load_decode_data(
-            text_path, self.dic, self.task, data_format=self.args.input_data_format,
-            read_pos=read_pos, use_subtoken=use_subtoken, subpos_depth=subpos_depth,
-            lowercase=lowercase, normalize_digits=normalize_digits)
-
-        if 'feature_template' in self.hparams and self.hparams['feature_template']:
-            self.extract_features(rdata)
-
-        file = open(self.args.output_data_path, 'w') if self.args.output_data_path else sys.stdout
-        self.decode(rdata, read_pos=read_pos, file=file)
-
-        if self.args.output_data_path:
+        if self.args.output_data:
             file.close()
 
 
@@ -518,7 +536,7 @@ class Trainer(object):
 
             if (train and 
                 self.n_iter > 0 and 
-                self.n_iter * self.args.batch_size % self.args.step_size == 0):
+                self.n_iter * self.args.batch_size % self.args.break_point == 0):
                 now_e = '%.3f' % (self.args.epoch_begin-1 + (self.n_iter * self.args.batch_size / n_ins))
                 time = datetime.now().strftime('%Y%m%d_%H%M')
 
@@ -597,7 +615,8 @@ class TaggerTrainerBase(Trainer):
 
                 elif (key == 'rnn_bidirection' or
                       key == 'lowercase' or
-                      key == 'normalize_digits'
+                      key == 'normalize_digits' or
+                      key == 'fix_pretrained_embed'
                 ):
                     val = (val.lower() == 'true')
 
@@ -606,8 +625,13 @@ class TaggerTrainerBase(Trainer):
         self.hparams = hparams
 
         self.task = self.hparams['task']
+        if (self.args.execute_mode != 'interactive' and 
+            self.hparams['pretrained_unigram_embed_dim'] > 0 and not self.external_embed_model):
+            self.log('Error: external embedding model is necessary.')
+            sys.exit()    
+
         if self.external_embed_model:
-            pretrained_unigram_embed_dim = self.embed_model.wv.syn0[0].shape[0]
+            pretrained_unigram_embed_dim = self.external_embed_model.wv.syn0[0].shape[0]
             if hparams['pretrained_unigram_embed_dim'] != pretrained_unigram_embed_dim:
                 self.external_embed_model = None
                 self.log('Warning: loaded embedding model is discarded due to dimension confliction.')
@@ -619,19 +643,19 @@ class TaggerTrainerBase(Trainer):
         self.log('### Loaded data')
         self.log('# train: {} ... {}\n'.format(train.inputs[0][0], train.inputs[0][-1]))
         self.log('# train_gold: {} ... {}\n'.format(train.outputs[0][0], train.outputs[0][-1]))
-        t2i_tmp = list(self.dic.tables['unigram'].str2id.items())
+        t2i_tmp = list(self.dic.tables[constants.UNIGRAM].str2id.items())
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
-        if self.dic.has_table('subtoken'):
-            st2i_tmp = list(self.dic.tables['subtoken'].str2id.items())
+        if self.dic.has_table(constants.SUBTOKEN):
+            st2i_tmp = list(self.dic.tables[constants.SUBTOKEN].str2id.items())
             self.log('# subtoken2id: {} ... {}\n'.format(st2i_tmp[:10], st2i_tmp[len(st2i_tmp)-10:]))
-        if self.dic.has_table('seg_label'):
-            id2seg = {v:k for k,v in self.dic.tables['seg_label'].str2id.items()}
+        if self.dic.has_table(constants.SEG_LABEL):
+            id2seg = {v:k for k,v in self.dic.tables[constants.SEG_LABEL].str2id.items()}
             self.log('# seg labels: {}\n'.format(id2seg))
-        if self.dic.has_table('pos_label'):
-            id2pos = {v:k for k,v in self.dic.tables['pos_label'].str2id.items()}
+        if self.dic.has_table(constants.POS_LABEL):
+            id2pos = {v:k for k,v in self.dic.tables[constants.POS_LABEL].str2id.items()}
             self.log('# pos labels: {}\n'.format(id2pos))
         
-        self.report('[INFO] vocab: {}'.format(len(self.dic.tables['unigram'])))
+        self.report('[INFO] vocab: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
         self.report('[INFO] data length: train={} devel={}'.format(
             len(train.inputs[0]), len(dev.inputs[0]) if dev else 0))
 
@@ -661,7 +685,7 @@ class TaggerTrainerBase(Trainer):
             self.decode_batch(xs, fs, os, file=file)
         timer.stop()
 
-        print('Parsed %d sentences. Elapsed time: %.4f sec (total) / %.4f sec (ave)' % (
+        print('Parsed %d sentences. Elapsed time: %.4f sec (total) / %.4f sec (per sentence)' % (
             n_ins, timer.elapsed, timer.elapsed/n_ins), file=sys.stderr)
 
 
@@ -686,7 +710,7 @@ class TaggerTrainerBase(Trainer):
                 use_subtoken=use_subtoken, subpos_depth=subpos_depth)
 
             if self.hparams['feature_template']:
-                rdata.featvecs = self.feat_extractor.extract_features(ws[0], self.dic.tries['chunk'])
+                rdata.featvecs = self.feat_extractor.extract_features(ws[0], self.dic.tries[constants.CHUNK])
 
             xs, fs = self.gen_inputs(rdata, [0], evaluate=False)
             orgseqs = rdata.orgdata[0]
@@ -698,10 +722,11 @@ class TaggerTrainerBase(Trainer):
 
     def load_external_dictionary(self):
         if not self.dic and self.args.external_dic_path:
+            read_pos = common.is_tagging_task(self.task)
             edic_path = self.args.external_dic_path
-            self.dic = data_io.load_external_dictionary(edic_path, read_pos=True)
+            self.dic = data_io.load_external_dictionary(edic_path, read_pos=read_pos)
             self.log('Load external dictionary: {}'.format(edic_path))
-            self.log('Vocab size: {}'.format(len(self.dic.tables['unigram'])))
+            self.log('Vocab size: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
             
             if not edic_path.endswith('pickle'):
                 base = edic_path.split('.')[0]
@@ -728,12 +753,13 @@ class TaggerTrainer(TaggerTrainerBase):
 
     def init_hyperparameters(self, args):
         if self.external_embed_model:
-            pretrained_unigram_embed_dim = self.embed_model.wv.syn0[0].shape[0]
+            pretrained_unigram_embed_dim = self.external_embed_model.wv.syn0[0].shape[0]
         else:
             pretrained_unigram_embed_dim = 0
 
         self.hparams = {
             'pretrained_unigram_embed_dim' : pretrained_unigram_embed_dim,
+            'fix_pretrained_embed' : args.fix_pretrained_embed,
             'unigram_embed_dim' : args.unigram_embed_dim,
             'subtoken_embed_dim' : args.subtoken_embed_dim,
             'rnn_unit_type' : args.rnn_unit_type,
@@ -764,42 +790,43 @@ class TaggerTrainer(TaggerTrainerBase):
 
 
     def setup_evaluator(self):
-        if self.task == 'tag' and self.args.ignore_labels:
-            tmp = self.args.ignore_labels
-            self.args.ignore_labels = set()
+        if self.task == constants.TASK_TAG and self.args.ignored_labels:
+            tmp = self.args.ignored_labels
+            self.args.ignored_labels = set()
 
             for label in tmp.split(','):
-                label_id = self.dic.get_pos_label_id(label)
+                label_id = self.dic.tables[constants.POS_LABEL].get_id(label)
                 if label_id >= 0:
-                    self.args.ignore_labels.add(label_id)
+                    self.args.ignored_labels.add(label_id)
 
-            self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignore_labels))
+            self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignored_labels))
 
         else:
-            self.args.ignore_labels = set()
+            self.args.ignored_labels = set()
 
-        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignore_labels)
+        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignored_labels)
 
 
     def decode_batch(self, xs, fs, orgseqs, file=sys.stdout):
         ys = self.classifier.decode(xs, fs)
-        id2label = self.dic.tables['seg_label' if 'seg' in self.task else 'pos_label'].id2str
+        id2label = (self.dic.tables[constants.SEG_LABEL if common.is_segmentation_task(self.task) 
+                                    else constants.POS_LABEL].id2str)
 
         for x_str, y in zip(orgseqs, ys):
             y_str = [id2label[int(yi)] for yi in y]
 
-            if self.task == 'tag':
+            if self.task == constants.TASK_TAG:
                 res = ['{}{}{}'.format(xi_str, self.args.output_attr_delim, yi_str) 
                        for xi_str, yi_str in zip(x_str, y_str)]
                 res = self.args.output_token_delim.join(res)
 
-            elif self.task == 'seg':
+            elif self.task == constants.TASK_SEG:
                 res = ['{}{}'.format(xi_str, self.args.output_token_delim 
                                      if (yi_str.startswith('E') or yi_str.startswith('S')) 
                                      else '') for xi_str, yi_str in zip(x_str, y_str)]
                 res = ''.join(res).rstrip()
 
-            elif self.task == 'seg_tag':
+            elif self.task == constants.TASK_SEGTAG:
                 res = ['{}{}'.format(
                     xi_str, 
                     (self.args.output_attr_delim+yi_str[2:]+self.args.output_token_delim) 
@@ -897,7 +924,8 @@ class DualTaggerTrainer(TaggerTrainerBase):
 
     def update_model(self):
         if (self.args.execute_mode == 'train' or
-            self.args.execute_mode == 'eval'):
+            self.args.execute_mode == 'eval' or
+            self.args.execute_mode == 'decode'):
 
             super().update_model()
             if self.su_tagger is not None:
@@ -905,37 +933,37 @@ class DualTaggerTrainer(TaggerTrainerBase):
 
 
     def setup_evaluator(self):
-        if self.task == 'dual_tag' and self.args.ignore_labels:
-            tmp = self.args.ignore_labels
-            self.args.ignore_labels = set()
+        if self.task == constants.TASK_DUAL_TAG and self.args.ignored_labels:
+            tmp = self.args.ignored_labels
+            self.args.ignored_labels = set()
 
             for label in tmp.split(','):
-                label_id = self.dic.get_pos_label_id(label)
+                label_id = self.dic.tables[constants.POS_LABEL].get_id(label)
                 if label_id >= 0:
-                    self.args.ignore_labels.add(label_id)
+                    self.args.ignored_labels.add(label_id)
 
-            self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignore_labels))
+            self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignored_labels))
 
         else:
-            self.args.ignore_labels = set()
+            self.args.ignored_labels = set()
 
-        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignore_labels)
+        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignored_labels)
 
 
     def decode_batch(self, xs, fs, orgseqs, file=sys.stdout):
-        su_sym = 'S\t' if self.args.output_data_format == 'wl' else ''
-        lu_sym = 'L\t' if self.args.output_data_format == 'wl' else ''
+        su_sym = 'S\t' if self.args.output_data_format == constants.WL_FORMAT else ''
+        lu_sym = 'L\t' if self.args.output_data_format == constants.WL_FORMAT else ''
 
         ys_short, ys_long = self.classifier.decode(xs, fs)
 
-        id2token = self.dic.tables['unigram'].id2str
-        id2label = self.dic.tables['seg_label' if 'seg' in self.task else 'pos_label'].id2str
+        id2token = self.dic.tables[constants.UNIGRAM].id2str
+        id2label = self.dic.tables[constants.SEG_LABEL if 'seg' in self.task else constants.POS_LABEL].id2str
 
         for x_str, sy, ly in zip(orgseqs, ys_short, ys_long):
             sy_str = [id2label[int(yi)] for yi in sy]
             ly_str = [id2label[int(yi)] for yi in ly]
 
-            if self.task == 'dual_tag':
+            if self.task == constants.TASK_DUAL_TAG:
                 res1 = ['{}{}{}'.format(xi_str, self.args.output_attr_delim, yi_str) 
                         for xi_str, yi_str in zip(x_str, sy_str)]
                 res1 = ' '.join(res1)
@@ -943,7 +971,7 @@ class DualTaggerTrainer(TaggerTrainerBase):
                         for xi_str, yi_str in zip(x_str, ly_str)]
                 res2 = ' '.join(res2)
 
-            elif self.task == 'dual_seg':
+            elif self.task == constants.TASK_DUAL_SEG:
                 res1 = [xi_str + self.args.output_token_delim + su_sym
                          if yi_str.startswith('E') or yi_str.startswith('S') else xi_str
                         for xi_str, yi_str in zip(x_str, ly_str)]
@@ -953,7 +981,7 @@ class DualTaggerTrainer(TaggerTrainerBase):
                         for xi_str, yi_str in zip(x_str, sy_str)]
                 res2 = ''.join(res2).rstrip('L\t\n')
 
-            elif self.task == 'dual_seg_tag':
+            elif self.task == constants.TASK_DUAL_SEGTAG:
                 res1 = ['{}{}'.format(
                     xi_str, 
                     (self.args.output_attr_delim+yi_str[2:]+self.args.output_token_delim) 
@@ -1000,12 +1028,13 @@ class ParserTrainer(Trainer):
 
     def init_hyperparameters(self, args):
         if self.external_embed_model:
-            pretrained_unigram_embed_dim = self.embed_model.wv.syn0[0].shape[0]
+            pretrained_unigram_embed_dim = self.external_embed_model.wv.syn0[0].shape[0]
         else:
             pretrained_unigram_embed_dim = 0
 
         self.hparams = {
             'pretrained_unigram_embed_dim' : pretrained_unigram_embed_dim,
+            'fix_pretrained_embed' : args.fix_pretrained_embed,
             'unigram_embed_dim' : args.unigram_embed_dim,
             'subtoken_embed_dim' : args.subtoken_embed_dim,
             'pos_embed_dim' : args.pos_embed_dim,
@@ -1013,8 +1042,8 @@ class ParserTrainer(Trainer):
             'rnn_bidirection' : args.rnn_bidirection,
             'rnn_n_layers' : args.rnn_n_layers,
             'rnn_n_units' : args.rnn_n_units,
-            'mlp4pospred_n_layers' : args.mlp4pospred_n_layers,
-            'mlp4pospred_n_units' : args.mlp4pospred_n_units,
+            # 'mlp4pospred_n_layers' : args.mlp4pospred_n_layers,
+            # 'mlp4pospred_n_units' : args.mlp4pospred_n_units,
             'mlp4arcrep_n_layers' : args.mlp4arcrep_n_layers,
             'mlp4arcrep_n_units' : args.mlp4arcrep_n_units,
             'mlp4labelrep_n_layers' : args.mlp4labelrep_n_layers,
@@ -1060,8 +1089,8 @@ class ParserTrainer(Trainer):
                     key == 'pos_embed_dim' or
                     key == 'rnn_n_layers' or
                     key == 'rnn_n_units' or
-                    key == 'mlp4pospred_n_layers' or
-                    key == 'mlp4pospred_n_units' or
+                    # key == 'mlp4pospred_n_layers' or
+                    # key == 'mlp4pospred_n_units' or
                     key == 'mlp4arcrep_n_layers' or
                     key == 'mlp4arcrep_n_units' or
                     key == 'mlp4labelrep_n_layers' or
@@ -1082,7 +1111,8 @@ class ParserTrainer(Trainer):
 
                 elif (key == 'rnn_bidirection' or
                       key == 'lowercase' or
-                      key == 'normalize_digits'
+                      key == 'normalize_digits' or
+                      key == 'fix_pretrained_embed'
                 ):
                     val = (val.lower() == 'true')
 
@@ -1098,45 +1128,45 @@ class ParserTrainer(Trainer):
         self.log('### Loaded data')
         self.log('# train: {} ... {}\n'.format(train.inputs[0][0], train.inputs[0][-1]))
         self.log('# train_gold_head: {} ... {}\n'.format(train.outputs[1][0], train.outputs[1][-1]))
-        if self.dic.has_table('arc_label'):
+        if self.dic.has_table(constants.ARC_LABEL):
             self.log('# train_gold_label: {} ... {}\n'.format(train.outputs[2][0], train.outputs[2][-1]))
-        t2i_tmp = list(self.dic.tables['unigram'].str2id.items())
+        t2i_tmp = list(self.dic.tables[constants.UNIGRAM].str2id.items())
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
 
-        if self.dic.has_table('subtoken'):
-            st2i_tmp = list(self.dic.tables['subtoken'].str2id.items())
+        if self.dic.has_table(constants.SUBTOKEN):
+            st2i_tmp = list(self.dic.tables[constants.SUBTOKEN].str2id.items())
             self.log('# subtoken2id: {} ... {}\n'.format(st2i_tmp[:10], st2i_tmp[len(st2i_tmp)-10:]))
-        if self.dic.has_table('seg_label'):
-            id2seg = {v:k for k,v in self.dic.tables['seg_label'].str2id.items()}
+        if self.dic.has_table(constants.SEG_LABEL):
+            id2seg = {v:k for k,v in self.dic.tables[constants.SEG_LABEL].str2id.items()}
             self.log('# seg labels: {}\n'.format(id2seg))
-        if self.dic.has_table('pos_label'):
-            id2pos = {v:k for k,v in self.dic.tables['pos_label'].str2id.items()}
+        if self.dic.has_table(constants.POS_LABEL):
+            id2pos = {v:k for k,v in self.dic.tables[constants.POS_LABEL].str2id.items()}
             self.log('# pos labels: {}\n'.format(id2pos))
-        if self.dic.has_table('arc_label'):
-            id2arc = {v:k for k,v in self.dic.tables['arc_label'].str2id.items()}
+        if self.dic.has_table(constants.ARC_LABEL):
+            id2arc = {v:k for k,v in self.dic.tables[constants.ARC_LABEL].str2id.items()}
             self.log('# arc labels: {}\n'.format(id2arc))
         
-        self.report('[INFO] vocab: {}'.format(len(self.dic.tables['unigram'])))
+        self.report('[INFO] vocab: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
         self.report('[INFO] data length: train={} devel={}'.format(
             len(train.inputs[0]), len(dev.inputs[0]) if dev else 0))
 
 
     def setup_evaluator(self):
-        if (self.task == 'tdep' or self.task == 'tag_tdep') and self.args.ignore_labels:
-            tmp = self.args.ignore_labels
-            self.args.ignore_labels = set()
+        if common.is_typed_parsing_task(self.task) and self.args.ignored_labels:
+            tmp = self.args.ignored_labels
+            self.args.ignored_labels = set()
 
             for label in tmp.split(','):
-                label_id = self.dic.tables['arc_label'].get_id(label)
+                label_id = self.dic.tables[constants.ARC_LABEL].get_id(label)
                 if label_id >= 0:
-                    self.args.ignore_labels.add(label_id)
+                    self.args.ignored_labels.add(label_id)
 
-            self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignore_labels))
+            self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignored_labels))
 
         else:
-            self.args.ignore_labels = set()
+            self.args.ignored_labels = set()
 
-        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignore_labels)
+        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignored_labels)
 
 
     def gen_inputs(self, data, ids, evaluate=True):
@@ -1149,7 +1179,7 @@ class ParserTrainer(Trainer):
 
         if evaluate:
             ths = [xp.asarray(data.outputs[1][j], dtype='i') for j in ids]
-            if self.task == 'tdep' or self.task == 'tag_tdep':
+            if common.is_typed_parsing_task(self.task):
                 tls = [xp.asarray(data.outputs[2][j], dtype='i') for j in ids]
                 return ws, cs, ps, ths, tls
             else:
@@ -1172,21 +1202,21 @@ class ParserTrainer(Trainer):
             self.decode_batch(ws, cs, ps, ows, ops, file=file)
         timer.stop()
 
-        print('Parsed %d sentences. Elapsed time: %.4f sec (total) / %.4f sec (ave)' % (
+        print('Parsed %d sentences. Elapsed time: %.4f sec (total) / %.4f sec (per sentence)' % (
             n_ins, timer.elapsed, timer.elapsed/n_ins), file=sys.stderr)
 
 
     def decode_batch(self, ws, cs, ps, orgseqs, orgposs, file=sys.stdout):
         use_pos = ps is not None
-        label_prediction = self.task == 'tdep'
-
+        label_prediction = common.is_typed_parsing_task(self.task)
+        
         n_ins = len(ws)
         ret = self.classifier.decode(ws, cs, ps, label_prediction)
 
         hs = ret[0]
         if label_prediction:
             ls = ret[1]
-            id2label = self.dic.tables['arc_label'].id2str
+            id2label = self.dic.tables[constants.ARC_LABEL].id2str
         else:
             ls = [None] * len(ws)
         if not use_pos:
@@ -1223,7 +1253,7 @@ class ParserTrainer(Trainer):
 
 
     def run_interactive_mode(self):
-        read_pos = 'pos_label' in self.dic.tables
+        read_pos = constants.POS_LABEL in self.dic.tables
         lowercase = self.hparams['lowercase'] if 'lowercase' in self.hparams else False
         normalize_digits = self.hparams['normalize_digits'] if 'normalize_digits' else False
         use_subtoken = ('subtoken_embed_dim' in self.hparams and self.hparams['subtoken_embed_dim'] > 0)
@@ -1253,7 +1283,7 @@ class ParserTrainer(Trainer):
 
 class AttributeAnnotatorTrainer(Trainer):
     def __init__(self, args, logger=sys.stderr):
-        args.task = 'attr'
+        args.task = constants.TASK_ATTR
         super().__init__(args, logger)
         self.label_begin_index = 2
 
@@ -1339,14 +1369,14 @@ class AttributeAnnotatorTrainer(Trainer):
         self.log('### Loaded data')
         self.log('# train: {} ... {}\n'.format(train.inputs[0][0], train.inputs[0][-1]))
         self.log('# train_gold_attr: {} ... {}\n'.format(train.outputs[1][0], train.outputs[1][-1]))
-        t2i_tmp = list(self.dic.tables['unigram'].str2id.items())
+        t2i_tmp = list(self.dic.tables[constants.UNIGRAM].str2id.items())
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
 
-        if self.dic.has_table('pos_label'):
-            id2pos = {v:k for k,v in self.dic.tables['pos_label'].str2id.items()}
+        if self.dic.has_table(constants.POS_LABEL):
+            id2pos = {v:k for k,v in self.dic.tables[constants.POS_LABEL].str2id.items()}
             self.log('# pos labels: {}\n'.format(id2pos))
         
-        self.report('[INFO] vocab: {}'.format(len(self.dic.tables['unigram'])))
+        self.report('[INFO] vocab: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
         self.report('[INFO] data length: train={} devel={}'.format(
             len(train.inputs[0]), len(dev.inputs[0]) if dev else 0))
 
@@ -1359,8 +1389,16 @@ class AttributeAnnotatorTrainer(Trainer):
 
 
     def setup_evaluator(self):
-        self.args.ignore_labels = set()
-        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignore_labels)
+        tmp = self.args.ignored_labels
+        self.args.ignored_labels = set()
+
+        for label in tmp.split(','):
+            label_id = self.dic.tables[constants.ATTR_LABEL].get_id(label)
+            if label_id >= 0:
+                self.args.ignored_labels.add(label_id)
+                
+        self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignored_labels))
+        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignored_labels)
 
 
     def setup_optimizer(self):
@@ -1390,7 +1428,7 @@ class AttributeAnnotatorTrainer(Trainer):
         self.decode_batch(ws, ps, orgseqs, orgposs, file=file)
         timer.stop()
 
-        print('Parsed %d sentences. Elapsed time: %.4f sec (total) / %.4f sec (ave)' % (
+        print('Parsed %d sentences. Elapsed time: %.4f sec (total) / %.4f sec (per sentence)' % (
             n_ins, timer.elapsed, timer.elapsed/n_ins), file=sys.stderr)
 
 
@@ -1401,7 +1439,7 @@ class AttributeAnnotatorTrainer(Trainer):
         if not use_pos:
             orgposs = [None] * len(ws)
 
-        id2label = self.dic.tables['attr_label'].id2str
+        id2label = self.dic.tables[constants.ATTR_LABEL].id2str
 
         for x_str, p_str, l in zip(orgseqs, orgposs, ls):
             l_str = [id2label[int(li)] for li in l] 
@@ -1417,6 +1455,8 @@ class AttributeAnnotatorTrainer(Trainer):
 
 
     def run_train_mode(self):
+        self.n_iter = self.args.epoch_begin
+
         # save model
         if not self.args.quiet:
             hparam_path = '{}/{}.hyp'.format(constants.MODEL_DIR, self.start_time)
@@ -1477,9 +1517,9 @@ class AttributeAnnotatorTrainer(Trainer):
         self.log('Finish: %s\n' % time)
 
 
-    def run_decode_mode(self):
+    def load_decode_data(self):
         text_path = (self.args.path_prefix if self.args.path_prefix else '') + self.args.decode_data
-        read_pos = 'pos_label' in self.dic.tables
+        read_pos = constants.POS_LABEL in self.dic.tables
         subpos_depth = self.hparams['subpos_depth'] if 'subpos_depth' in self.hparams else -1
         lowercase = self.hparams['lowercase'] if 'lowercase' in self.hparams else False
         normalize_digits = self.hparams['normalize_digits'] if 'normalize_digits' else False
@@ -1489,16 +1529,11 @@ class AttributeAnnotatorTrainer(Trainer):
             read_pos=read_pos, use_subtoken=False, subpos_depth=subpos_depth,
             lowercase=lowercase, normalize_digits=normalize_digits)
 
-        file = open(self.args.output_data_path, 'w') if self.args.output_data_path else sys.stdout
-        self.decode(rdata, file=file)
-
-        if self.args.output_data_path:
-            file.close()
+        self.decode_data = rdata
 
 
     def run_interactive_mode(self):
-        text_path = (self.args.path_prefix if self.args.path_prefix else '') + self.args.decode_data
-        read_pos = 'pos_label' in self.dic.tables
+        read_pos = constants.POS_LABEL in self.dic.tables
         subpos_depth = self.hparams['subpos_depth'] if 'subpos_depth' in self.hparams else -1
         lowercase = self.hparams['lowercase'] if 'lowercase' in self.hparams else False
         normalize_digits = self.hparams['normalize_digits'] if 'normalize_digits' else False

@@ -1,73 +1,131 @@
+import sys
 import argparse
 
+import common
 import constants
 
 
-class Arguments(object):
+class SelectiveArgumentParser(object):
     def __init__(self):
         self.parser = argparse.ArgumentParser()
-        parser = self.parser
 
-        ### used letters: bcegmopqtuvx
+        
+    def parse_args(self):
+        all_args = self.get_full_parser().parse_args()
+        min_args = self.get_minimum_parser(all_args).parse_args()
+        return min_args
 
-        # mandatory options
-        parser.add_argument('--execute_mode', '-x', required=True,
-                            help='Choose a mode from among \'train\', \'eval\', \'decode\'' 
-                            + 'and \'interactive\'')
 
-        # gpu options
+    def get_full_parser(self):
+        parser = argparse.ArgumentParser()
+
+        ### mode options
+        parser.add_argument('--execute_mode', '-x', help=
+                            'Choose a mode from among \'train\', \'eval\', \'decode\' and \'interactive\'')
+        parser.add_argument('--task', '-t', default='')
+        parser.add_argument('--quiet', '-q', action='store_true',
+                            help='Do not output log file and serialized model file')
+
+        ### gpu options
         parser.add_argument('--gpu', '-g', type=int, default=-1, help=
                             'GPU device ID (Use CPU if unspecify any values or specify a negative value)')
-        parser.add_argument('--cudnn', dest='use_cudnn', action='store_true', help='Use cuDNN')
+        parser.add_argument('--cudnn', '-c', dest='use_cudnn', action='store_true', help='Use cuDNN')
 
-        # training parameters
-        parser.add_argument('--task', '-t', default='')
-        parser.add_argument('--epoch_begin', type=int, default=1, 
-                            help='Conduct training from i-th epoch (Default: 1)')
-        parser.add_argument('--epoch_end', '-e', type=int, default=5,
-                            help='Conduct training up to i-th epoch (Default: 5)')
-        parser.add_argument('--step_size', '-s', type=int, default=10000, 
-                            help='The number of examples which'
-                            + ' trained model is evaluated and saved at each multiple of'
-                            + ' (Default: 10000)')
+        ### training parameters
+        parser.add_argument('--epoch_begin', type=int, default=1, help=
+                            'Conduct training from i-th epoch (Default: 1)')
+        parser.add_argument('--epoch_end', '-e', type=int, default=5, help=
+                            'Conduct training up to i-th epoch (Default: 5)')
+        parser.add_argument('--break_point', type=int, default=10000, help=
+                            'The number of instances which'
+                            + ' trained model is evaluated and saved at each multiple of (Default: 10000)')
         parser.add_argument('--batch_size', '-b', type=int, default=100,
                             help='The number of examples in each mini-batch (Default: 100)')
-        parser.add_argument('--grad_clip', '-c', type=float, default=5,
-                            help='Gradient norm threshold to clip')
+        parser.add_argument('--grad_clip', type=float, default=5.0,
+                            help='Gradient norm threshold to clip (Default: 5.0)')
 
-        # optimizer parameters
-        parser.add_argument('--optimizer', default='sgd',
+        ### optimizer parameters
+        parser.add_argument('--optimizer', '-o', default='sgd',
                             help='Choose optimizing algorithm from among \'sgd\', \'adam\' and \'adagrad\''
                             + ' (Default: sgd)')
         parser.add_argument('--learning_rate', type=float, default=1.0, 
                             help='Initial learning rate (Default: 1.0)')
-        parser.add_argument('--momentum', type=float, default=0.0, help='Momentum ratio for SGD')
-        parser.add_argument('--adam_alpha', type=float, default=0.001, help='alpha for Adam')
-        parser.add_argument('--adam_beta1', type=float, default=0.9, help='beta1 for Adam')
-        parser.add_argument('--adam_beta2', type=float, default=0.999, help='beta2 for Adam')
-        parser.add_argument('--lr_decay', default='', 
+        parser.add_argument('--sgd_lr_decay', default='', 
                             help='Specify information on learning rate decay'
                             + ' by format \'start:width:rate\''
                             + ' where start indicates the number of epochs to start decay,'
                             + ' width indicates the number epochs maintaining the same decayed learning rate,'
                             + ' and rate indicates the decay late to multipy privious learning late')
-        parser.add_argument('--weight_decay', type=float, default=0.0, 
+        parser.add_argument('--sgd_momentum_ratio', dest='momentum', type=float, default=0.0, 
+                            help='Momentum ratio for SGD')
+        parser.add_argument('--adam_alpha', type=float, default=0.001, help='alpha for Adam')
+        parser.add_argument('--adam_beta1', type=float, default=0.9, help='beta1 for Adam')
+        parser.add_argument('--adam_beta2', type=float, default=0.999, help='beta2 for Adam')
+        parser.add_argument('--weight_decay_ratio', type=float, default=0.0, 
                             help='Weight decay ratio (Default: 0.0)')
+        parser.add_argument('--adadelta_rho', type=float, default=0.95)
+        parser.add_argument('--rmsprop_alpha', type=float, default=0.99)
 
-        # options to resume training
-        parser.add_argument('--model_path', '-m',
-                            help='npz File path of the trained model. \'xxx.hyp\' and \'xxx.s2i\' files'
-                            + 'are also read simultaneously if you specify \'xxx_izzz.npz\' file.')
-        parser.add_argument('--dic_obj_path', 
+        ### data paths and related options
+        parser.add_argument('--model_path', '-m', default='', help=
+                            'npz/pkl file path of the trained model. \'xxx.hyp\' and \'xxx.s2i\' files'
+                            + 'are also read simultaneously if you specify \'xxx_izzz.npz/pkl\' file.')
+        parser.add_argument('--submodel_path', default='')
+        parser.add_argument('--submodel_usage', default='independent')
+        ### parser.add_argument('--dic_obj_path', help='')
+        parser.add_argument('--input_data_path_prefix', '-p', dest='path_prefix', help=
+                            'Path prefix of input data')
+        parser.add_argument('--train_data', default='',
+                            help='File path succeeding \'input_data_path_prefix\' of training data')
+        parser.add_argument('--devel_data', default='',
+                            help='File path succeeding \'input_data_path_prefix\' of development data')
+        parser.add_argument('--test_data', default='',
+                            help='File path succeeding \'input_data_path_prefix\' of test data')
+        parser.add_argument('--decode_data', default='',
+                            help='File path of input text which succeeds \'input_data_path_prefix\'')
+        # parser.add_argument('--label_reference_data', default='',
+        #                     help='File path succeeding \'input_data_path_prefix\''
+        #                     + ' of data with the same format as training data to load pre-defined labels')
+        parser.add_argument('--external_dic_path', 
+                            help='File path of external word dictionary that lists words, or words and POS')
+        parser.add_argument('--feature_template', default='',
+                            help='Use dictionary features based on given feature template file.'
+                            + ' Specify \'defualt\' to use default features defined for each task,'
+                            + ' or specify the path of castomized template file.')
+        parser.add_argument('--output_data', default='',
+                            help='File path to output parsed text')
+        # parser.add_argument('--dump_train_data', action='store_true',
+        #                     help='Dump data specified as \'train_data\''
+        #                     + ' using new file name endding with \'.pickle\'')
+        parser.add_argument('--unigram_embed_model_path', default='',
+                            help='File path of pretrained model of token (character or word) unigram embedding')
+        parser.add_argument('--fix_pretrained_embed', action='store_true',
                             help='')
+        parser.add_argument('--input_data_format', '-f', default='',
+                        help='Choose format of input data among from')
+        parser.add_argument('--output_data_format', default='')
+        parser.add_argument('--output_attribute_delimiter_sl', dest='output_attr_delim', 
+                            default=constants.SL_ATTR_DELIM)
 
-        # model parameters
+        ### options for data pre/post-processing
+        parser.add_argument('--subpos_depth', type=int, default=-1,
+                            help='Set positive integer (use POS up to i-th hierarcy)'
+                            + ' or other value (use POS with all sub POS) when set \'bccwj_seg_tag\''
+                            + ' to data_format')
+        parser.add_argument('--lowercase_alphabets',  dest='lowercase', action='store_true', help=
+                            'Lowercase alphabets in input text')
+        parser.add_argument('--normalize_digits',  action='store_true', help=
+                            'Normalize digits by the same symbol in input text')
+        parser.add_argument('--ignored_labels', default='', help='')
+
+        ### model parameters
+        # common
         parser.add_argument('--freq_threshold', type=int, default=1,
                             help='The threshold of frequency to regard tokens as unknown tokens'
                             + '(Default: 1)')
         parser.add_argument('--max_vocab_size', type=int, default=-1,
                             help='')
-        parser.add_argument('--no_freq_update', action='store_true', help='')
+        # parser.add_argument('--no_freq_update', action='store_true', help='')
         parser.add_argument('--unigram_embed_dim', type=int, default=300,
                             help='The number of dimension of token (character or word) unigram embedding'
                             + '(Default: 300)')
@@ -75,92 +133,9 @@ class Arguments(object):
                             help='The number of dimension of subtoken (usually character) embedding'
                             + '(Default: 0)')
 
-        # data paths and related options
-        parser.add_argument('--path_prefix', '-p', help='Path prefix of input data')
-        parser.add_argument('--train_data', default='',
-                            help='File path succeeding \'path_prefix\' of training data')
-        parser.add_argument('--devel_data', default='',
-                            help='File path succeeding \'path_prefix\' of development data')
-        parser.add_argument('--test_data', default='',
-                            help='File path succeeding \'path_prefix\' of test data')
-        parser.add_argument('--decode_data', default='',
-                            help='File path of input text which succeeds \'path_prefix\'')
-        # parser.add_argument('--label_reference_data', default='',
-        #                     help='File path succeeding \'path_prefix\''
-        #                     + ' of data with the same format as training data to load pre-defined labels')
-        parser.add_argument('--output_data_path', '-o', default='',
-                            help='File path to output parsed text')
-        parser.add_argument('--dump_train_data', action='store_true',
-                            help='Dump data specified as \'train_data\''
-                            + ' using new file name endding with \'.pickle\'')
-        parser.add_argument('--unigram_embed_model_path', 
-                            help='File path of pretrained model of token (character or word) unigram embedding')
-        parser.add_argument('--fix_pretrained_embed', action='store_true',
-                            help='')
-        parser.add_argument('--input_data_format', '-f', default='wl',
-                        help='Choose format of input data among from')
-        parser.add_argument('--output_data_format', default='wl')
-        parser.add_argument('--output_attribute_delimiter_sl', default=constants.SL_ATTR_DELIM)
-
-        # options for data pre/post-processing
-        parser.add_argument('--subpos_depth', type=int, default=-1,
-                            help='Set positive integer (use POS up to i-th hierarcy)'
-                            + ' or other value (use POS with all sub POS) when set \'bccwj_seg_tag\''
-                            + ' to data_format')
-        parser.add_argument('--lowercase',  action='store_true',
-                            help='Lowercase alphabets in the case of using English data')
-        parser.add_argument('--normalize_digits',  action='store_true',
-                            help='Normalize digits by the same symbol in the case of using English data')
-        parser.add_argument('--ignore_labels', default=set(),
-                            help='')
-
-        # other options
-        parser.add_argument('--quiet', '-q', action='store_true',
-                            help='Do not output log file and serialized model file')
-
-
-    def parse_arguments(self):
-        args = self.parser.parse_args()
-        if args.lr_decay:
-            self.parser.add_argument('lr_decay_start')
-            self.parser.add_argument('lr_decay_width')
-            self.parser.add_argument('lr_decay_rate')
-            array = args.lr_decay.split(':')
-            args.lr_decay_start = int(array[0])
-            args.lr_decay_width = int(array[1])
-            args.lr_decay_rate = float(array[2])
-
-        if args.execute_mode == 'interactive':
-            args.quiet = True
-
-        if args.output_data_format == 'sl':
-            self.parser.add_argument('output_attr_delim')
-            self.parser.add_argument('output_token_delim')
-            self.parser.add_argument('output_empty_line')
-            args.output_attr_delim = args.output_attribute_delimiter_sl
-            args.output_token_delim = constants.SL_TOKEN_DELIM
-            args.output_empty_line = False
-        elif args.output_data_format == 'wl':
-            self.parser.add_argument('output_attr_delim')
-            self.parser.add_argument('output_token_delim')
-            self.parser.add_argument('output_empty_line')
-            args.output_attr_delim = constants.WL_ATTR_DELIM
-            args.output_token_delim = constants.WL_TOKEN_DELIM
-            args.output_empty_line = True
-
-        return args
-
-
-class TaggerArguments(Arguments):
-    def __init__(self):
-        super().__init__()
-        parser = self.parser
-
-        # model parameters
+        # sequene tagging and parsing
         parser.add_argument('--rnn_dropout', type=float, default=0.0, 
                             help='Dropout ratio for RNN vertical layers (Default: 0.0)')
-        parser.add_argument('--mlp_dropout', type=float, default=0.0, 
-                            help='Dropout ratio for MLP (Default: 0.0)')
         parser.add_argument('--rnn_unit_type', default='lstm',
                             help='Choose unit type of RNN from among \'lstm\', \'gru\' and \'plain\''
                             + ' (Default: lstm)')
@@ -170,81 +145,352 @@ class TaggerArguments(Arguments):
                             help='The number of RNN layers (Default: 1)')
         parser.add_argument('--rnn_n_units', type=int, default=800,
                             help='The number of hidden units of RNN (Default: 800)')
+
+        # sequence tagging
+        parser.add_argument('--mlp_dropout', type=float, default=0.0, 
+                            help='Dropout ratio for MLP (Default: 0.0)')
         parser.add_argument('--mlp_n_layers', type=int, default=1, 
                             help='The number of layers of MLP (Default: 1)')
-        parser.add_argument('--mlp_n_units', type=int, default=400,
-                            help='The number of hidden units of MLP (Default: )')
-        parser.add_argument('--inference_layer', default='crf',
+        parser.add_argument('--mlp_n_units', type=int, default=300,
+                            help='The number of hidden units of MLP (Default: 300)')
+        parser.add_argument('--inference_layer_type', dest='inference_layer', default='crf',
                             help='Choose type of inference layer from between \'softmax\' and \'crf\''
                             + ' (Default: crf)')
 
-        # data paths and related options
-        parser.add_argument('--external_dic_path', 
-                            help='File path of external word dictionary that lists words, or words and POS')
-        parser.add_argument('--feature_template', default='',
-                            help='Use dictionary features based on given feature template file.'
-                            + ' Specify \'defualt\' to use default features defined for each task,'
-                            + ' or specify the path of castomized template file.')
-
-    def parse_arguments(self):
-        args = super().parse_arguments()
-
-        if args.external_dic_path and not args.feature_template:
-            args.feature_template = 'default'
-
-        return args
-
-
-class DualTaggerArguments(TaggerArguments):
-    def __init__(self):
-        super().__init__()
-        parser = self.parser
-
-        parser.add_argument('--submodel_path', help='')
-        parser.add_argument('--submodel_usage', default='independent', help='independent, concat, add')
-
-
-class ParserArguments(Arguments):
-    def __init__(self):
-        super().__init__()
-        parser = self.parser
-
-        # model parameters
-        parser.add_argument('--rnn_dropout', type=float, default=0.0, 
-                            help='Dropout ratio for RNN vertical layers (Default: 0.0)')
+        # parsing
         parser.add_argument('--hidden_mlp_dropout', type=float, default=0.0, 
                             help='Dropout ratio for MLP (Default: 0.0)')
         parser.add_argument('--pred_layers_dropout', type=float, default=0.0, 
                             help='Dropout ratio for prediction layers (Default: 0.0)')
         parser.add_argument('--pos_embed_dim', type=int, default=100,
                             help='The number of dimension of pos embedding (Default: 100)')
-        parser.add_argument('--rnn_unit_type', default='lstm',
-                            help='Choose unit type of RNN from among \'lstm\', \'gru\' and \'plain\''
-                            + ' (Default: lstm)')
-        parser.add_argument('--rnn_bidirection', action='store_true', 
-                            help='Use bidirectional RNN')
-        parser.add_argument('--rnn_n_layers', '-l', type=int, default=1, 
-                            help='The number of RNN layers (Default: 1)')
-        parser.add_argument('--rnn_n_units', type=int, default=400,
-                            help='The number of hidden units of RNN (Default: 400)')
-        parser.add_argument('--mlp4pospred_n_layers', type=int, default=0, 
-                            help='')
-        parser.add_argument('--mlp4pospred_n_units', type=int, default=200,
-                            help='')
         parser.add_argument('--mlp4arcrep_n_layers', type=int, default=1, 
                             help='')
-        parser.add_argument('--mlp4arcrep_n_units', type=int, default=200,
+        parser.add_argument('--mlp4arcrep_n_units', type=int, default=300,
                             help='')
         parser.add_argument('--mlp4labelrep_n_layers', type=int, default=1, 
                             help='')
-        parser.add_argument('--mlp4labelrep_n_units', type=int, default=200,
+        parser.add_argument('--mlp4labelrep_n_units', type=int, default=300,
                             help='')
         parser.add_argument('--mlp4labelpred_n_layers', type=int, default=1, 
                             help='')
-        parser.add_argument('--mlp4labelpred_n_units', type=int, default=200,
+        parser.add_argument('--mlp4labelpred_n_units', type=int, default=300,
                             help='')
+        # parser.add_argument('--mlp4pospred_n_layers', type=int, default=0, help='')
+        # parser.add_argument('--mlp4pospred_n_units', type=int, default=300, help='')
+
+        return parser
 
 
-class AttributeAnnotatorArguments(Arguments):
-    def __init__(self):
-        super().__init__()
+    def get_minimum_parser(self, args):
+        parser = argparse.ArgumentParser()
+
+        # common options
+        self.add_common_options(parser, args)
+
+        # task dependent options
+        if (common.is_single_st_task(args.task) or 
+            common.is_dual_st_task(args.task) or
+            common.is_parsing_task(args.task)):
+            self.add_gpu_options(parser, args)
+
+        elif common.is_attribute_annotation_task(args.task):
+            pass
+        else:
+            print('Error: invalid task name: {}'.format(args.task), file=sys.stderr)
+            sys.exit()
+
+        self.add_task_dependent_options(parser, args)
+
+        # mode dependent options
+        if args.execute_mode == 'train':
+            self.add_train_mode_options(parser, args)
+        elif args.execute_mode == 'eval':
+            self.add_eval_mode_options(parser, args)
+        elif args.execute_mode == 'decode':
+            self.add_decode_mode_options(parser, args)
+        elif args.execute_mode == 'interactive':
+            self.add_interactive_mode_options(parser, args)
+        else:
+            print('Error: invalid execute mode: {}'.format(args.execute_mode), file=sys.stderr)
+            sys.exit()
+
+        return parser
+
+
+    def add_common_options(self, parser, args):
+        # mode options
+        parser.add_argument('--execute_mode', '-x', required=True, default=args.execute_mode)
+        if args.model_path:
+            parser.add_argument('--task', '-t', default=args.task)
+        else:
+            parser.add_argument('--task', '-t', required=True, default=args.task)
+        parser.add_argument('--quiet', '-q', action='store_true', default=args.quiet)
+
+        # options for data pre/post-processing
+        parser.add_argument('--lowercase_alphabets',  dest='lowercase', action='store_true',
+                                 default=args.lowercase)
+        parser.add_argument('--normalize_digits',  action='store_true', default=args.normalize_digits)
+
+        # model parameters
+        parser.add_argument('--freq_threshold', type=int, default=args.freq_threshold)
+        parser.add_argument('--max_vocab_size', type=int, default=args.max_vocab_size)
+
+
+    def add_gpu_options(self, parser, args):
+        # gpu options
+        parser.add_argument('--gpu', '-g', type=int, default=args.gpu)
+        parser.add_argument('--cudnn', '-c', dest='use_cudnn', action='store_true', default=args.use_cudnn)
+
+
+    def add_train_mode_options(self, parser, args):
+        # training parameters
+        parser.add_argument('--epoch_begin', type=int, default=args.epoch_begin)
+        parser.add_argument('--epoch_end', '-e', type=int, default=args.epoch_end)
+        parser.add_argument('--break_point', type=int, default=args.break_point)
+        parser.add_argument('--batch_size', '-b', type=int, default=args.batch_size)
+        parser.add_argument('--ignored_labels', default=args.ignored_labels)
+
+        # data paths and related options
+        parser.add_argument('--model_path', '-m', default=args.model_path)
+        parser.add_argument('--input_data_path_prefix', '-p', dest='path_prefix', default=args.path_prefix)
+        parser.add_argument('--train_data', required=True, default=args.train_data)
+        parser.add_argument('--devel_data', default=args.devel_data)
+        self.add_input_data_format_option(parser, args)
+
+
+        # optimizer parameters
+        parser.add_argument('--grad_clip', type=float, default=args.grad_clip)
+        parser.add_argument('--weight_decay_ratio', type=float, default=args.weight_decay_ratio)
+        parser.add_argument('--optimizer', '-o', default=args.optimizer)
+
+        if args.optimizer == 'sgd':
+            self.add_sgd_options(parser, args)
+        elif args.optimizer == 'adam':
+            self.add_adam_options(parser, args)
+        elif args.optimizer == 'adagrad':
+            self.add_adagrad_options(parser, args)
+        elif args.optimizer == 'adadelta':
+            self.add_adadelta_options(parser, args)
+        elif args.optimizer == 'rmsprop':
+            self.add_rmsprop_options(parser, args)
+        else:
+            print('Error: invalid optimizer name: {}'.format(args.optimizer), file=sys.stderr)
+            sys.exit()
+
+
+    def add_eval_mode_options(self, parser, args):
+        # evaluation parameters
+        parser.add_argument('--batch_size', '-b', type=int, default=args.batch_size)
+        parser.add_argument('--ignored_labels', default=args.ignored_labels)
+
+        # data paths and related options
+        parser.add_argument('--model_path', '-m', required=True, default=args.model_path)
+        parser.add_argument('--input_data_path_prefix', '-p', dest='path_prefix', default=args.path_prefix)
+        parser.add_argument('--test_data', required=True, default=args.test_data)
+        self.add_input_data_format_option(parser, args)
+
+
+    def add_decode_mode_options(self, parser, args):
+        # decoding parameters
+        parser.add_argument('--batch_size', '-b', type=int, default=args.batch_size)
+
+        # data paths and related options
+        parser.add_argument('--model_path', '-m', required=True, default=args.model_path)
+        parser.add_argument('--input_data_path_prefix', '-p', dest='path_prefix', default=args.path_prefix)
+        parser.add_argument('--decode_data', required=True, default=args.decode_data)
+        parser.add_argument('--output_data', '-o', default=args.output_data)
+        self.add_input_data_format_option(parser, args)
+        self.add_output_data_format_options(parser, args)
+
+
+    def add_interactive_mode_options(self, parser, args):
+        parser.add_argument('--model_path', '-m', required=True, default=args.model_path)
+        self.add_output_data_format_options(parser, args)
+
+
+
+    def add_input_data_format_option(self, parser, args):
+        if args.execute_mode == 'train' or args.execute_mode == 'eval':
+            if common.is_single_st_task(args.task) or common.is_dual_st_task(args.task):
+                if args.input_data_format == 'sl' or args.input_data_format == 'wl':
+                    parser.add_argument('--input_data_format', '-f', default=args.input_data_format)
+
+                else:
+                    print('Error: input data format for task={}/mode={}' .format(args.task, args.execute_mode)
+                          + ' must be specified among from {sl, wl}.'
+                          + ' Input: {}'.format(args.input_data_format), file=sys.stderr)
+                    sys.exit()
+                    
+            else:
+                if args.input_data_format == 'wl':
+                    parser.add_argument('--input_data_format', '-f', default=args.input_data_format)
+
+                elif not args.input_data_format:
+                    parser.add_argument('--input_data_format', '-f', default='wl')
+
+                else:
+                    print('Error: input data format for task={}/mode={}' .format(args.task, args.execute_mode)
+                          + ' must be specified among from {wl}.'
+                          + ' Input: {}'.format(args.input_data_format), file=sys.stderr)
+                    sys.exit()
+
+        else:                   # decode
+            if common.is_segmentation_task(args.task):
+                pass
+
+            elif args.task == constants.TASK_TAG or args.task == constants.TASK_DUAL_TAG:
+                if args.input_data_format == 'sl' or args.input_data_format == 'wl':
+                    parser.add_argument('--input_data_format', '-f', default=args.input_data_format)
+
+                else:
+                    print('Error: input data format for task={}/mode={}' .format(args.task, args.execute_mode)
+                          + ' must be specified among from {wl}.'
+                          + ' Input: {}'.format(args.input_data_format), file=sys.stderr)
+                    sys.exit()
+                
+            else:               # dep, tdep, attr
+                if args.input_data_format == 'sl' or args.input_data_format == 'wl':
+                    parser.add_argument('--input_data_format', '-f', default=args.input_data_format)
+
+                elif not args.input_data_format:
+                    parser.add_argument('--input_data_format', '-f', default='wl')
+
+                else:
+                    print('Error: input data format for task={}/mode={}' .format(args.task, args.execute_mode)
+                          + ' must be specified among from {sl, wl}.'
+                          + ' Input: {}'.format(args.input_data_format), file=sys.stderr)
+                    sys.exit()
+            
+
+    def add_output_data_format_options(self, parser, args):
+        if args.output_data_format == 'sl':
+            parser.add_argument('--output_data_format', default=args.output_data_format)
+            parser.add_argument('--output_attribute_delimiter_sl', dest='output_attr_delim', 
+                                default=args.output_attr_delim)
+            parser.add_argument('--output_token_delim', default=constants.SL_TOKEN_DELIM)
+            parser.add_argument('--output_empty_line', default=False)
+
+        elif args.output_data_format == 'wl':
+            parser.add_argument('--output_data_format', default=args.output_data_format)
+            parser.add_argument('--output_attr_delim', default=constants.WL_ATTR_DELIM)
+            parser.add_argument('--output_token_delim', default=constants.WL_TOKEN_DELIM)
+            parser.add_argument('--output_empty_line', default=True)
+            
+        elif not args.output_data_format:
+            parser.add_argument('--output_data_format', default='wl')
+
+        else:
+            print('Error: output data format for task={}/mode={}' .format(args.task, args.execute_mode)
+                  + ' must be specified among from {sl, wl}.'
+                  + ' Output: {}'.format(args.output_data_format), file=sys.stderr)
+            sys.exit()
+                
+
+    def add_sgd_options(self, parser, args):
+        parser.add_argument('--learning_rate', type=float, default=args.learning_rate)
+        parser.add_argument('--sgd_lr_decay', default=args.sgd_lr_decay)
+        parser.add_argument('--sgd_momentum_ratio', dest='momentum', type=float, default=args.momentum)
+
+        if args.sgd_lr_decay:
+            array = args.sgd_lr_decay.split(':')
+            start = int(array[0])
+            width = int(array[1])
+            rate = float(array[2])
+            parser.add_argument('--sgd_lr_decay_start', type=int, default=start)
+            parser.add_argument('--sgd_lr_decay_width', type=int, default=width)
+            parser.add_argument('--sgd_lr_decay_rate', type=float, default=rate)
+
+    def add_adam_options(self, parser, args):
+        parser.add_argument('--adam_alpha', type=float, default=args.adam_alpha)
+        parser.add_argument('--adam_beta1', type=float, default=args.adam_beta1)
+        parser.add_argument('--adam_beta2', type=float, default=args.adam_beta2)
+
+        
+    def add_adadelta_options(self, parser, args):
+        parser.add_argument('--adadelta_rho', type=float, default=args.adadelta_rho)
+
+
+    def add_adagrad_options(self, parser, args):
+        parser.add_argument('--learning_rate', type=float, default=args.learning_rate)
+
+
+    def add_rmsprop_options(self, parser, args):
+        parser.add_argument('--learning_rate', type=float, default=args.learning_rate)
+        parser.add_argument('--rmsprop_alpha', type=float, default=args.rmsprop_alpha)
+
+
+    def add_task_dependent_options(self, parser, args):
+        train = args.execute_mode == 'train'
+        if train:
+            # parser.add_argument('--dump_train_data', default=args.dump_train_data)
+            pass
+
+        if (common.is_tagging_task(args.task) or
+            common.is_parsing_task(args.task) or
+            common.is_attribute_annotation_task(args.task)):
+            if train:
+                parser.add_argument('--subpos_depth', type=int, default=args.subpos_depth)
+        else:
+            if train:
+                parser.add_argument('--subpos_depth', type=int, default=-1)
+
+        if common.is_attribute_annotation_task(args.task):
+            pass
+
+        elif common.is_dual_st_task(args.task):
+            parser.add_argument('--unigram_embed_model_path', default=args.unigram_embed_model_path)
+
+            if train:
+                parser.add_argument('--submodel_path', default=args.submodel_path)
+                parser.add_argument('--submodel_usage', default=args.submodel_usage)
+
+            parser.add_argument('--rnn_dropout', type=float, default=args.rnn_dropout)
+            parser.add_argument('--mlp_dropout', type=float, default=args.mlp_dropout)
+
+        else:
+            parser.add_argument('--unigram_embed_model_path', default=args.unigram_embed_model_path)
+
+            if train:
+                parser.add_argument('--fix_pretrained_embed', action='store_true')
+                parser.add_argument('--unigram_embed_dim', type=int, default=args.unigram_embed_dim)
+                parser.add_argument('--subtoken_embed_dim', type=int, default=args.subtoken_embed_dim)
+                parser.add_argument('--rnn_unit_type', default=args.rnn_unit_type)
+                parser.add_argument('--rnn_bidirection', action='store_true', default=args.rnn_bidirection)
+                parser.add_argument('--rnn_n_layers', '-l', type=int, default=args.rnn_n_layers)
+                parser.add_argument('--rnn_n_units', type=int, default=args.rnn_n_units)
+
+            parser.add_argument('--rnn_dropout', type=float, default=args.rnn_dropout)
+
+            if common.is_single_st_task(args.task):
+                parser.add_argument('--mlp_dropout', type=float, default=args.mlp_dropout)
+                parser.add_argument('--mlp_n_layers', type=int, default=args.mlp_n_layers)
+                parser.add_argument('--mlp_n_units', type=int, default=args.mlp_n_units)
+                parser.add_argument('--inference_layer_type', dest='inference_layer', 
+                                         default=args.inference_layer)
+
+            if common.is_segmentation_task(args.task):
+                if train:
+                    parser.add_argument('--external_dic_path', default=args.external_dic_path)
+                    parser.add_argument('--feature_template', default=args.feature_template)
+                    if args.external_dic_path and not args.feature_template:
+                        print('Warning: loaded external dictionary is not used unless specify feature_template', 
+                              file=sys.stderr)
+
+            else:
+                if common.is_tagging_task(args.task):
+                    parser.add_argument('--external_dic_path', default='')
+                    parser.add_argument('--feature_template', default='')
+
+                
+
+            if common.is_parsing_task(args.task):
+                parser.add_argument('--pos_embed_dim', type=int, default=args.pos_embed_dim)
+                parser.add_argument('--mlp4arcrep_n_layers', type=int,   default=args.mlp4arcrep_n_layers)
+                parser.add_argument('--mlp4arcrep_n_units', type=int,    default=args.mlp4arcrep_n_units)
+                parser.add_argument('--mlp4labelrep_n_layers', type=int, default=args.mlp4labelrep_n_layers)
+                parser.add_argument('--mlp4labelrep_n_units', type=int,  default=args.mlp4labelrep_n_units)
+                parser.add_argument('--mlp4labelpred_n_layers', type=int, default=args.mlp4labelpred_n_layers)
+                parser.add_argument('--mlp4labelpred_n_units', type=int, default=args.mlp4labelpred_n_units)
+                parser.add_argument('--hidden_mlp_dropout', type=float,  default=args.hidden_mlp_dropout) 
+                parser.add_argument('--pred_layers_dropout', type=float, default=args.pred_layers_dropout) 
