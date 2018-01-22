@@ -22,13 +22,15 @@ class SelectiveArgumentParser(object):
         ### mode options
         parser.add_argument('--execute_mode', '-x', help=
                             'Choose a mode from among \'train\', \'eval\', \'decode\' and \'interactive\'')
-        parser.add_argument('--task', '-t', default='')
+        parser.add_argument('--task', '-t', help=
+                            'Choose a task from among \'seg\', \'segtag\', \'tag\', \'dual_seg\', '
+                            + '\'dual_segtag\', \'dual_tag\', \'dep\', \'tdep\' and \'attr\'')
         parser.add_argument('--quiet', '-q', action='store_true',
                             help='Do not output log file and serialized model file')
 
         ### gpu options
         parser.add_argument('--gpu', '-g', type=int, default=-1, help=
-                            'GPU device ID (Use CPU if unspecify any values or specify a negative value)')
+                            'GPU device ID (Use CPU if specify a negative value)')
         parser.add_argument('--cudnn', '-c', dest='use_cudnn', action='store_true', help='Use cuDNN')
 
         ### training parameters
@@ -39,143 +41,161 @@ class SelectiveArgumentParser(object):
         parser.add_argument('--break_point', type=int, default=10000, help=
                             'The number of instances which'
                             + ' trained model is evaluated and saved at each multiple of (Default: 10000)')
-        parser.add_argument('--batch_size', '-b', type=int, default=100,
-                            help='The number of examples in each mini-batch (Default: 100)')
-        parser.add_argument('--grad_clip', type=float, default=5.0,
-                            help='Gradient norm threshold to clip (Default: 5.0)')
+        parser.add_argument('--batch_size', '-b', type=int, default=100, help=
+                            'The number of examples in each mini-batch (Default: 100)')
+        parser.add_argument('--grad_clip', type=float, default=5.0, help=
+                            'Gradient norm threshold to clip (Default: 5.0)')
+        parser.add_argument('--weight_decay_ratio', type=float, default=0.0, help=
+                            'Weight decay ratio (Default: 0.0)')
 
         ### optimizer parameters
-        parser.add_argument('--optimizer', '-o', default='sgd',
-                            help='Choose optimizing algorithm from among \'sgd\', \'adam\' and \'adagrad\''
-                            + ' (Default: sgd)')
-        parser.add_argument('--learning_rate', type=float, default=1.0, 
-                            help='Initial learning rate (Default: 1.0)')
-        parser.add_argument('--sgd_lr_decay', default='', 
-                            help='Specify information on learning rate decay'
+        parser.add_argument('--optimizer', '-o', default='sgd', help=
+                            'Choose optimizing algorithm from among '
+                            + '\'sgd\', \'adam\' and \'adagrad\', \'adadelta\' and \'rmsprop\' (Default: sgd)')
+        parser.add_argument('--learning_rate', type=float, default=1.0, help=
+                            'Initial learning rate for SGD or AdaGrad (Default: 1.0)')
+        parser.add_argument('--sgd_lr_decay', default='', help=
+                            'Specify conditions on learning rate decay for SGD'
                             + ' by format \'start:width:rate\''
                             + ' where start indicates the number of epochs to start decay,'
                             + ' width indicates the number epochs maintaining the same decayed learning rate,'
                             + ' and rate indicates the decay late to multipy privious learning late')
-        parser.add_argument('--sgd_momentum_ratio', dest='momentum', type=float, default=0.0, 
-                            help='Momentum ratio for SGD')
-        parser.add_argument('--adam_alpha', type=float, default=0.001, help='alpha for Adam')
-        parser.add_argument('--adam_beta1', type=float, default=0.9, help='beta1 for Adam')
-        parser.add_argument('--adam_beta2', type=float, default=0.999, help='beta2 for Adam')
-        parser.add_argument('--weight_decay_ratio', type=float, default=0.0, 
-                            help='Weight decay ratio (Default: 0.0)')
-        parser.add_argument('--adadelta_rho', type=float, default=0.95)
-        parser.add_argument('--rmsprop_alpha', type=float, default=0.99)
+        parser.add_argument('--sgd_momentum_ratio', dest='momentum', type=float, default=0.0, help=
+                            'Momentum ratio for SGD (Default: 0.0)')
+        parser.add_argument('--adam_alpha', type=float, default=0.001, help='alpha for Adam (Default: 0.001)')
+        parser.add_argument('--adam_beta1', type=float, default=0.9, help='beta1 for Adam (Default: 0.9)')
+        parser.add_argument('--adam_beta2', type=float, default=0.999, help='beta2 for Adam (Default: 0.999)')
+        parser.add_argument('--adadelta_rho', type=float, default=0.95, help='rho for AdaDelta (Default: 0.95)')
+        parser.add_argument('--rmsprop_alpha', type=float, default=0.99, help=
+                            'alpha for RMSprop (Default: 0.99)')
 
         ### data paths and related options
         parser.add_argument('--model_path', '-m', default='', help=
                             'npz/pkl file path of the trained model. \'xxx.hyp\' and \'xxx.s2i\' files'
-                            + 'are also read simultaneously if you specify \'xxx_izzz.npz/pkl\' file.')
-        parser.add_argument('--submodel_path', default='')
+                            + 'are also read simultaneously when you specify \'xxx_izzz.npz/pkl\' file')
+
+        parser.add_argument('--submodel_path', default='', help=
+                            'npz file path of the trained short unit model that is necessary '
+                            + 'when train new long unit model for dual_seg/dual_segtag/dual_tag task. '
+                            + '\'xxx.hyp\' and \'xxx.s2i\' files are also read simultaneously '
+                            + 'when you specify \'xxx_izzz.npz/pkl\' file.')
         parser.add_argument('--submodel_usage', default='independent')
         ### parser.add_argument('--dic_obj_path', help='')
         parser.add_argument('--input_data_path_prefix', '-p', dest='path_prefix', help=
                             'Path prefix of input data')
-        parser.add_argument('--train_data', default='',
-                            help='File path succeeding \'input_data_path_prefix\' of training data')
-        parser.add_argument('--devel_data', default='',
-                            help='File path succeeding \'input_data_path_prefix\' of development data')
-        parser.add_argument('--test_data', default='',
-                            help='File path succeeding \'input_data_path_prefix\' of test data')
-        parser.add_argument('--decode_data', default='',
-                            help='File path of input text which succeeds \'input_data_path_prefix\'')
+        parser.add_argument('--train_data', default='', help=
+                            'File path succeeding \'input_data_path_prefix\' of training data')
+        parser.add_argument('--devel_data', default='', help=
+                            'File path succeeding \'input_data_path_prefix\' of development data')
+        parser.add_argument('--test_data', default='', help=
+                            'File path succeeding \'input_data_path_prefix\' of test data')
+        parser.add_argument('--decode_data', default='', help=
+                            'File path of input text which succeeds \'input_data_path_prefix\'')
         # parser.add_argument('--label_reference_data', default='',
         #                     help='File path succeeding \'input_data_path_prefix\''
         #                     + ' of data with the same format as training data to load pre-defined labels')
-        parser.add_argument('--external_dic_path', 
-                            help='File path of external word dictionary that lists words, or words and POS')
-        parser.add_argument('--feature_template', default='',
-                            help='Use dictionary features based on given feature template file.'
-                            + ' Specify \'defualt\' to use default features defined for each task,'
-                            + ' or specify the path of castomized template file.')
-        parser.add_argument('--output_data', default='',
-                            help='File path to output parsed text')
+        parser.add_argument('--external_dic_path', help=
+                            'File path of external word dictionary listing known words')
+        parser.add_argument('--feature_template', default='', help=
+                            'Use dictionary features based on given feature template file. '
+                            + 'Specify \'defualt\' to use default features '
+                            + 'or specify the path of castomized template file')
+        parser.add_argument('--output_data', default='', help=
+                            'File path to output parsed text')
         # parser.add_argument('--dump_train_data', action='store_true',
         #                     help='Dump data specified as \'train_data\''
         #                     + ' using new file name endding with \'.pickle\'')
-        parser.add_argument('--unigram_embed_model_path', default='',
-                            help='File path of pretrained model of token (character or word) unigram embedding')
-        parser.add_argument('--fix_pretrained_embed', action='store_true',
-                            help='')
-        parser.add_argument('--input_data_format', '-f', default='',
-                        help='Choose format of input data among from')
-        parser.add_argument('--output_data_format', default='')
+        parser.add_argument('--unigram_embed_model_path', default='', help=
+                            'File path of pretrained model of token (character or word) unigram embedding')
+        parser.add_argument('--fix_pretrained_embed', action='store_true', help=
+                            'Fix paramerters of pretrained token unigram embedding duaring training')
+        parser.add_argument('--input_data_format', '-f', default='', help=
+                            'Choose format of input data among from \'wl\' and \'sl\'')
+        parser.add_argument('--output_data_format', default='', help=
+                            'Choose format of output data among from \'wl\' and \'sl\'')
         parser.add_argument('--output_attribute_delimiter_sl', dest='output_attr_delim', 
-                            default=constants.SL_ATTR_DELIM)
+                            default=constants.SL_ATTR_DELIM, help=
+                            'Specify delimiter symbol between attributes (word, pos etc.) for SL format '
+                            + 'when output analysis results on decode/interactive mode (Default \'/\')')
 
         ### options for data pre/post-processing
-        parser.add_argument('--subpos_depth', type=int, default=-1,
-                            help='Set positive integer (use POS up to i-th hierarcy)'
-                            + ' or other value (use POS with all sub POS) when set \'bccwj_seg_tag\''
-                            + ' to data_format')
+        parser.add_argument('--subpos_depth', type=int, default=-1, help=
+                            'Set positive integer (use POS up to i-th hierarcy), or '
+                            + '0 or negative value (use all sub-POS). '
+                            + 'POS hierarchy must be indicated by \'-\' like \'NOUN-GENERAL\'')
         parser.add_argument('--lowercase_alphabets',  dest='lowercase', action='store_true', help=
                             'Lowercase alphabets in input text')
         parser.add_argument('--normalize_digits',  action='store_true', help=
                             'Normalize digits by the same symbol in input text')
-        parser.add_argument('--ignored_labels', default='', help='')
+        parser.add_argument('--ignored_labels', default='', help=''
+                            'Sepecify labels to be ignored on evaluation '
+                            + 'by format \'label_1,label_2,...,label_N\'')
 
         ### model parameters
         # common
-        parser.add_argument('--freq_threshold', type=int, default=1,
-                            help='The threshold of frequency to regard tokens as unknown tokens'
-                            + '(Default: 1)')
-        parser.add_argument('--max_vocab_size', type=int, default=-1,
-                            help='')
+        parser.add_argument('--freq_threshold', type=int, default=1, help=
+                            'Token frequency threshold. Tokens whose frequency are lower than'
+                            + 'the the threshold are regarded as unknown tokens (Default: 1)')
+        parser.add_argument('--max_vocab_size', type=int, default=-1, help=
+                            'Maximum vocaburaly size. '
+                            + 'low frequency tokens are regarded as unknown tokens so that '
+                            + 'vocaburaly size does not exceed the specified size so much '
+                            + 'if set positive value (Default: -1)')
         # parser.add_argument('--no_freq_update', action='store_true', help='')
-        parser.add_argument('--unigram_embed_dim', type=int, default=300,
-                            help='The number of dimension of token (character or word) unigram embedding'
+        parser.add_argument('--unigram_embed_dim', type=int, default=300, help=
+                            'The number of dimension of token (character or word) unigram embedding'
                             + '(Default: 300)')
-        parser.add_argument('--subtoken_embed_dim', type=int, default=0,
-                            help='The number of dimension of subtoken (usually character) embedding'
-                            + '(Default: 0)')
+        parser.add_argument('--subtoken_embed_dim', type=int, default=0, help=
+                            'The number of dimension of subtoken (usually character) embedding (Default: 0)')
 
         # sequene tagging and parsing
-        parser.add_argument('--rnn_dropout', type=float, default=0.0, 
-                            help='Dropout ratio for RNN vertical layers (Default: 0.0)')
-        parser.add_argument('--rnn_unit_type', default='lstm',
-                            help='Choose unit type of RNN from among \'lstm\', \'gru\' and \'plain\''
-                            + ' (Default: lstm)')
-        parser.add_argument('--rnn_bidirection', action='store_true', 
-                            help='Use bidirectional RNN')
-        parser.add_argument('--rnn_n_layers', type=int, default=1, 
-                            help='The number of RNN layers (Default: 1)')
-        parser.add_argument('--rnn_n_units', type=int, default=800,
-                            help='The number of hidden units of RNN (Default: 800)')
+        parser.add_argument('--rnn_dropout', type=float, default=0.0, help=
+                            'Dropout ratio for RNN vertical layers (Default: 0.0)')
+        parser.add_argument('--rnn_unit_type', default='lstm', help=
+                            'Choose unit type of RNN from among \'lstm\', \'gru\' and \'plain\' (Default: lstm)')
+        parser.add_argument('--rnn_bidirection', action='store_true', help='Use bidirectional RNN')
+        parser.add_argument('--rnn_n_layers', type=int, default=1, help=
+                            'The number of RNN layers (Default: 1)')
+        parser.add_argument('--rnn_n_units', type=int, default=800, help=
+                            'The number of hidden units of RNN (Default: 800)')
 
         # sequence tagging
-        parser.add_argument('--mlp_dropout', type=float, default=0.0, 
-                            help='Dropout ratio for MLP (Default: 0.0)')
-        parser.add_argument('--mlp_n_layers', type=int, default=1, 
-                            help='The number of layers of MLP (Default: 1)')
-        parser.add_argument('--mlp_n_units', type=int, default=300,
-                            help='The number of hidden units of MLP (Default: 300)')
-        parser.add_argument('--inference_layer_type', dest='inference_layer', default='crf',
-                            help='Choose type of inference layer from between \'softmax\' and \'crf\''
-                            + ' (Default: crf)')
+        parser.add_argument('--mlp_dropout', type=float, default=0.0, help=
+                            'Dropout ratio for MLP of sequence tagging model (Default: 0.0)')
+        parser.add_argument('--mlp_n_layers', type=int, default=1, help=
+                            'The number of layers of MLP of sequence tagging model (Default: 1)')
+        parser.add_argument('--mlp_n_units', type=int, default=300, help=
+                            'The number of hidden units of MLP of sequence tagging model (Default: 300)')
+        parser.add_argument('--inference_layer_type', dest='inference_layer', default='crf', help=
+                            'Choose type of inference layer for sequence tagging model from between '
+                            + '\'softmax\' and \'crf\' (Default: crf)')
 
         # parsing
-        parser.add_argument('--hidden_mlp_dropout', type=float, default=0.0, 
-                            help='Dropout ratio for MLP (Default: 0.0)')
-        parser.add_argument('--pred_layers_dropout', type=float, default=0.0, 
-                            help='Dropout ratio for prediction layers (Default: 0.0)')
-        parser.add_argument('--pos_embed_dim', type=int, default=100,
-                            help='The number of dimension of pos embedding (Default: 100)')
-        parser.add_argument('--mlp4arcrep_n_layers', type=int, default=1, 
-                            help='')
-        parser.add_argument('--mlp4arcrep_n_units', type=int, default=300,
-                            help='')
-        parser.add_argument('--mlp4labelrep_n_layers', type=int, default=1, 
-                            help='')
-        parser.add_argument('--mlp4labelrep_n_units', type=int, default=300,
-                            help='')
-        parser.add_argument('--mlp4labelpred_n_layers', type=int, default=1, 
-                            help='')
-        parser.add_argument('--mlp4labelpred_n_units', type=int, default=300,
-                            help='')
+        parser.add_argument('--hidden_mlp_dropout', type=float, default=0.0, help=
+                            'Dropout ratio for MLP of parsing model (Default: 0.0)')
+        parser.add_argument('--pred_layers_dropout', type=float, default=0.0, help=
+                            'Dropout ratio for prediction layers of parsing model (Default: 0.0)')
+        parser.add_argument('--pos_embed_dim', type=int, default=100, help=
+                            'The number of dimension of pos embedding of parsing model (Default: 100)')
+        parser.add_argument('--mlp4arcrep_n_layers', type=int, default=1, help=
+                            'The number of layers of MLP of parsing model for arc representation '
+                            + '(Defualt: 1)')
+        parser.add_argument('--mlp4arcrep_n_units', type=int, default=300, help=
+                            'The number of hidden units of MLP of parsing model for arc representation '
+                            + '(Defualt: 300)')
+        parser.add_argument('--mlp4labelrep_n_layers', type=int, default=1, help=
+                            'The number of layers of MLP of parsing model for label representation '
+                            + '(Defualt: 1)')
+        parser.add_argument('--mlp4labelrep_n_units', type=int, default=300, help=
+                            'The number of hidden units of MLP of parsing model for arc representation '
+                            + '(Defualt: 300)')
+        parser.add_argument('--mlp4labelpred_n_layers', type=int, default=1, help=
+                            'The number of layers of MLP of parsing model for label prediction '
+                            + '(Defualt: 1)')
+        parser.add_argument('--mlp4labelpred_n_units', type=int, default=300, help=
+                            'The number of hidden units of MLP of parsing model for label prediction '
+                            + '(Defualt: 300)')
+
         # parser.add_argument('--mlp4pospred_n_layers', type=int, default=0, help='')
         # parser.add_argument('--mlp4pospred_n_units', type=int, default=300, help='')
 

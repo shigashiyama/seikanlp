@@ -45,7 +45,7 @@ def run(process_name):
     ################################
     # Prepare GPU
     use_gpu = 'gpu' in args and args.gpu >= 0
-    if process_name != 'attrribute_annotation' and use_gpu:
+    if use_gpu:                 # TODO confirm
         # Make the specified GPU current
         cuda.get_device_from_id(args.gpu).use()
         chainer.config.cudnn_deterministic = args.use_cudnn
@@ -57,29 +57,29 @@ def run(process_name):
         trainer.load_external_embedding_model(args.unigram_embed_model_path)
 
     ################################
-    # Load feature extractor and classifier model
+    # Load classifier model
 
     if args.model_path:
         trainer.load_model(args.model_path)
 
-    elif process_name == 'dual_tagging':
+    elif 'submodel_path' in args: # TODO confirm
         if args.submodel_path:
             trainer.load_submodel(args.submodel_path)
             trainer.init_hyperparameters(args)
         else:
-            print('Error: model_path or sub_model_path must be specified for dual sequence tagging.')
+            print('Error: model_path or sub_model_path must be specified for {}'.format(args.task))
             sys.exit()
 
     else:
         # if args.dic_obj_path:
         #     trainer.load_dic(args.dic_obj_path)
         trainer.init_hyperparameters(args)
-    trainer.init_feat_extractor(use_gpu=use_gpu)
 
     ################################
-    # Initialize dic of strings from external dictionary
-
-    if process_name == 'tagging':
+    # Setup feature extractor and initialize dic from external dictionary
+    
+    trainer.init_feat_extractor(use_gpu=use_gpu)
+    if 'external_dic_path' in args: #TODO confirm
         trainer.load_external_dictionary()
 
     ################################
