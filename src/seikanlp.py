@@ -7,12 +7,13 @@ import argparse
 import chainer
 from chainer import cuda
 
+import common
 import constants
 import arguments
 import trainers
 
 
-def run(process_name):
+def run():
     if int(chainer.__version__[0]) < 3:
         print("chainer version>=3.0.0 is required.")
         sys.exit()
@@ -30,17 +31,14 @@ def run(process_name):
 
     args = arguments.SelectiveArgumentParser().parse_args()
 
-    if process_name == 'tagging':
+    if common.is_single_st_task(args.task):
         trainer = trainers.TaggerTrainer(args)
-    elif process_name == 'dual_tagging':
+    elif common.is_dual_st_task(args.task):
         trainer = trainers.DualTaggerTrainer(args)
-    elif process_name == 'parsing':
+    elif common.is_parsing_task(args.task):
         trainer = trainers.ParserTrainer(args)
-    elif process_name == 'attribute_annotation':
+    elif common.is_attribute_annotation_task(args.task):
         trainer = trainers.AttributeAnnotatorTrainer(args)
-    else:
-        print('Error: invalid process name: {}'.format(process_name), file=sys.stderr)
-        sys.exit()
 
     ################################
     # Prepare GPU
