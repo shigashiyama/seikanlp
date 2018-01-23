@@ -11,7 +11,7 @@ TASK_DUAL_TAG = 'dual_tag'
 TASK_DUAL_SEGTAG = 'dual_segtag'
 TASK_DEP = 'dep'
 TASK_TDEP = 'tdep'
-TASK_ATTR = 'attr'
+TASK_ATTR = 'sematt'
 
 ### for analyzer
 
@@ -33,7 +33,7 @@ WORD_CLM_TXT    = '#WORD_COLUMN'
 POS_CLM_TXT     = '#POS_COLUMN'
 HEAD_CLM_TXT    = '#HEAD_COLUMN'
 ARC_CLM_TXT     = '#ARC_COLUMN'
-ATTR_CLM_TXT    = '#ATTR_COLUMN'
+ATTR_CLM_TXT    = '#SEMATT_COLUMN'
 
 SL_FORMAT = 'sl'
 WL_FORMAT = 'wl'

@@ -43,7 +43,7 @@ def run():
     ################################
     # Prepare GPU
     use_gpu = 'gpu' in args and args.gpu >= 0
-    if use_gpu:                 # TODO confirm
+    if use_gpu:
         # Make the specified GPU current
         cuda.get_device_from_id(args.gpu).use()
         chainer.config.cudnn_deterministic = args.use_cudnn
@@ -60,7 +60,7 @@ def run():
     if args.model_path:
         trainer.load_model(args.model_path)
 
-    elif 'submodel_path' in args: # TODO confirm
+    elif 'submodel_path' in args:
         if args.submodel_path:
             trainer.load_submodel(args.submodel_path)
             trainer.init_hyperparameters(args)
@@ -77,7 +77,7 @@ def run():
     # Setup feature extractor and initialize dic from external dictionary
     
     trainer.init_feat_extractor(use_gpu=use_gpu)
-    if 'external_dic_path' in args: #TODO confirm
+    if 'external_dic_path' in args:
         trainer.load_external_dictionary()
 
     ################################

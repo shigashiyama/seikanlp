@@ -11,8 +11,6 @@ def train_model():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_path', '-i', required=True, help='directory or file path of input data')
-    # parser.add_argument('--data_format', '-f', default='sl')
-    # parser.add_argument('--sequence_type', '-t', default='word')
     parser.add_argument('--out_path', '-o', required=True, default='')
     parser.add_argument('--num_iter', '-n', type=int, default=5)
     parser.add_argument('--dimension', '-d', type=int, default=300)

@@ -17,8 +17,6 @@ import util
 from models.common import MLP
 import models.util
 
-#import tools.edmonds.edmonds as edmonds
-#from functions import logdet
 
 
 class BiaffineCombination(chainer.Chain):
@@ -505,80 +503,3 @@ def detect_cycle(y):
             pointer = parent
 
 
-# def structured_margin_loss(score_matrix, gold, kappa=1):
-#     pred = minmax.argmax(score_matrix, axis=1)
-#     score_p = sum(select_item.select_item(score_matrix, pred))
-#     score_g = sum(select_item.select_item(score_matrix, gold))
-#     margin = sum(pred.data != gold)
-#     loss = score_p + margin - score_g
-#     print(loss.data, '=', score_p.data, '-', score_g.data, '+', margin)
-#     print('(', pred.data, ')')
-#     return loss
-
-
-# (Koo, 2007)
-# def global_likelihood_loss(score_matrix, gold):
-#     xp = cuda.get_array_module(score_matrix)
-#     n = len(gold)               # sentence length (except root)
-#     timer = util.Timer()
-
-#     # score for gold tree
-#     logg = chainer.Variable(xp.array(0, dtype='f'))
-#     for m, h in enumerate(gold):
-#         logg += score_matrix[m][h]
-#     # print('time: logg:', timer.elapsed)
-    
-#     ## tmp
-#     print(n, gold)
-#     A_ = F.reshape(F.concat(
-#         [chainer.Variable(xp.array([[0]], dtype='f')) if h+1 == m else score_matrix[h:h+1,m:m+1]
-#          for m in range(n+1) for h in range(n)], 
-#         axis=0), (n+1, n))
-#     print('S',score_matrix.data)
-#     print('logA',A_.data)
-
-#     # adjacency matrix - A[h,m]
-#     A = F.reshape(F.concat(
-#         [chainer.Variable(xp.array([[0]], dtype='f')) if h+1 == m else F.exp(score_matrix[h:h+1,m:m+1])
-#          for m in range(n+1) for h in range(n)], 
-#         axis=0), (n+1, n))
-#     # print('time: A:', timer.elapsed)
-#     print('A',A.data)
-
-#     # minor of laplacian matrix L^(0,0)
-#     L00 = F.reshape(F.concat(
-#         [F.sum(A[:,m:m+1], keepdims=True) if h == m else -A[h+1:h+2,m:m+1]
-#          for h in range(n) for m in range(n)],
-#         axis=0), (n,n))
-
-#     print('L00',L00.data)
-#     logz = logdet.logdet(L00)
-#     loss = logz - logg
-#     print('[a] {} = {} - {}'.format(loss.data, logz.data, logg.data))
-#     # if logz.data != np.infty:
-#     # else:                       # logz is actually nan because z <= 0
-#     #     score_y = F.exp(logg)
-#     #     detL = F.det(L00)
-#     #     ratio = detL / score_y
-#     #     loss = F.log(ratio)
-#     #     print('[b] {} = log({}) = log({} / {})'.format(loss.data, ratio.data, detL.data, logg.data))
-        
-#     sign, logz_np = np.linalg.slogdet(cuda.to_cpu(L00.data))
-#     print('[n] {} = ({}) {} - {}'.format(logz_np - logg.data, sign, logz_np, logg.data))
-#     print()
-
-#     # print('time: det:', timer.elapsed)
-#     return loss
-
-
-if __name__ == '__main__':
-    
-    gold = [2, 0, 4, 2]
-    score = chainer.Variable(np.array(
-        [[1, 0, 2, 0, 0],
-         [3, 1, 0, 0, 1],
-         [0, 0, 1, 0, 4],
-         [0, 1, 2, 0, 0],
-        ], dtype='f'))
-    
-    global_likelihood_loss(score, gold)

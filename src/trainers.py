@@ -1415,7 +1415,7 @@ class AttributeAnnotatorTrainer(Trainer):
         return counts
 
 
-    def decode(self, rdata, file=sys.stdout):
+    def decode(self, rdata, read_pos=True, file=sys.stdout):
         read_pos = True if len(rdata.outputs) > 0 else None
         ws = rdata.inputs[0]
         ps = rdata.outputs[0] if read_pos else None

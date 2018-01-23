@@ -24,7 +24,7 @@ class SelectiveArgumentParser(object):
                             'Choose a mode from among \'train\', \'eval\', \'decode\' and \'interactive\'')
         parser.add_argument('--task', '-t', help=
                             'Choose a task from among \'seg\', \'segtag\', \'tag\', \'dual_seg\', '
-                            + '\'dual_segtag\', \'dual_tag\', \'dep\', \'tdep\' and \'attr\'')
+                            + '\'dual_segtag\', \'dual_tag\', \'dep\', \'tdep\' and \'sematt\'')
         parser.add_argument('--quiet', '-q', action='store_true',
                             help='Do not output log file and serialized model file')
 
@@ -369,7 +369,7 @@ class SelectiveArgumentParser(object):
                           + ' Input: {}'.format(args.input_data_format), file=sys.stderr)
                     sys.exit()
                 
-            else:               # dep, tdep, attr
+            else:               # dep, tdep, sematt
                 if args.input_data_format == 'sl' or args.input_data_format == 'wl':
                     parser.add_argument('--input_data_format', '-f', default=args.input_data_format)
 
@@ -399,6 +399,9 @@ class SelectiveArgumentParser(object):
             
         elif not args.output_data_format:
             parser.add_argument('--output_data_format', default='wl')
+            parser.add_argument('--output_attr_delim', default=constants.WL_ATTR_DELIM)
+            parser.add_argument('--output_token_delim', default=constants.WL_TOKEN_DELIM)
+            parser.add_argument('--output_empty_line', default=True)
 
         else:
             print('Error: output data format for task={}/mode={}' .format(args.task, args.execute_mode)
