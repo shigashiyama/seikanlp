@@ -4,12 +4,6 @@
 
 
 ################################################################
-# [0] show usage
-
-# python src/seikanlp.py -h
-
-
-################################################################
 # [1.1] tdep: train a new model from the training data
 
 GPU=0
@@ -30,8 +24,8 @@ PRED_MLP_N_LAYERS=2
 PRED_MLP_N_UNITS=500
 
 TASK=tdep
-TRAIN_DATA=data/ptb3/dep_pos-st3.3.0/sample.dep
-DEVEL_DATA=data/ptb3/dep_pos-st3.3.0/devel.dep
+TRAIN_DATA=
+DEVEL_DATA=
 INPUT_FORMAT=wl
 
 # python src/seikanlp.py --task $TASK -x train -g $GPU --cudnn --epoch_end $EPOCH_END --break_point $BREAK_POINT --batch_size $BATCH --optimizer $OPTIMIZER --learning_rate $LR --unigram_embed_dim $UNI_EMBED_DIM --rnn_bidirection --rnn_n_layers $RNN_N_LAYERS --rnn_n_units $RNN_N_UNITS --mlp4arcrep_n_units $HIDDEN_MLP_N_UNITS --mlp4labelrep_n_units $HIDDEN_MLP_N_UNITS --mlp4labelpred_n_layers $PRED_MLP_N_LAYERS --mlp4labelpred_n_units $PRED_MLP_N_UNITS --rnn_dropout $DROPOUT --pred_layers_dropout $DROPOUT --train_data $TRAIN_DATA --devel_data $DEVEL_DATA --input_data_format $INPUT_FORMAT
@@ -42,7 +36,7 @@ INPUT_FORMAT=wl
 
 EPOCH_BEGIN=2
 EPOCH_END=3
-MODEL=models/main/20180115_1709_e0.630.npz
+MODEL=
 
 # python src/seikanlp.py --task $TASK -x train -g $GPU --cudnn --epoch_begin $EPOCH_BEGIN --epoch_end $EPOCH_END --break_point $BREAK_POINT --batch_size $BATCH --optimizer $OPTIMIZER --learning_rate $LR --rnn_dropout $DROPOUT --pred_layers_dropout $DROPOUT --train_data $TRAIN_DATA --devel_data $DEVEL_DATA --input_data_format $INPUT_FORMAT --model_path $MODEL
 
@@ -50,7 +44,7 @@ MODEL=models/main/20180115_1709_e0.630.npz
 ################################################################
 # [1.3] tdep: evaluate the trained model on the test data
 
-TEST_DATA=data/ptb3/dep_pos-st3.3.0/test.dep
+TEST_DATA=
 
 # python src/seikanlp.py --task $TASK -x eval -g $GPU --cudnn --batch_size $BATCH --test_data $TEST_DATA --input_data_format $INPUT_FORMAT --model_path $MODEL
 
@@ -58,7 +52,7 @@ TEST_DATA=data/ptb3/dep_pos-st3.3.0/test.dep
 ################################################################
 # [1.4] tdep: decode the input text data by the trained model
 
-DECODE_DATA=data/ptb3/tok/sample.pos
+DECODE_DATA=
 INPUT_FORMAT=sl
 
 # python src/seikanlp.py --task $TASK -x decode -g $GPU --cudnn --batch_size $BATCH --decode_data $DECODE_DATA --input_data_format $INPUT_FORMAT --model_path $MODEL

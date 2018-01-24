@@ -24,14 +24,17 @@ Clone/download the git repository of this software.
 ## Files and Directories
 
 ~~~~
-+-- data       ... directory to place input data
-+-- log        ... directory to export log files
-+-- models     ... directory to export/place model files
-|  +-- main    ... directory to export model files
-|  +-- embed   ... directory to export/place embedding model files
-|  +-- ftemp   ... directory to place feature template files
-+-- resources  ... directory to place resource files such as dictionary
-+-- src        ... source code directory
++-- data             ... directory to place input data
++-- log              ... directory to export log files
++-- models           ... directory to export/place model files
+|  +-- main          ... directory to export model files
+|  +-- embed         ... directory to export/place embedding model files
+|  +-- ftemp         ... directory to place feature template files
++-- resources        ... directory to place resource files such as dictionary
++-- src              ... source code directory
++-- sample_seg.sh    ... sample script for seg task
++-- sample_tdep.sh   ... sample script for tdep task
++-- sample_sematt.sh ... sample script for sematt task
 ~~~~
 
 
@@ -88,7 +91,7 @@ Three tasks 'dual_seg', 'dual_segtag' and 'dual_tag' are supported and they can 
       $ python src/seikanlp.py --task/-t sematt [--options]
 
 Descriptions of options are shown by executing src/seikanlp.py with --help/-h option.
-See also sample.sh to confirm typical usages.
+See also sample_*.sh to confirm typical usages.
 
 
 ### Training word embedding model

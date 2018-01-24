@@ -4,12 +4,6 @@
 
 
 ################################################################
-# [0] show usage
-
-# python src/seikanlp.py -h
-
-
-################################################################
 # [1.1] seg: train a new model from the training data
 
 GPU=0
@@ -25,11 +19,11 @@ RNN_N_UNITS=800
 DROPOUT=0.3
 
 TASK=seg
-TRAIN_DATA=data/bccwj/data/SUW/core/train.tsv
-DEVEL_DATA=data/bccwj/data/SUW/core/devel.tsv
+TRAIN_DATA=
+DEVEL_DATA=
 INPUT_FORMAT=wl
 
-# python src/seikanlp.py --task $TASK -x train -g $GPU --cudnn --epoch_end $EPOCH_END --break_point $BREAK_POINT --batch_size $BATCH --optimizer $OPTIMIZER --learning_rate $LR --unigram_embed_dim $UNI_EMBED_DIM --rnn_bidirection --rnn_n_layers $RNN_N_LAYERS --rnn_n_units $RNN_N_UNITS --rnn_dropout $DROPOUT --mlp_dropout $DROPOUT --train_data $TRAIN_DATA --devel_data $DEVEL_DATA --input_data_format $INPUT_FORMAT
+# python src/seikanlp.py --task $TASK -x train -g $GPU --cudnn --epoch_end $EPOCH_END --break_point $BREAK_POINT --batch_size $BATCH --optimizer $OPTIMIZER --learning_rate $LR --unigram_embed_dim $UNI_EMBED_DIM --rnn_bidirection --rnn_n_layers $RNN_N_LAYERS --rnn_n_units $RNN_N_UNITS --rnn_dropout $DROPOUT --mlp_dropout $DROPOUT --train_data $TRAIN_DATA --devel_data $DEVEL_DATA --input_data_format $INPUT_FORMAT -q
 
 
 ################################################################
@@ -37,7 +31,7 @@ INPUT_FORMAT=wl
 
 EPOCH_BEGIN=2
 EPOCH_END=3
-MODEL=models/main/20180111_1527_e0.039.npz
+MODEL=
 
 # python src/seikanlp.py --task $TASK -x train -g $GPU --cudnn --epoch_begin $EPOCH_BEGIN --epoch_end $EPOCH_END --break_point $BREAK_POINT --batch_size $BATCH --optimizer $OPTIMIZER --learning_rate $LR --rnn_dropout $DROPOUT --mlp_dropout $DROPOUT --train_data $TRAIN_DATA --devel_data $DEVEL_DATA --input_data_format $INPUT_FORMAT --model_path $MODEL
 
@@ -45,7 +39,7 @@ MODEL=models/main/20180111_1527_e0.039.npz
 ################################################################
 # [1.3] seg: evaluate the trained model on the test data
 
-TEST_DATA=data/bccwj/data/SUW/core/test.tsv
+TEST_DATA=
 
 # python src/seikanlp.py --task $TASK -x eval -g $GPU --cudnn --batch_size $BATCH --test_data $TEST_DATA --input_data_format $INPUT_FORMAT --model_path $MODEL
 
@@ -53,7 +47,7 @@ TEST_DATA=data/bccwj/data/SUW/core/test.tsv
 ################################################################
 # [1.4] seg: decode the input text data by the trained model
 
-DECODE_DATA=data/bccwj/data/raw/sample_1k.txt
+DECODE_DATA=
 OUTPUT_FORMAT=sl
 
 # python src/seikanlp.py --task $TASK -x decode -g $GPU --cudnn --batch_size $BATCH --decode_data $DECODE_DATA --output_data_format $OUTPUT_FORMAT --model_path $MODEL
@@ -68,7 +62,7 @@ OUTPUT_FORMAT=sl
 ################################################################
 # [2.1] seg: train a new model with pre-trained word embedding model
 
-EMBED_MODEL=models/embed/char_bccwj_all_except_core_i2.bin
+EMBED_MODEL=
 
 # python src/seikanlp.py --task $TASK -x train -g $GPU --cudnn --epoch_end $EPOCH_END --break_point $BREAK_POINT --batch_size $BATCH --learning_rate $LR --unigram_embed_dim $UNI_EMBED_DIM --rnn_bidirection --rnn_n_layers $RNN_N_LAYERS --rnn_n_units $RNN_N_UNITS --rnn_dropout $DROPOUT --mlp_dropout $DROPOUT --train_data $TRAIN_DATA --devel_data $DEVEL_DATA --input_data_format $INPUT_FORMAT  --unigram_embed_model_path $EMBED_MODEL --fix_pretrained_embed
 
@@ -82,7 +76,7 @@ EMBED_MODEL=models/embed/char_bccwj_all_except_core_i2.bin
 ################################################################
 # [3.1] seg: train a new model with dictionary features
 
-EXTERNAL_DIC=data/unidic/dic_1k.zen
+EXTERNAL_DIC=
 FEATURE_TMP=default
 
 # python src/seikanlp.py --task $TASK -x train -g $GPU --cudnn --epoch_end $EPOCH_END --break_point $BREAK_POINT --batch_size $BATCH --learning_rate $LR --unigram_embed_dim $UNI_EMBED_DIM --rnn_bidirection --rnn_n_layers $RNN_N_LAYERS --rnn_n_units $RNN_N_UNITS --rnn_dropout $DROPOUT --mlp_dropout $DROPOUT --train_data $TRAIN_DATA --devel_data $DEVEL_DATA --input_data_format $INPUT_FORMAT --external_dic_path $EXTERNAL_DIC --feature_template $FEATURE_TMP

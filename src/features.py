@@ -83,7 +83,7 @@ class DictionaryFeatureExtractor(FeatureExtractor):
                 if len(position) != 1 or not position in valid_positions:
                     continue
 
-                if task == constants.TASK_SEG:
+                if task == constants.TASK_SEG or constants.TASK_SEGTAG:
                     for k, span in enumerate(spans):
                         if constants.FEAT_TEMP_RANGE_SYM in span:
                             first, last = span.split(constants.FEAT_TEMP_RANGE_SYM)
@@ -95,7 +95,7 @@ class DictionaryFeatureExtractor(FeatureExtractor):
                         for i in range(first, last+1):
                             self.seg_lg[position].update({i:k})
 
-                elif task == constants.TASK_SEGTAG:
+                else:
                     pass
 
         next_start = 0

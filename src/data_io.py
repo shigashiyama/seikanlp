@@ -342,10 +342,12 @@ def load_decode_data_WL(
                 if line.startswith(constants.ATTR_DELIM_TXT):
                     attr_delim = line.split(constants.KEY_VALUE_DELIM)[1]
                     print('Read attribute delimiter: \'{}\''.format(attr_delim), file=sys.stderr)
-                    
+                    continue
+
                 elif line.startswith(constants.WORD_CLM_TXT):
                     word_clm = int(line.split('=')[1]) - 1
                     print('Read word column id:', word_clm+1, file=sys.stderr)
+                    continue
 
                 elif line.startswith(constants.POS_CLM_TXT):
                     pos_clm = int(line.split('=')[1]) - 1
@@ -545,7 +547,7 @@ def load_annotated_data_WL(
     pos_clm = 1
     head_clm = 2
     arc_clm = 3
-    attr_clm = 4
+    attr_clm = 3
 
     ins_cnt = 0
 
@@ -884,7 +886,7 @@ def count_tokens_WL(path, freq_threshold, max_vocab_size=-1,
 
 
 # for segmentation
-def load_external_dictionary(path, read_pos=True):
+def load_external_dictionary(path, read_pos=False):
     if path.endswith('pickle'):
         with open(path, 'rb') as f:
             dic = pickle.load(f)
@@ -897,6 +899,7 @@ def load_external_dictionary(path, read_pos=True):
     get_pos_id = dic.tables[constants.POS_LABEL].get_id if read_pos else None
     get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id
 
+    read_pos = False            # pos information in dictionary is not used yet
     n_elems = 2 if read_pos else 1
     attr_delim = constants.WL_ATTR_DELIM
 

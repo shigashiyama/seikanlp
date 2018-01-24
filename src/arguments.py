@@ -365,7 +365,7 @@ class SelectiveArgumentParser(object):
 
                 else:
                     print('Error: input data format for task={}/mode={}' .format(args.task, args.execute_mode)
-                          + ' must be specified among from {wl}.'
+                          + ' must be specified among from {sl, wl}.'
                           + ' Input: {}'.format(args.input_data_format), file=sys.stderr)
                     sys.exit()
                 
@@ -502,9 +502,18 @@ class SelectiveArgumentParser(object):
 
             else:
                 if common.is_tagging_task(args.task):
+                    if args.external_dic_path:
+                        print('Error: external dictionary can not be used for task={}'.format(args.task), 
+                              file=sys.stderr)
+                        sys.exit()
+                        
+                    if args.feature_template:
+                        print('Error: feature template can not be used for task={}'.format(args.task), 
+                              file=sys.stderr)
+                        sys.exit()
+
                     parser.add_argument('--external_dic_path', default='')
                     parser.add_argument('--feature_template', default='')
-
                 
 
             if common.is_parsing_task(args.task):
