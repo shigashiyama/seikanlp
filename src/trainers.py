@@ -255,7 +255,7 @@ class Trainer(object):
             (common.is_parsing_task(task) and 'pos_embed_dim' in hparams and hparams['pos_embed_dim'] > 0) or
             common.is_attribute_annotation_task(task))
         use_subtoken = ('subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0)
-        create_chunk_trie = ('feature_template' in hparams and hparams['feature_template'])
+        create_chunk_trie = get_chunk_trie_flag(hparams)
         subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
         lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
@@ -325,7 +325,7 @@ class Trainer(object):
         task = hparams['task']
         read_pos = constants.POS_LABEL in self.dic.tables
         use_subtoken = ('subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0)
-        create_chunk_trie = ('feature_template' in hparams and hparams['feature_template'])
+        create_chunk_trie = get_chunk_trie_flag(hparams)
         subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
         lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
@@ -648,6 +648,12 @@ class TaggerTrainerBase(Trainer):
         if self.dic.has_table(constants.SUBTOKEN):
             st2i_tmp = list(self.dic.tables[constants.SUBTOKEN].str2id.items())
             self.log('# subtoken2id: {} ... {}\n'.format(st2i_tmp[:10], st2i_tmp[len(st2i_tmp)-10:]))
+        if self.dic.has_trie(constants.CHUNK):
+            id2chunk = self.dic.tries[constants.CHUNK].id2chunk
+            n_chunks = len(self.dic.tries[constants.CHUNK])
+            c2i_head = [(id2chunk[i], i) for i in range(0, min(10, n_chunks))]
+            c2i_tail = [(id2chunk[i], i) for i in range(max(0, n_chunks-10), n_chunks)]
+            self.log('# chunk2id: {} ... {}\n'.format(c2i_head, c2i_tail))
         if self.dic.has_table(constants.SEG_LABEL):
             id2seg = {v:k for k,v in self.dic.tables[constants.SEG_LABEL].str2id.items()}
             self.log('# seg labels: {}\n'.format(id2seg))
@@ -1560,6 +1566,15 @@ class AttributeAnnotatorTrainer(Trainer):
             self.decode_batch(ws, ps, orgseqs, orgposs)
             if not self.args.output_empty_line:
                 print(file=sys.stdout)
+
+
+def get_chunk_trie_flag(hparams):
+    if 'feature_template' in hparams and hparams['feature_template']:
+        return True
+    elif 'chunk_embed_dim' in hparams and hparams['chunk_embed_dim'] > 0:
+        return True
+    else:
+        return False
 
 
 def batch_generator(len_data, batch_size=100, shuffle=True):

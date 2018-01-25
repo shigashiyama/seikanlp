@@ -477,7 +477,7 @@ def load_annotated_data_SL(path, segmentation=True, tagging=False,
 
                     if create_chunk_trie and update_token == [True for i in range(wlen)]: # update word trie
                         ids = chars[-wlen:]
-                        dic.chunk_trie.get_chunk_id(ids, True)
+                        dic.chunk_trie.get_chunk_id(ids, word, True)
 
                 else:
                     update_token = update_each_token(word, update_tokens, freq_tokens, refer_vocab)
@@ -673,7 +673,7 @@ def load_annotated_data_WL(
 
                 if create_chunk_trie and update_token == [True for i in range(wlen)]: # update chunk trie
                     token_ids = t_seq[-wlen:]
-                    dic.tries[constants.CHUNK].get_chunk_id(token_ids, True)
+                    dic.tries[constants.CHUNK].get_chunk_id(token_ids, pword, True)
 
             else:
                 update_token = update_each_token(pword, update_tokens, freq_tokens, refer_vocab)
@@ -925,7 +925,7 @@ def load_external_dictionary(path, read_pos=False):
 
             word = arr[0]
             char_ids = [get_unigram_id(char, update=True) for char in word]
-            word_id = get_chunk_id(char_ids, update=True)
+            word_id = get_chunk_id(char_ids, word, update=True)
             if read_pos:
                 pos = arr[1]
                 get_pos_id(pos, update=True)

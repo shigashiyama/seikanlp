@@ -15,6 +15,10 @@ class MapTrie(object):
         #self.debug = True
 
 
+    def __len__(self):
+        return len(self.id2chunk)
+
+
     def get_chunk(self, chunk_id):
         if chunk_id in self.id2chunk:
             return self.id2chunk[chunk_id]
@@ -23,7 +27,7 @@ class MapTrie(object):
 
 
     # chunk equals to list of token IDs
-    def get_chunk_id(self, chunk, update=False):
+    def get_chunk_id(self, chunk, word=None, update=False):
         len_chunk = len(chunk) 
         node = self.tree
 
@@ -41,7 +45,7 @@ class MapTrie(object):
             if i == len_chunk - 1:
                 if child.id == self.unk_id and update:
                     child.id = self.next_id
-                    self.id2chunk[child.id] = chunk
+                    self.id2chunk[child.id] = word if word else chunk
                     self.next_id += 1
                 return child.id
 
