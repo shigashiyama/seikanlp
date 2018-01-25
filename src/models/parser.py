@@ -20,7 +20,7 @@ import models.util
 
 
 class BiaffineCombination(chainer.Chain):
-    def __init__(self, left_size, right_size, use_b=False):
+    def __init__(self, left_size, right_size, use_U=False, use_V=False, use_b=False):
         super().__init__()
         
         with self.init_scope():
@@ -28,13 +28,19 @@ class BiaffineCombination(chainer.Chain):
             w_shape = (left_size, right_size)
             self.W = chainer.variable.Parameter(initializers._get_initializer(initialW), w_shape)
 
-            initialU = None
-            u_shape = (left_size, 1)
-            self.U = chainer.variable.Parameter(initializers._get_initializer(initialU), u_shape)
+            if use_U:
+                initialU = None
+                u_shape = (left_size, 1)
+                self.U = chainer.variable.Parameter(initializers._get_initializer(initialU), u_shape)
+            else:
+                self.U = None
 
-            # initialV = None
-            # v_shape = (right_size, 1)
-            # self.V = chainer.variable.Parameter(initializers._get_initializer(initialV), v_shape)            
+            if use_V:
+                initialV = None
+                v_shape = (right_size, 1)
+                self.V = chainer.variable.Parameter(initializers._get_initializer(initialV), v_shape)
+            else:
+                self.V = None
 
             if use_b:
                 initialb = 0
@@ -50,17 +56,23 @@ class BiaffineCombination(chainer.Chain):
 
         n1 = x1.shape[0]
         n2 = x2.shape[0]
-
         x2T = F.transpose(x2)
+        # print('w^T', x2T.shape)
         x1_W = F.matmul(x1, self.W)                           # (n1, d1) * (d1, d2) => (n1, d2)
-        x1_W_x2 = F.matmul(x1_W, x2T)                         # (n1, d2) * (d2, n2) => (n1, n2)
-        x1_U = F.broadcast_to(F.matmul(x1, self.U), (n1, n2)) # (n1, d1) * (d1, 1)  => (n1, 1) -> (n1, n2)
-        res = x1_W_x2 + x1_U
+        # print('r*W', x1_W.shape)
+        res = F.matmul(x1_W, x2T)                         # (n1, d2) * (d2, n2) => (n1, n2)
+        # print('r*W*w', res.shape)
 
-        # TODO fix
-        # x2_V = F.broadcast_to(
-        #     F.transpose(F.matmul(x2, self.V)), (n1, n2)) # (n2, d2) * (d2, 1)  => (n2, 1) -> (n1, n2)
-        #res = x1_W_x2 + x2_V
+        if self.U is not None:
+            x1_U = F.broadcast_to(F.matmul(x1, self.U), (n1, n2)) # (n1, d1) * (d1, 1)  => (n1, 1) -> (n1, n2)
+            # print('x1*U', x1_U.shape)
+            res = res + x1_U
+
+        if self.V is not None: # TODO fix
+            # x2_V = F.broadcast_to(
+            #     F.transpose(F.matmul(x2, self.V)), (n1, n2)) # (n2, d2) * (d2, 1)  => (n2, 1) -> (n1, n2)
+            #res = x1_W_x2 + x2_V
+            pass
 
         if self.b is not None:
             b = F.broadcast_to(self.b, (n1, n2))
@@ -163,9 +175,12 @@ class RNNBiaffineParser(chainer.Chain):
                 self.mlp_arc_mod = None
                 print('use common reps for heads and modifiers', file=file)
                 
-            self.biaffine_arc = BiaffineCombination(mlp4arcrep_n_units, mlp4arcrep_n_units)
-            print('# Biaffine layer for arc prediction:   W={}, U={}, dropout={}'.format(
-                self.biaffine_arc.W.shape, self.biaffine_arc.U.shape, self.pred_layers_dropout), file=file)
+            self.biaffine_arc = BiaffineCombination(mlp4arcrep_n_units, mlp4arcrep_n_units, use_U=True)
+            print('# Biaffine layer for arc prediction:   W={}, U={}, b={}, dropout={}'.format(
+                self.biaffine_arc.W.shape, 
+                self.biaffine_arc.U.shape if self.biaffine_arc.U is not None else None, 
+                self.biaffine_arc.b.shape if self.biaffine_arc.b is not None else None, 
+                self.pred_layers_dropout), file=file)
 
             # MLPs for label prediction
 

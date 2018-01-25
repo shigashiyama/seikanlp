@@ -49,36 +49,26 @@ def run():
         chainer.config.cudnn_deterministic = args.use_cudnn
 
     ################################
-    # Load external token unigram (typically word) embedding model
+    # Load external embedding model
 
-    if ('unigram_embed_model_path' in args and args.unigram_embed_model_path):
-        trainer.load_external_embedding_model(args.unigram_embed_model_path)
+    trainer.load_external_embedding_models()
 
     ################################
     # Load classifier model
 
-    if args.model_path:
-        trainer.load_model(args.model_path)
-
-    elif 'submodel_path' in args:
-        if args.submodel_path:
-            trainer.load_submodel(args.submodel_path)
-            trainer.init_hyperparameters(args)
-        else:
-            print('Error: model_path or sub_model_path must be specified for {}'.format(args.task))
-            sys.exit()
-
+    if (args.model_path or 
+        'submodel_path' in args and args.submodel_path):
+        trainer.load_model()
     else:
         # if args.dic_obj_path:
         #     trainer.load_dic(args.dic_obj_path)
-        trainer.init_hyperparameters(args)
+        trainer.init_hyperparameters()
 
     ################################
     # Setup feature extractor and initialize dic from external dictionary
     
-    trainer.init_feat_extractor(use_gpu=use_gpu)
-    if 'external_dic_path' in args:
-        trainer.load_external_dictionary()
+    trainer.init_feature_extractor(use_gpu)
+    trainer.load_external_dictionary()
 
     ################################
     # Load dataset and set up dic
@@ -98,7 +88,7 @@ def run():
     else:
         trainer.update_model()
 
-    if 'gpu' in args and args.gpu >= 0:
+    if use_gpu:
         trainer.classifier.to_gpu()
 
     ################################

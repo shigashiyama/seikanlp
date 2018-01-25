@@ -94,7 +94,6 @@ class Trainer(object):
         self.evaluator = None
         self.feat_extractor = None
         self.optimizer = None
-        self.external_embed_model = None
         self.n_iter = 1
         self.label_begin_index = 2
 
@@ -117,7 +116,7 @@ class Trainer(object):
             self.reporter.close()
 
 
-    def init_feat_extractor(self, use_gpu=False):
+    def init_feature_extractor(self, use_gpu=False):
         if 'feature_template' in self.hparams:
             template = self.hparams['feature_template']
             feat_dim = 0
@@ -133,17 +132,19 @@ class Trainer(object):
             self.hparams.update({'additional_feat_dim' : feat_dim})
 
 
-    def load_external_embedding_model(self, model_path):
-        self.external_embed_model = load_embedding_model(model_path)
+    def load_external_dictionary(self):
+        # to be implemented in sub-class
+        pass
+
+
+    def load_external_embedding_models(self):
+        # to be implemented in sub-class
+        pass
 
 
     def init_model(self):
         self.log('Initialize model from hyperparameters\n')
         self.classifier = classifiers.init_classifier(self.task, self.hparams, self.dic)
-        finetuning = not self.hparams['fix_pretrained_embed']
-        if self.external_embed_model:
-            self.classifier.load_pretrained_embedding_layer(
-                self.dic, self.external_embed_model, finetuning=finetuning)
 
 
     def load_dic(self, dic_path):
@@ -162,7 +163,8 @@ class Trainer(object):
         self.log('')
 
 
-    def load_model(self, model_path):
+    def load_model(self):
+        model_path = self.args.model_path
         array = model_path.split('_e')
         dic_path = '{}.s2i'.format(array[0])
         hparam_path = '{}.hyp'.format(array[0])
@@ -209,16 +211,11 @@ class Trainer(object):
 
 
     def update_model(self):
-        if (self.args.execute_mode == 'train' or
-            self.args.execute_mode == 'eval' or
-            self.args.execute_mode == 'decode'):
-
-            self.classifier.grow_embedding_layers(
-                self.dic, self.external_embed_model, train=(self.args.execute_mode=='train'))
-            self.classifier.grow_inference_layers(self.dic)
+        # to be implemented in sub-class
+        pass
 
 
-    def init_hyperparameters(self, args):
+    def init_hyperparameters(self):
         # to be implemented in sub-class
         self.hparams = {}
         
@@ -238,7 +235,7 @@ class Trainer(object):
         pass
 
 
-    def load_data_for_training(self):
+    def load_data_for_training(self, refer_vocab=set()):
         args = self.args
         hparams = self.hparams
         prefix = args.path_prefix if args.path_prefix else ''
@@ -246,7 +243,6 @@ class Trainer(object):
         # refer_path   = prefix + args.label_reference_data
         train_path   = prefix + args.train_data
         dev_path     = prefix + (args.devel_data if args.devel_data else '')
-        refer_vocab = self.external_embed_model.wv if self.external_embed_model else set()
         input_data_format = args.input_data_format
 
         task = hparams['task']
@@ -315,11 +311,10 @@ class Trainer(object):
         self.show_training_data()
 
 
-    def load_data_for_test(self):
+    def load_data_for_test(self, refer_vocab=set()):
         args = self.args
         hparams = self.hparams
         test_path = (args.path_prefix if args.path_prefix else '') + args.test_data
-        refer_vocab = self.external_embed_model.wv if self.external_embed_model else set()
         input_data_format = args.input_data_format
 
         task = hparams['task']
@@ -347,9 +342,8 @@ class Trainer(object):
         self.dic.create_id2strs()
 
 
-    def load_decode_data(self):
+    def load_decode_data(self, refer_vocab=set()):
         text_path = (self.args.path_prefix if self.args.path_prefix else '') + self.args.decode_data
-        refer_vocab = self.external_embed_model.wv if self.external_embed_model else set()
         if 'input_data_format' in self.args:
             data_format = self.args.input_data_format
         else:
@@ -401,15 +395,6 @@ class Trainer(object):
             optimizer = chainer.optimizers.RMSprop(lr=self.args.learning_rate, alpha=self.args.rmsprop_alpha)
 
         optimizer.setup(self.classifier)
-        delparams = []
-        if self.external_embed_model and self.args.fix_pretrained_embed:
-            delparams.append('pretrained_unigram_embed/W')
-            self.log('Fix parameters: pretrained_unigram_embed/W')
-        if common.is_dual_st_task(self.task):
-            delparams.append('su_tagger')
-            self.log('Fix parameters: su_tagger/*')
-        if delparams:
-            optimizer.add_hook(optimizers.DeleteGradient(delparams))
 
         optimizer.add_hook(chainer.optimizer.GradientClipping(self.args.grad_clip))
 
@@ -625,16 +610,6 @@ class TaggerTrainerBase(Trainer):
         self.hparams = hparams
 
         self.task = self.hparams['task']
-        if (self.args.execute_mode != 'interactive' and 
-            self.hparams['pretrained_unigram_embed_dim'] > 0 and not self.external_embed_model):
-            self.log('Error: external embedding model is necessary.')
-            sys.exit()    
-
-        if self.external_embed_model:
-            pretrained_unigram_embed_dim = self.external_embed_model.wv.syn0[0].shape[0]
-            if hparams['pretrained_unigram_embed_dim'] != pretrained_unigram_embed_dim:
-                self.external_embed_model = None
-                self.log('Warning: loaded embedding model is discarded due to dimension confliction.')
         
 
     def show_training_data(self):
@@ -746,44 +721,68 @@ class TaggerTrainerBase(Trainer):
 class TaggerTrainer(TaggerTrainerBase):
     def __init__(self, args, logger=sys.stderr):
         super().__init__(args, logger)
+        self.unigram_embed_model = None
         self.label_begin_index = 2
 
 
-    def load_model(self, model_path):
-        super().load_model(model_path)
+    def load_external_embedding_models(self):
+        if self.args.unigram_embed_model_path:
+            self.unigram_embed_model = load_embedding_model(self.args.unigram_embed_model_path)
+
+
+    def init_model(self):
+        super().init_model()
+        if self.unigram_embed_model:
+            finetuning = not self.hparams['fix_pretrained_embed']
+            self.classifier.load_pretrained_embedding_layer(
+                self.dic, self.unigram_embed_model, finetuning=finetuning)
+
+
+    def load_model(self):
+        super().load_model()
         if 'rnn_dropout' in self.hparams:
             self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
         if 'hidden_mlp_dropout' in self.hparams:
             self.classifier.change_hidden_mlp_dropout_ratio(self.hparams['hidden_mlp_dropout'])
 
 
-    def init_hyperparameters(self, args):
-        if self.external_embed_model:
-            pretrained_unigram_embed_dim = self.external_embed_model.wv.syn0[0].shape[0]
+    def update_model(self):
+        if (self.args.execute_mode == 'train' or
+            self.args.execute_mode == 'eval' or
+            self.args.execute_mode == 'decode'):
+
+            self.classifier.grow_embedding_layers(
+                self.dic, self.unigram_embed_model, train=(self.args.execute_mode=='train'))
+            self.classifier.grow_inference_layers(self.dic)
+
+
+    def init_hyperparameters(self):
+        if self.unigram_embed_model:
+            pretrained_unigram_embed_dim = self.unigram_embed_model.wv.syn0[0].shape[0]
         else:
             pretrained_unigram_embed_dim = 0
 
         self.hparams = {
             'pretrained_unigram_embed_dim' : pretrained_unigram_embed_dim,
-            'fix_pretrained_embed' : args.fix_pretrained_embed,
-            'unigram_embed_dim' : args.unigram_embed_dim,
-            'subtoken_embed_dim' : args.subtoken_embed_dim,
-            'rnn_unit_type' : args.rnn_unit_type,
-            'rnn_bidirection' : args.rnn_bidirection,
-            'rnn_n_layers' : args.rnn_n_layers,
-            'rnn_n_units' : args.rnn_n_units,
-            'mlp_n_layers' : args.mlp_n_layers,
-            'mlp_n_units' : args.mlp_n_units,
-            'inference_layer' : args.inference_layer,
-            'rnn_dropout' : args.rnn_dropout,
-            'mlp_dropout' : args.mlp_dropout,
-            'feature_template' : args.feature_template,
-            'task' : args.task,
-            'subpos_depth' : args.subpos_depth,
-            'lowercase' : args.lowercase,
-            'normalize_digits' : args.normalize_digits,
-            'freq_threshold' : args.freq_threshold,
-            'max_vocab_size' : args.max_vocab_size,
+            'fix_pretrained_embed' : self.args.fix_pretrained_embed,
+            'unigram_embed_dim' : self.args.unigram_embed_dim,
+            'subtoken_embed_dim' : self.args.subtoken_embed_dim,
+            'rnn_unit_type' : self.args.rnn_unit_type,
+            'rnn_bidirection' : self.args.rnn_bidirection,
+            'rnn_n_layers' : self.args.rnn_n_layers,
+            'rnn_n_units' : self.args.rnn_n_units,
+            'mlp_n_layers' : self.args.mlp_n_layers,
+            'mlp_n_units' : self.args.mlp_n_units,
+            'inference_layer' : self.args.inference_layer,
+            'rnn_dropout' : self.args.rnn_dropout,
+            'mlp_dropout' : self.args.mlp_dropout,
+            'feature_template' : self.args.feature_template,
+            'task' : self.args.task,
+            'subpos_depth' : self.args.subpos_depth,
+            'lowercase' : self.args.lowercase,
+            'normalize_digits' : self.args.normalize_digits,
+            'freq_threshold' : self.args.freq_threshold,
+            'max_vocab_size' : self.args.max_vocab_size,
         }
 
         self.log('Init hyperparameters')
@@ -793,6 +792,50 @@ class TaggerTrainer(TaggerTrainerBase):
             self.log('# {}'.format(message))
             self.report('[INFO] arg: {}'.format(message))
         self.log('')
+
+
+    def load_hyperparameter(self):
+        super().load_hyperparameter(self)
+
+        if (self.args.execute_mode != 'interactive' and 
+            self.hparams['pretrained_unigram_embed_dim'] > 0 and not self.unigram_embed_model):
+            self.log('Error: unigram embedding model is necessary.')
+            sys.exit()    
+
+        if self.unigram_embed_model:
+            pretrained_unigram_embed_dim = self.unigram_embed_model.wv.syn0[0].shape[0]
+            if hparams['pretrained_unigram_embed_dim'] != pretrained_unigram_embed_dim:
+                self.log(
+                    'Error: pretrained_unigram_embed_dim and dimension of loaded embedding model'
+                    + 'are conflicted.'.format(
+                        hparams['pretrained_unigram_embed_dim'], pretrained_unigram_embed_dim))
+                sys.exit()
+
+
+    def load_data_for_training(self):
+        refer_vocab = self.unigram_embed_model.wv if self.unigram_embed_model else set()
+        super().load_data_for_training(refer_vocab=refer_vocab)
+
+
+    def load_data_for_test(self):
+        refer_vocab = self.unigram_embed_model.wv if self.unigram_embed_model else set()
+        super().load_data_for_test(refer_vocab=refer_vocab)
+
+
+    def load_decode_data(self):
+        refer_vocab = self.unigram_embed_model.wv if self.unigram_embed_model else set()
+        super().load_decode_data(refer_vocab=refer_vocab)
+
+
+    def setup_optimizer(self):
+        super().setup_optimizer()
+
+        delparams = []
+        if self.unigram_embed_model and self.args.fix_pretrained_embed:
+            delparams.append('pretrained_unigram_embed/W')
+            self.log('Fix parameters: pretrained_unigram_embed/W')
+        if delparams:
+            self.optimizer.add_hook(optimizers.DeleteGradient(delparams))
 
 
     def setup_evaluator(self):
@@ -849,48 +892,213 @@ class TaggerTrainer(TaggerTrainerBase):
                 print(file=file)
 
 
+# character word hybrid segmenter
+class CWHSegmenterTrainer(TaggerTrainerBase):
+    def __init__(self, args, logger=sys.stderr):
+        super().__init__(args, logger)
+        self.unigram_embed_model = None
+        self.chunk_embed_model = None
+        self.label_begin_index = 4
+
+
+    def load_external_embedding_models(self):
+        if self.args.unigram_embed_model_path:
+            self.unigram_embed_model = load_embedding_model(self.args.unigram_embed_model_path)
+        if self.args.unigram_embed_model_path:
+            self.chunk_embed_model = load_embedding_model(self.args.chunk_embed_model_path)
+
+
+    def load_model(self):
+        super().load_model()
+        if 'rnn_dropout' in self.hparams:
+            self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
+        if 'hidden_mlp_dropout' in self.hparams:
+            self.classifier.change_hidden_mlp_dropout_ratio(self.hparams['hidden_mlp_dropout'])
+
+
+    # TODO implement
+    def update_model(self):
+        if (self.args.execute_mode == 'train' or
+            self.args.execute_mode == 'eval' or
+            self.args.execute_mode == 'decode'):
+
+            self.classifier.grow_embedding_layers(
+                self.dic, self.unigram_embed_model, train=(self.args.execute_mode=='train'))
+            self.classifier.grow_inference_layers(self.dic)
+
+
+    def init_hyperparameters(self):
+        if self.unigram_embed_model:
+            pretrained_unigram_embed_dim = self.unigram_embed_model.wv.syn0[0].shape[0]
+        else:
+            pretrained_unigram_embed_dim = 0
+
+        self.hparams = {
+            'pretrained_unigram_embed_dim' : pretrained_unigram_embed_dim,
+            'fix_pretrained_embed' : self.args.fix_pretrained_embed,
+            'unigram_embed_dim' : self.args.unigram_embed_dim,
+            'subtoken_embed_dim' : self.args.subtoken_embed_dim,
+            'chunk_embed_dim' : self.args.chunk_embed_dim,
+            'rnn_unit_type' : self.args.rnn_unit_type,
+            'rnn_bidirection' : self.args.rnn_bidirection,
+            'rnn_n_layers' : self.args.rnn_n_layers,
+            'rnn_n_units' : self.args.rnn_n_units,
+            'mlp_n_layers' : self.args.mlp_n_layers,
+            'mlp_n_units' : self.args.mlp_n_units,
+            'inference_layer' : self.args.inference_layer,
+            'rnn_dropout' : self.args.rnn_dropout,
+            'mlp_dropout' : self.args.mlp_dropout,
+            'feature_template' : self.args.feature_template,
+            'task' : self.args.task,
+            'subpos_depth' : self.args.subpos_depth,
+            'lowercase' : self.args.lowercase,
+            'normalize_digits' : self.args.normalize_digits,
+            'freq_threshold' : self.args.freq_threshold,
+            'max_vocab_size' : self.args.max_vocab_size,
+        }
+
+        self.log('Init hyperparameters')
+        self.log('### arguments')
+        for k, v in self.args.__dict__.items():
+            message = '{}={}'.format(k, v)
+            self.log('# {}'.format(message))
+            self.report('[INFO] arg: {}'.format(message))
+        self.log('')
+
+
+    def load_hyperparameters(self, hparams_path):
+        hparams = {}
+        with open(hparams_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('#'):
+                    continue
+
+                kv = line.split('=')
+                key = kv[0]
+                val = kv[1]
+
+                if (key == 'pretrained_unigram_embed_dim' or
+                    key == 'unigram_embed_dim' or
+                    key == 'subtoken_embed_dim' or
+                    key == 'chunk_embed_dim' or
+                    key == 'additional_feat_dim' or
+                    key == 'rnn_n_layers' or
+                    key == 'rnn_n_units' or
+                    key == 'mlp_n_layers'or
+                    key == 'mlp_n_units' or
+                    key == 'subpos_depth' or
+                    key == 'freq_threshold' or
+                    key == 'max_vocab_size'
+                ):
+                    val = int(val)
+
+                elif (key == 'rnn_dropout' or
+                      key == 'mlp_dropout'
+                ):
+                    val = float(val)
+
+                elif (key == 'rnn_bidirection' or
+                      key == 'lowercase' or
+                      key == 'normalize_digits' or
+                      key == 'fix_pretrained_embed'
+                ):
+                    val = (val.lower() == 'true')
+
+                hparams[key] = val
+
+        self.hparams = hparams
+
+        self.task = self.hparams['task']
+
+        if self.args.execute_mode != 'interactive':
+            if self.hparams['pretrained_unigram_embed_dim'] > 0 and not self.unigram_embed_model:
+                self.log('Error: unigram embedding model is necessary.')
+                sys.exit()
+
+            if self.hparams['pretrained_chunk_embed_dim'] > 0 and not self.chunk_embed_model:
+                self.log('Error: chunk embedding model is necessary.')
+                sys.exit()
+                
+
+        if self.unigram_embed_model:
+            pretrained_unigram_embed_dim = self.unigram_embed_model.wv.syn0[0].shape[0]
+            if hparams['pretrained_unigram_embed_dim'] != pretrained_unigram_embed_dim:
+                self.log(
+                    'Error: pretrained_unigram_embed_dim and dimension of loaded embedding model'
+                    + 'are conflicted.'.format(
+                        hparams['pretrained_unigram_embed_dim'], pretrained_unigram_embed_dim))
+                sys.exit()
+
+        if self.chunk_embed_model:
+            pretrained_chunk_embed_dim = self.chunk_embed_model.wv.syn0[0].shape[0]
+            if hparams['pretrained_chunk_embed_dim'] != pretrained_chunk_embed_dim:
+                self.log(
+                    'Error: pretrained_chunk_embed_dim and dimension of loaded embedding model'
+                    + 'are conflicted.'.format(
+                        hparams['pretrained_chunk_embed_dim'], pretrained_chunk_embed_dim))
+                sys.exit()
+
+
+    def load_data_for_training(self):
+        super().load_data_for_training()
+        xp = cuda.cupy if self.args.gpu >= 0 else np
+        
+        self.log('Start chunk search for training data\n')
+        data_io.add_chunk_sequences(self.train, self.dic, xp=xp)
+
+        if self.dev:
+            self.log('Start chunk search for development data\n')            
+            data_io.add_chunk_sequences(self.dev, self.dic, xp=xp)
+
+
+    def setup_optimizer(self):
+        super().setup_optimizer()
+
+        delparams = []
+        if self.unigram_embed_model and self.args.fix_pretrained_embed:
+            delparams.append('pretrained_unigram_embed/W')
+            self.log('Fix parameters: pretrained_unigram_embed/W')
+
+        if self.chunk_embed_model and self.args.fix_pretrained_embed:
+            delparams.append('pretrained_chunk_embed/W')
+            self.log('Fix parameters: pretrained_chunk_embed/W')
+
+        if delparams:
+            self.optimizer.add_hook(optimizers.DeleteGradient(delparams))
+
+
+    def setup_evaluator(self):
+        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignored_labels)
+
+
+    def gen_inputs(self, data, ids, evaluate=True):
+        xp = cuda.cupy if self.args.gpu >= 0 else np
+
+        ts = [xp.asarray(data.inputs[0][j], dtype='i') for j in ids]
+        cs = [xp.asarray(data.inputs[1][j], dtype='i') for j in ids]
+        ms = [data.inputs[2][j] for j in ids]
+        ls = [xp.asarray(data.outputs[0][j], dtype='i') for j in ids] if evaluate else None
+        fs = [data.featvecs[j] for j in ids] if self.hparams['feature_template'] else None
+
+        if evaluate:
+            return ts, cs, ms, fs, ls
+        else:
+            return ts, cs, ms, fs
+
+
 class DualTaggerTrainer(TaggerTrainerBase):
     def __init__(self, args, logger=sys.stderr):
         super().__init__(args, logger)
-        self.label_begin_index = 2
         self.su_tagger = None
-
-
-    def load_submodel(self, model_path, pretrained_unigram_embed_dim=0):
-        array = model_path.split('_e')
-        dic_path = '{}.s2i'.format(array[0])
-        hparam_path = '{}.hyp'.format(array[0])
-        param_path = model_path
-
-        # dictionary
-        self.load_dic(dic_path)
-
-        # hyper parameters
-        self.load_hyperparameters(hparam_path)
-        self.log('Load hyperparameters from short unit model: {}\n'.format(hparam_path))
-        for k, v in self.args.__dict__.items():
-            if 'dropout' in k:
-                self.hparams[k] = 0.0
-            elif k == 'task':
-                task = 'dual_{}'.format(self.hparams[k])
-                self.task = self.hparams[k] = task
-
-        # sub model
-        hparams_sub = self.hparams.copy()
-        self.log('Initialize short unit model from hyperparameters\n')
-        task_tmp = self.task.split('dual_')[1]
-        classifier_tmp = classifiers.init_classifier(
-            task_tmp, hparams_sub, self.dic)
-        chainer.serializers.load_npz(model_path, classifier_tmp)
-        self.su_tagger = classifier_tmp.predictor
-        self.log('Load short unit model parameters: {}\n'.format(model_path))
+        self.label_begin_index = 2
 
 
     def load_hyperparameters(self, hparams_path):
         super().load_hyperparameters(hparams_path)
 
 
-    def init_hyperparameters(self, args, pretrained_unigram_embed_dim=0):
+    def init_hyperparameters(self):
         self.log('Initialize hyperparameters for full model\n')
 
         # keep most of loaded params from sub model and update some params from args
@@ -920,12 +1128,52 @@ class DualTaggerTrainer(TaggerTrainerBase):
         self.classifier = classifiers.init_classifier(self.task, self.hparams, self.dic)
 
 
-    def load_model(self, model_path):
-        super().load_model(model_path)
-        if 'rnn_dropout' in self.hparams:
-            self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
-        if 'hidden_mlp_dropout' in self.hparams:
-            self.classifier.change_hidden_mlp_dropout_ratio(self.hparams['hidden_mlp_dropout'])
+    def load_model(self):
+        if self.args.model_path:
+            super().load_model()
+            if 'rnn_dropout' in self.hparams:
+                self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
+            if 'hidden_mlp_dropout' in self.hparams:
+                self.classifier.change_hidden_mlp_dropout_ratio(self.hparams['hidden_mlp_dropout'])
+
+        elif self.args.submodel_path:
+            self.load_submodel()
+            self.init_hyperparameters()
+
+        else:
+            print('Error: model_path or sub_model_path must be specified for {}'.format(self.task))
+            sys.exit()
+
+
+    def load_submodel(self):
+        model_path = self.args.submodel_path
+        array = model_path.split('_e')
+        dic_path = '{}.s2i'.format(array[0])
+        hparam_path = '{}.hyp'.format(array[0])
+        param_path = model_path
+
+        # dictionary
+        self.load_dic(dic_path)
+
+        # hyper parameters
+        self.load_hyperparameters(hparam_path)
+        self.log('Load hyperparameters from short unit model: {}\n'.format(hparam_path))
+        for k, v in self.args.__dict__.items():
+            if 'dropout' in k:
+                self.hparams[k] = 0.0
+            elif k == 'task':
+                task = 'dual_{}'.format(self.hparams[k])
+                self.task = self.hparams[k] = task
+
+        # sub model
+        hparams_sub = self.hparams.copy()
+        self.log('Initialize short unit model from hyperparameters\n')
+        task_tmp = self.task.split('dual_')[1]
+        classifier_tmp = classifiers.init_classifier(
+            task_tmp, hparams_sub, self.dic)
+        chainer.serializers.load_npz(model_path, classifier_tmp)
+        self.su_tagger = classifier_tmp.predictor
+        self.log('Load short unit model parameters: {}\n'.format(model_path))
 
 
     def update_model(self):
@@ -936,6 +1184,15 @@ class DualTaggerTrainer(TaggerTrainerBase):
             super().update_model()
             if self.su_tagger is not None:
                 self.classifier.integrate_submodel(self.su_tagger)
+
+
+    def setup_optimizer(self):
+        super().setup_optimizer()
+
+        delparams = []
+        delparams.append('su_tagger')
+        self.log('Fix parameters: su_tagger/*')
+        self.optimizer.add_hook(optimizers.DeleteGradient(delparams))
 
 
     def setup_evaluator(self):
@@ -1017,13 +1274,27 @@ class DualTaggerTrainer(TaggerTrainerBase):
 class ParserTrainer(Trainer):
     def __init__(self, args, logger=sys.stderr):
         super().__init__(args, logger)
+        self.unigram_embed_model = None
         self.label_begin_index = 3
         # elif args.task == 'tag_dep' or args.task == 'tag_tdep':
         #     self.label_begin_index = 2
 
 
-    def load_model(self, model_path):
-        super().load_model(model_path)
+    def load_external_embedding_models(self):
+        if self.args.unigram_embed_model_path:
+            self.unigram_embed_model = load_embedding_model(self.args.unigram_embed_model_path)
+
+
+    def init_model(self):
+        super().init_model()
+        finetuning = not self.hparams['fix_pretrained_embed']
+        if self.unigram_embed_model:
+            self.classifier.load_pretrained_embedding_layer(
+                self.dic, self.unigram_embed_model, finetuning=finetuning)
+
+
+    def load_model(self):
+        super().load_model()
         if 'rnn_dropout' in self.hparams:
             self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
         if 'hidden_mlp_dropout' in self.hparams:
@@ -1032,39 +1303,49 @@ class ParserTrainer(Trainer):
             self.classifier.change_pred_layers_dropout_ratio(self.hparams['pred_layers_dropout'])
             
 
-    def init_hyperparameters(self, args):
-        if self.external_embed_model:
-            pretrained_unigram_embed_dim = self.external_embed_model.wv.syn0[0].shape[0]
+    def update_model(self):
+        if (self.args.execute_mode == 'train' or
+            self.args.execute_mode == 'eval' or
+            self.args.execute_mode == 'decode'):
+
+            self.classifier.grow_embedding_layers(
+                self.dic, self.unigram_embed_model, train=(self.args.execute_mode=='train'))
+            self.classifier.grow_inference_layers(self.dic)
+
+
+    def init_hyperparameters(self):
+        if self.unigram_embed_model:
+            pretrained_unigram_embed_dim = self.unigram_embed_model.wv.syn0[0].shape[0]
         else:
             pretrained_unigram_embed_dim = 0
 
         self.hparams = {
             'pretrained_unigram_embed_dim' : pretrained_unigram_embed_dim,
-            'fix_pretrained_embed' : args.fix_pretrained_embed,
-            'unigram_embed_dim' : args.unigram_embed_dim,
-            'subtoken_embed_dim' : args.subtoken_embed_dim,
-            'pos_embed_dim' : args.pos_embed_dim,
-            'rnn_unit_type' : args.rnn_unit_type,
-            'rnn_bidirection' : args.rnn_bidirection,
-            'rnn_n_layers' : args.rnn_n_layers,
-            'rnn_n_units' : args.rnn_n_units,
-            # 'mlp4pospred_n_layers' : args.mlp4pospred_n_layers,
-            # 'mlp4pospred_n_units' : args.mlp4pospred_n_units,
-            'mlp4arcrep_n_layers' : args.mlp4arcrep_n_layers,
-            'mlp4arcrep_n_units' : args.mlp4arcrep_n_units,
-            'mlp4labelrep_n_layers' : args.mlp4labelrep_n_layers,
-            'mlp4labelrep_n_units' : args.mlp4labelrep_n_units,
-            'mlp4labelpred_n_layers' : args.mlp4labelpred_n_layers,
-            'mlp4labelpred_n_units' : args.mlp4labelpred_n_units,
-            'rnn_dropout' : args.rnn_dropout,
-            'hidden_mlp_dropout' : args.hidden_mlp_dropout,
-            'pred_layers_dropout' : args.pred_layers_dropout,
-            'task' : args.task,
-            'subpos_depth' : args.subpos_depth,
-            'lowercase' : args.lowercase,
-            'normalize_digits' : args.normalize_digits,
-            'freq_threshold' : args.freq_threshold,
-            'max_vocab_size' : args.max_vocab_size,
+            'fix_pretrained_embed' : self.args.fix_pretrained_embed,
+            'unigram_embed_dim' : self.args.unigram_embed_dim,
+            'subtoken_embed_dim' : self.args.subtoken_embed_dim,
+            'pos_embed_dim' : self.args.pos_embed_dim,
+            'rnn_unit_type' : self.args.rnn_unit_type,
+            'rnn_bidirection' : self.args.rnn_bidirection,
+            'rnn_n_layers' : self.args.rnn_n_layers,
+            'rnn_n_units' : self.args.rnn_n_units,
+            # 'mlp4pospred_n_layers' : self.args.mlp4pospred_n_layers,
+            # 'mlp4pospred_n_units' : self.args.mlp4pospred_n_units,
+            'mlp4arcrep_n_layers' : self.args.mlp4arcrep_n_layers,
+            'mlp4arcrep_n_units' : self.args.mlp4arcrep_n_units,
+            'mlp4labelrep_n_layers' : self.args.mlp4labelrep_n_layers,
+            'mlp4labelrep_n_units' : self.args.mlp4labelrep_n_units,
+            'mlp4labelpred_n_layers' : self.args.mlp4labelpred_n_layers,
+            'mlp4labelpred_n_units' : self.args.mlp4labelpred_n_units,
+            'rnn_dropout' : self.args.rnn_dropout,
+            'hidden_mlp_dropout' : self.args.hidden_mlp_dropout,
+            'pred_layers_dropout' : self.args.pred_layers_dropout,
+            'task' : self.args.task,
+            'subpos_depth' : self.args.subpos_depth,
+            'lowercase' : self.args.lowercase,
+            'normalize_digits' : self.args.normalize_digits,
+            'freq_threshold' : self.args.freq_threshold,
+            'max_vocab_size' : self.args.max_vocab_size,
         }
 
         self.log('Init hyperparameters')
@@ -1127,6 +1408,35 @@ class ParserTrainer(Trainer):
         self.hparams = hparams
         self.task = self.hparams['task']
 
+        if (self.args.execute_mode != 'interactive' and 
+            self.hparams['pretrained_unigram_embed_dim'] > 0 and not self.unigram_embed_model):
+            self.log('Error: unigram embedding model is necessary.')
+            sys.exit()    
+
+        if self.unigram_embed_model:
+            pretrained_unigram_embed_dim = self.unigram_embed_model.wv.syn0[0].shape[0]
+            if hparams['pretrained_unigram_embed_dim'] != pretrained_unigram_embed_dim:
+                self.log(
+                    'Error: pretrained_unigram_embed_dim and dimension of loaded embedding model'
+                    + 'are conflicted.'.format(
+                        hparams['pretrained_unigram_embed_dim'], pretrained_unigram_embed_dim))
+                sys.exit()
+
+
+    def load_data_for_training(self):
+        refer_vocab = self.unigram_embed_model.wv if self.unigram_embed_model else set()
+        super().load_data_for_training(refer_vocab=refer_vocab)
+
+
+    def load_data_for_test(self):
+        refer_vocab = self.unigram_embed_model.wv if self.unigram_embed_model else set()
+        super().load_data_for_test(refer_vocab=refer_vocab)
+
+
+    def load_decode_data(self):
+        refer_vocab = self.unigram_embed_model.wv if self.unigram_embed_model else set()
+        super().load_decode_data(refer_vocab=refer_vocab)
+
 
     def show_training_data(self):
         train = self.train
@@ -1155,6 +1465,17 @@ class ParserTrainer(Trainer):
         self.report('[INFO] vocab: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
         self.report('[INFO] data length: train={} devel={}'.format(
             len(train.inputs[0]), len(dev.inputs[0]) if dev else 0))
+
+
+    def setup_optimizer(self):
+        super().setup_optimizer()
+
+        delparams = []
+        if self.unigram_embed_model and self.args.fix_pretrained_embed:
+            delparams.append('pretrained_unigram_embed/W')
+            self.log('Fix parameters: pretrained_unigram_embed/W')
+        if delparams:
+            self.optimizer.add_hook(optimizers.DeleteGradient(delparams))
 
 
     def setup_evaluator(self):
@@ -1294,12 +1615,12 @@ class AttributeAnnotatorTrainer(Trainer):
         self.label_begin_index = 2
 
 
-    def init_hyperparameters(self, args):
+    def init_hyperparameters(self):
         self.hparams = {
-            'task' : args.task,
-            'subpos_depth' : args.subpos_depth,
-            'lowercase' : args.lowercase,
-            'normalize_digits' : args.normalize_digits,
+            'task' : self.args.task,
+            'subpos_depth' : self.args.subpos_depth,
+            'lowercase' : self.args.lowercase,
+            'normalize_digits' : self.args.normalize_digits,
         }
 
         self.log('Init hyperparameters')
@@ -1342,7 +1663,8 @@ class AttributeAnnotatorTrainer(Trainer):
         self.task = self.hparams['task']
 
 
-    def load_model(self, model_path):
+    def load_model(self):
+        model_path = self.args.model_path
         array = model_path.split('.')
         dic_path = '{}.s2i'.format(array[0])
         hparam_path = '{}.hyp'.format(array[0])
