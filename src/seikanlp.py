@@ -76,7 +76,7 @@ def run():
     if args.execute_mode == 'train':
         trainer.load_data_for_training()
     elif args.execute_mode == 'eval':
-        trainer.load_data_for_test()
+        trainer.load_test_data()
     elif args.execute_mode == 'decode':
         trainer.load_decode_data()
 
