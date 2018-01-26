@@ -107,8 +107,6 @@ class SelectiveArgumentParser(object):
         #                     + ' using new file name endding with \'.pickle\'')
         parser.add_argument('--unigram_embed_model_path', default='', help=
                             'File path of pretrained model of token (character or word) unigram embedding')
-        parser.add_argument('--fix_pretrained_embed', action='store_true', help=
-                            'Fix paramerters of pretrained token unigram embedding duaring training')
         parser.add_argument('--input_data_format', '-f', default='', help=
                             'Choose format of input data among from \'wl\' and \'sl\'')
         parser.add_argument('--output_data_format', default='', help=
@@ -147,6 +145,11 @@ class SelectiveArgumentParser(object):
                             + '(Default: 300)')
         parser.add_argument('--subtoken_embed_dim', type=int, default=0, help=
                             'The number of dimension of subtoken (usually character) embedding (Default: 0)')
+
+        # neural models
+        parser.add_argument('--pretrained_embed_usage', default='none', help='')
+        parser.add_argument('--fix_pretrained_embed', action='store_true', help=
+                            'Fix paramerters of pretrained token unigram embedding duaring training')
 
         # sequene tagging and parsing
         parser.add_argument('--rnn_dropout', type=float, default=0.0, help=
@@ -476,6 +479,7 @@ class SelectiveArgumentParser(object):
 
             if train:
                 parser.add_argument('--fix_pretrained_embed', action='store_true')
+                parser.add_argument('--pretrained_embed_usage', default=args.pretrained_embed_usage)
                 parser.add_argument('--unigram_embed_dim', type=int, default=args.unigram_embed_dim)
                 parser.add_argument('--subtoken_embed_dim', type=int, default=args.subtoken_embed_dim)
                 parser.add_argument('--rnn_unit_type', default=args.rnn_unit_type)

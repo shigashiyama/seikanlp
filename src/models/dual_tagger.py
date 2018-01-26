@@ -26,14 +26,14 @@ class DualRNNTagger(chainer.Chain):
         with self.init_scope():
             print('### Short unit model', file=file)
             self.su_tagger = models.util.construct_RNNTagger(
-                n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
+                n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim, 0, 0,
                 rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
                 mlp_n_layers, mlp_n_units, n_labels, use_crf=use_crf, feat_dim=feat_dim, 
                 rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
                 pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, file=file)
             print('### Long unit model', file=file)
             self.lu_tagger = models.util.construct_RNNTagger(
-                n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
+                n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim, 0, 0,
                 rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
                 mlp_n_layers, mlp_n_units, n_labels, use_crf=use_crf, feat_dim=feat_dim, 
                 mlp_n_additional_units=sm_mlp_n_additional_units,

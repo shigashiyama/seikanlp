@@ -11,6 +11,7 @@ import common
 import constants
 import evaluators
 import models.util
+import models.tagger
 from models.tagger import RNNCRFTagger
 from models.dual_tagger import DualRNNTagger
 from models.parser import RNNBiaffineParser
@@ -24,8 +25,15 @@ class Classifier(chainer.link.Chain):
 
     def load_pretrained_embedding_layer(self, dic, external_model, finetuning=False):
         id2unigram = dic.tables[constants.UNIGRAM].id2str
-        models.util.load_pretrained_embedding_layer(
-            id2unigram, self.predictor.pretrained_unigram_embed, external_model, finetuning=finetuning)
+        usage = self.predictor.pretrained_embed_usage
+
+        if usage == models.util.ModelUsage.INIT:
+            models.util.load_pretrained_embedding_layer(
+                id2unigram, self.predictor.unigram_embed, external_model, finetuning=finetuning)
+
+        elif usage == models.util.ModelUsage.ADD or models.util.ModelUsage.CONCAT:
+            models.util.load_pretrained_embedding_layer(
+                id2unigram, self.predictor.pretrained_unigram_embed, external_model, finetuning=finetuning)
 
         
 class PatternMatcher(object):
@@ -101,9 +109,15 @@ class SequenceTagger(Classifier):
         id2unigram_grown = dic_grown.tables[constants.UNIGRAM].id2str
         n_vocab_org = self.predictor.unigram_embed.W.shape[0]
         n_vocab_grown = len(id2unigram_grown)
+        if (self.predictor.pretrained_embed_usage == models.util.ModelUsage.ADD or
+            self.predictor.pretrained_embed_usage == models.util.ModelUsage.CONCAT):
+            pretrained_unigram_embed = self.predictor.pretrained_unigram_embed
+        else:
+            pretrained_unigram_embed = None
         models.util.grow_embedding_layers(
             n_vocab_org, n_vocab_grown, self.predictor.unigram_embed, 
-            self.predictor.pretrained_unigram_embed, external_model, id2unigram_grown, train=train)
+            pretrained_unigram_embed, external_model, id2unigram_grown,
+            self.predictor.pretrained_embed_usage, train=train)
 
         if constants.SUBTOKEN in dic_grown.tables:
             id2subtoken_grown = dic_grown.tables[constants.SUBTOKEN].id2str
@@ -176,9 +190,10 @@ class DualSequenceTagger(Classifier):
 
 
     def load_pretrained_embedding_layer(self, dic, external_model, finetuning=False):
-        id2unigram = dic.tables[constants.UNIGRAM].id2str
-        models.util.load_pretrained_embedding_layer(
-            id2unigram, self.predictor.lu_tagger.pretrained_unigram_embed, external_model, finetuning=finetuning)
+        pass
+        # id2unigram = dic.tables[constants.UNIGRAM].id2str
+        # models.util.load_pretrained_embedding_layer(
+        #     id2unigram, self.predictor.lu_tagger.pretrained_unigram_embed, external_model, finetuning=finetuning)
 
 
     def grow_embedding_layers(self, dic_grown, external_model=None, train=True):
@@ -263,9 +278,15 @@ class DependencyParser(Classifier):
         id2unigram_grown = dic_grown.tables[constants.UNIGRAM].id2str
         n_vocab_org = self.predictor.unigram_embed.W.shape[0]
         n_vocab_grown = len(id2unigram_grown)
+        if (self.predictor.pretrained_embed_usage == models.util.ModelUsage.ADD or
+            self.predictor.pretrained_embed_usage == models.util.ModelUsage.CONCAT):
+            pretrained_unigram_embed = self.predictor.pretrained_unigram_embed
+        else:
+            pretrained_unigram_embed = None
         models.util.grow_embedding_layers(
             n_vocab_org, n_vocab_grown, self.predictor.unigram_embed, 
-            self.predictor.pretrained_unigram_embed, external_model, id2unigram_grown, train=train)
+            pretrained_unigram_embed, external_model, id2unigram_grown,
+            self.predictor.pretrained_embed_usage, train=train)
 
         if constants.POS_LABEL in dic_grown.tables:
             id2pos_grown = dic_grown.tables[constants.POS_LABEL].id2str
@@ -292,10 +313,52 @@ class DependencyParser(Classifier):
 
 def init_classifier(task, hparams, dic):
     n_vocab = len(dic.tables['unigram'])
+
+    unigram_embed_dim = hparams['unigram_embed_dim']
+
     if 'subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0:
+        subtoken_embed_dim = hparams['subtoken_embed_dim']
         n_subtokens = len(dic.tables[constants.SUBTOKEN])
     else:
-        n_subtokens = 0
+        subtoken_embed_dim = n_subtokens = 0
+
+    if 'chunk_embed_dim' in hparams and hparams['chunk_embed_dim'] > 0:
+        chunk_embed_dim = hparams['chunk_embed_dim']
+        n_chunks = len(dic.tries[constants.CHUNK])
+    else:
+        chunk_embed_dim = n_chunks = 0
+
+    if 'pretrained_unigram_embed_dim' in hparams and hparams['pretrained_unigram_embed_dim'] > 0:
+        pretrained_unigram_embed_dim = hparams['pretrained_unigram_embed_dim']
+    else:
+        pretrained_unigram_embed_dim = 0
+
+    if 'pretrained_chunk_embed_dim' in hparams and hparams['pretrained_chunk_embed_dim'] > 0:
+        pretrained_chunk_embed_dim = hparams['pretrained_chunk_embed_dim']
+    else:
+        pretrained_chunk_embed_dim = 0
+
+    if 'pretrained_embed_usage' in hparams:
+        pretrained_embed_usage = models.util.ModelUsage.get_instance(hparams['pretrained_embed_usage'])
+    else:
+        pretrained_embed_usage = models.util.ModelUsage.NONE
+
+    if (pretrained_embed_usage == models.util.ModelUsage.ADD or
+        pretrained_embed_usage == models.util.ModelUsage.INIT):
+        if pretrained_unigram_embed_dim > 0 and pretrained_unigram_embed_dim != unigram_embed_dim:
+            print('Error: pre-trained and random initialized unigram embedding vectors '
+                  + 'must be the same dimension for {} operation'.format(hparams['pretrained_embed_usage'])
+                  + ': d1={}, d2={}'.format(pretrained_unigram_embed_dim, unigram_embed_dim),
+                  file=sys.stderr)
+            sys.exit()
+
+        if pretrained_chunk_embed_dim > 0 and pretrained_chunk_embed_dim != chunk_embed_dim:
+            print('Error: pre-trained and random initialized chunk embedding vectors '
+                  + 'must be the same dimension for {} operation'.format(hparams['pretrained_embed_usage'])
+                  + ': d1={}, d2={}'.format(pretrained_chunk_embed_dim, chunk_embed_dim),
+                  file=sys.stderr)
+            sys.exit()
+
 
     # single tagger
     if common.is_single_st_task(task):
@@ -306,14 +369,17 @@ def init_classifier(task, hparams, dic):
 
         use_crf = hparams['inference_layer'] == 'crf'
 
-        predictor = models.util.construct_RNNTagger(
-            n_vocab, hparams['unigram_embed_dim'], 
-            n_subtokens, hparams['subtoken_embed_dim'], hparams['rnn_unit_type'], 
+        predictor = models.tagger.construct_RNNTagger(
+            n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim, 
+            n_chunks, chunk_embed_dim, 
+            hparams['rnn_unit_type'], 
             hparams['rnn_bidirection'], hparams['rnn_n_layers'], hparams['rnn_n_units'], 
             hparams['mlp_n_layers'], hparams['mlp_n_units'], n_labels, use_crf=use_crf,
             feat_dim=hparams['additional_feat_dim'], mlp_n_additional_units=0,
             rnn_dropout=hparams['rnn_dropout'], mlp_dropout=hparams['mlp_dropout'],
-            pretrained_unigram_embed_dim=hparams['pretrained_unigram_embed_dim'])
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
+            pretrained_chunk_embed_dim=pretrained_chunk_embed_dim,
+            pretrained_embed_usage=pretrained_embed_usage)
 
         classifier = SequenceTagger(predictor, task=task)
 
@@ -325,13 +391,13 @@ def init_classifier(task, hparams, dic):
             n_labels = len(dic.tables[constants.POS_LABEL])
             
         predictor = DualRNNTagger(
-            n_vocab, hparams['unigram_embed_dim'], 
-            n_subtokens, hparams['subtoken_embed_dim'], hparams['rnn_unit_type'], 
+            n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim, 
+            hparams['rnn_unit_type'], 
             hparams['rnn_bidirection'], hparams['rnn_n_layers'], hparams['rnn_n_units'], 
             hparams['mlp_n_layers'], hparams['mlp_n_units'], n_labels, 
             feat_dim=hparams['additional_feat_dim'],
             rnn_dropout=hparams['rnn_dropout'], mlp_dropout=hparams['mlp_dropout'],
-            pretrained_unigram_embed_dim=hparams['pretrained_unigram_embed_dim'],
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
             short_model_usage=hparams['submodel_usage'])
 
         classifier = DualSequenceTagger(predictor, task=task)
@@ -344,8 +410,8 @@ def init_classifier(task, hparams, dic):
         mlp4pospred_n_units = 0
 
         predictor = RNNBiaffineParser(
-            n_vocab, hparams['unigram_embed_dim'], n_pos, hparams['pos_embed_dim'],
-            n_subtokens, hparams['subtoken_embed_dim'],
+            n_vocab, unigram_embed_dim, n_pos, hparams['pos_embed_dim'],
+            n_subtokens, subtoken_embed_dim, 
             hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_n_layers'], 
             hparams['rnn_n_units'], 
             hparams['mlp4arcrep_n_layers'], hparams['mlp4arcrep_n_units'],
@@ -356,7 +422,8 @@ def init_classifier(task, hparams, dic):
             n_labels=n_labels, rnn_dropout=hparams['rnn_dropout'], 
             hidden_mlp_dropout=hparams['hidden_mlp_dropout'], 
             pred_layers_dropout=hparams['pred_layers_dropout'],
-            pretrained_unigram_embed_dim=hparams['pretrained_unigram_embed_dim'])
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
+            pretrained_embed_usage=pretrained_embed_usage)
 
         classifier = DependencyParser(predictor)
 
@@ -396,7 +463,7 @@ def init_classifier(task, hparams, dic):
     
 
 def init_evaluator(task, dic, ignored_labels):
-    if task == constants.TASK_SEG or task == constants.TASK_DUAL_SEG:
+    if task == constants.TASK_SEG or task == constants.TASK_DUAL_SEG or task == constants.TASK_HSEG:
         return evaluators.SegmenterEvaluator(dic.tables[constants.SEG_LABEL].id2str)
 
     elif task == constants.TASK_SEGTAG or task == constants.TASK_DUAL_SEGTAG:

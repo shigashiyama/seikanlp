@@ -493,7 +493,6 @@ class Trainer(object):
 
         i = 0
         n_ins = len(data.inputs[0])
-        # shuffle = False          # TODO
         shuffle = True if train else False
         for ids in batch_generator(n_ins, batch_size=self.args.batch_size, shuffle=shuffle):
             inputs = self.gen_inputs(data, ids)
@@ -773,6 +772,7 @@ class TaggerTrainer(TaggerTrainerBase):
 
         self.hparams = {
             'pretrained_unigram_embed_dim' : pretrained_unigram_embed_dim,
+            'pretrained_embed_usage' : self.args.pretrained_embed_usage,
             'fix_pretrained_embed' : self.args.fix_pretrained_embed,
             'unigram_embed_dim' : self.args.unigram_embed_dim,
             'subtoken_embed_dim' : self.args.subtoken_embed_dim,
@@ -937,7 +937,7 @@ class DualTaggerTrainer(TaggerTrainerBase):
         self.log('')
 
 
-    def init_model(self, pretrained_unigram_embed_dim=0):
+    def init_model(self):
         self.log('Initialize model from hyperparameters\n')
         self.classifier = classifiers.init_classifier(self.task, self.hparams, self.dic)
 
@@ -1101,8 +1101,8 @@ class ParserTrainer(Trainer):
 
     def init_model(self):
         super().init_model()
-        finetuning = not self.hparams['fix_pretrained_embed']
         if self.unigram_embed_model:
+            finetuning = not self.hparams['fix_pretrained_embed']
             self.classifier.load_pretrained_embedding_layer(
                 self.dic, self.unigram_embed_model, finetuning=finetuning)
 
@@ -1118,6 +1118,9 @@ class ParserTrainer(Trainer):
             
 
     def update_model(self):
+        id2uni = self.dic.tables[constants.UNIGRAM].id2str
+        model = self.classifier.predictor
+
         if (self.args.execute_mode == 'train' or
             self.args.execute_mode == 'eval' or
             self.args.execute_mode == 'decode'):
@@ -1135,6 +1138,7 @@ class ParserTrainer(Trainer):
 
         self.hparams = {
             'pretrained_unigram_embed_dim' : pretrained_unigram_embed_dim,
+            'pretrained_embed_usage' : self.args.pretrained_embed_usage,
             'fix_pretrained_embed' : self.args.fix_pretrained_embed,
             'unigram_embed_dim' : self.args.unigram_embed_dim,
             'subtoken_embed_dim' : self.args.subtoken_embed_dim,

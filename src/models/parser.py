@@ -14,9 +14,9 @@ from chainer.functions.math import minmax
 sys.path.append('src')
 import constants
 import util
-from models.common import MLP
 import models.util
-
+from models.util import ModelUsage
+from models.common import MLP
 
 
 class BiaffineCombination(chainer.Chain):
@@ -90,11 +90,10 @@ class RNNBiaffineParser(chainer.Chain):
             mlp4labelpred_n_layers, mlp4labelpred_n_units,
             mlp4pospred_n_layers=0, mlp4pospred_n_units=0,
             n_labels=0, rnn_dropout=0, hidden_mlp_dropout=0, pred_layers_dropout=0,
-            pretrained_unigram_embed_dim=0,
+            pretrained_unigram_embed_dim=0, pretrained_embed_usage=ModelUsage.NONE,
             file=sys.stderr):
         super().__init__()
 
-        self.concat_pretraind_embeddings = False
         self.common_arc_label = False
         self.common_head_mod = False
         self.n_dummy = 1
@@ -109,24 +108,25 @@ class RNNBiaffineParser(chainer.Chain):
 
             # unigram embedding layer(s)
 
-            if pretrained_unigram_embed_dim > 0:
-                self.pretrained_unigram_embed = L.EmbedID(n_vocab, pretrained_unigram_embed_dim)
+            self.pretrained_embed_usage = pretrained_embed_usage
+
+            self.unigram_embed, self.pretrained_unigram_embed = models.util.construct_embeddings(
+                n_vocab, unigram_embed_dim, pretrained_unigram_embed_dim, pretrained_embed_usage)
+            print('# Unigram embedding matrix: W={}'.format(self.unigram_embed.W.shape), file=file)
+            embed_dim = self.unigram_embed.W.shape[1]
+            if self.pretrained_unigram_embed is not None:
+                if self.pretrained_embed_usage == ModelUsage.CONCAT:
+                    embed_dim += self.pretrained_unigram_embed.W.shape[1]
                 print('# Pretrained unigram embedding matrix: W={}'.format(
                     self.pretrained_unigram_embed.W.shape), file=file)
-                if not self.concat_pretraind_embeddings:
-                    unigram_embed_dim = pretrained_unigram_embed_dim
-
-            else:
-                self.pretrained_unigram_embed = None
-            self.pretrained_unigram_embed_dim = pretrained_unigram_embed_dim
-
-            self.unigram_embed = L.EmbedID(n_vocab, unigram_embed_dim)
-            print('# Unigram embedding matrix: W={}'.format(self.unigram_embed.W.shape), file=file)
+            if self.pretrained_embed_usage != ModelUsage.NONE:
+                print('# Pretrained embedding usage: {}'.format(self.pretrained_embed_usage))
 
             # subtoken embedding layer
 
             if n_subtokens > 0 and subtoken_embed_dim > 0:
                 self.subtoken_embed = L.EmbedID(n_subtokens, subtoken_embed_dim)
+                embed_dim += subtoken_embed_dim
                 print('# Subtoken embedding matrix: W={}'.format(self.subtoken_embed.W.shape), file=file)
             self.subtoken_embed_dim = subtoken_embed_dim
 
@@ -134,14 +134,11 @@ class RNNBiaffineParser(chainer.Chain):
 
             if n_pos > 0 and pos_embed_dim > 0:
                 self.pos_embed = L.EmbedID(n_pos, pos_embed_dim)
+                embed_dim += pos_embed_dim
                 print('# POS embedding matrix: W={}'.format(self.pos_embed.W.shape), file=file)
             self.pos_embed_dim = pos_embed_dim;
 
             # recurrent layers
-
-            embed_dim = unigram_embed_dim + subtoken_embed_dim + pos_embed_dim
-            if self.concat_pretraind_embeddings:
-                embed_dim += pretrained_unigram_embed_dim
 
             self.rnn_unit_type = rnn_unit_type
             self.rnn = models.util.construct_RNN(
@@ -229,12 +226,13 @@ class RNNBiaffineParser(chainer.Chain):
 
         for w, c, p in zip(ws, cs, ps):
             xe = self.unigram_embed(w)
-            if self.pretrained_unigram_embed_dim > 0:
+
+            if self.pretrained_embed_usage == ModelUsage.ADD:
                 twe = self.pretrained_unigram_embed(w)
-                if self.concat_pretraind_embeddings:
-                    xe = F.concat((xe, twe), 1)
-                else:
-                    xe = xe + twe
+                xe = xe + twe
+            elif self.pretrained_embed_usage == ModelUsage.CONCAT:
+                twe = self.pretrained_unigram_embed(w)
+                xe = F.concat((xe, twe), 1)
 
             if self.subtoken_embed_dim > 0:
                 ce = F.concat(

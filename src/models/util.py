@@ -1,4 +1,5 @@
 import sys
+from enum import Enum, auto
 
 import numpy as np
 
@@ -6,7 +7,39 @@ import chainer
 import chainer.functions as F
 import chainer.links as L
 from chainer import initializers
-from models.tagger import RNNTagger, RNNCRFTagger
+
+
+class ModelUsage(Enum):
+    NONE = auto()
+    ADD = auto()
+    CONCAT = auto()
+    INIT = auto()
+
+    def get_instance(key):
+        if key.lower() == 'concat':
+            return ModelUsage.CONCAT
+        elif key.lower() == 'add':
+            return ModelUsage.ADD
+        elif key.lower() == 'init':
+            return ModelUsage.INIT
+        else:
+            return ModelUsage.NONE
+
+
+def construct_embeddings(n_vocab, rand_dim, pretrained_dim=0, usage=ModelUsage.ADD):
+    if pretrained_dim <= 0 or usage == ModelUsage.NONE:
+        rand_model = L.EmbedID(n_vocab, rand_dim)
+        pretrained_model = None
+
+    elif usage == ModelUsage.CONCAT or usage == ModelUsage.ADD:
+        rand_model = L.EmbedID(n_vocab, rand_dim)
+        pretrained_model = L.EmbedID(n_vocab, pretrained_dim)
+
+    elif usage == ModelUsage.INIT:
+        rand_model = L.EmbedID(n_vocab, pretrained_dim)
+        pretrained_model = None
+
+    return rand_model, pretrained_model
 
 
 def construct_RNN(unit_type, bidirection, n_layers, n_input, n_units, dropout, file=sys.stderr):
@@ -46,35 +79,7 @@ def construct_RNN(unit_type, bidirection, n_layers, n_input, n_units, dropout, f
     return rnn
 
 
-def construct_RNNTagger(
-        n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
-        rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-        mlp_n_layers, mlp_n_units, n_labels, use_crf=True,
-        feat_dim=0, mlp_n_additional_units=0,
-        rnn_dropout=0, mlp_dropout=0, pretrained_unigram_embed_dim=0, file=sys.stderr):
-
-    tagger = None
-    if use_crf:
-        tagger = RNNCRFTagger(
-            n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
-            mlp_n_additional_units=mlp_n_additional_units,
-            rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, file=file)
-    else:
-        tagger = RNNTagger(
-            n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
-            mlp_n_additional_units=mlp_n_additional_units,
-            rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, file=file)
-
-    return tagger
-
-
-def load_pretrained_embedding_layer(id2unigram, pretrained_embed, external_model, finetuning=False):
+def load_pretrained_embedding_layer(id2unigram, embed, external_model, finetuning=False):
     n_vocab = len(id2unigram)
     dim = external_model.wv.syn0[0].shape[0]
     initialW = initializers.normal.Normal(1.0)
@@ -94,25 +99,30 @@ def load_pretrained_embedding_layer(id2unigram, pretrained_embed, external_model
         weight.append(vec)
 
     weight = np.reshape(weight, (n_vocab, dim))
-    embed = L.EmbedID(n_vocab, dim)
     embed.W = chainer.Parameter(initializer=weight)
 
     if count >= 1:
         print('Use {} pretrained embedding vectors\n'.format(count), file=sys.stderr)
 
 
-
 def grow_embedding_layers(
         n_vocab_org, n_vocab_grown, rand_embed, 
         pretrained_embed=None, external_model=None, id2unigram_grown=None, 
-        train=False, file=sys.stderr):
+        pretrained_model_usage=ModelUsage.NONE, train=False, file=sys.stderr):
     if n_vocab_org == n_vocab_grown:
         return
 
-    if pretrained_embed is not None:
-        grow_embedding_layers_with_pretrained_model(
-            n_vocab_org, n_vocab_grown, rand_embed, 
-            pretrained_embed, external_model, id2unigram_grown, train=train, file=file)
+    if external_model and pretrained_model_usage != ModelUsage.NONE:
+        if pretrained_model_usage == ModelUsage.INIT:
+            grow_embedding_layer_with_pretrained_model(
+                n_vocab_org, n_vocab_grown, rand_embed,
+                external_model, id2unigram_grown, train=train, file=file)
+
+        else:
+            grow_embedding_layers_with_pretrained_model(
+                n_vocab_org, n_vocab_grown, rand_embed, pretrained_embed, 
+                external_model, id2unigram_grown, train=train, file=file)
+
     else:
         grow_embedding_layer_without_pretrained_model(n_vocab_org, n_vocab_grown, rand_embed)
         
@@ -130,12 +140,43 @@ def grow_embedding_layer_without_pretrained_model(
     print('Grow embedding matrix: {} -> {}'.format(n_vocab_org, rand_embed.W.shape[0]), file=file)
 
 
-def grow_embedding_layers_with_pretrained_model(
+# rand model       -> grow using external model
+def grow_embedding_layer_with_pretrained_model(
         n_vocab_org, n_vocab_grown, rand_embed, 
-        pretrained_embed, external_model, id2unigram_grown, train=False, file=sys.stderr):
+        external_model, id2unigram_grown, train=False, file=sys.stderr):
     diff = n_vocab_grown - n_vocab_org
     d_rand = rand_embed.W.shape[1]
-    d_pretrained = external_model.wv.syn0[0].shape[0] if external_model else 0
+
+    count = 0
+    initialW = initializers.normal.Normal(1.0)
+    w2_rand = []
+
+    for i in range(n_vocab_org, n_vocab_grown):
+        key = id2unigram_grown[i]
+        if key in external_model.wv.vocab:
+            vec_rand = external_model.wv[key]
+            count += 1
+        else:
+            vec_rand = initializers.generate_array(initialW, (d_rand, ), np)
+        w2_rand.append(vec_rand)
+
+    w2_rand = np.reshape(w2_rand, (diff, d_rand))
+    w_rand = F.concat((rand_embed.W, w2_rand), axis=0)
+    rand_embed.W = chainer.Parameter(initializer=w_rand.data, name='W')
+
+    print('Grow embedding matrix: {} -> {}'.format(n_vocab_org, rand_embed.W.shape[0]), file=file)
+    if count >= 1:
+        print('Add {} pretrained embedding vectors'.format(count), file=file)
+
+
+# rand model       -> grow 
+# pretrained model -> grow using external model
+def grow_embedding_layers_with_pretrained_model(
+        n_vocab_org, n_vocab_grown, rand_embed, pretrained_embed, 
+        external_model, id2unigram_grown, train=False, file=sys.stderr):
+    diff = n_vocab_grown - n_vocab_org
+    d_rand = rand_embed.W.shape[1]
+    d_pretrained = pretrained_embed.W.shape[1] #external_model.wv.syn0[0].shape[0]
 
     count = 0
     initialW = initializers.normal.Normal(1.0)
