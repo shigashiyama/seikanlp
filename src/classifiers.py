@@ -79,11 +79,12 @@ class SequenceTagger(Classifier):
         self.task = task
 
         
-    def __call__(self, ws, fs, ls, train=False):
-        ret = self.predictor(ws, fs, ls)
+    def __call__(self, us, bs, ts, ss, fs, ls, train=False):
+        ret = self.predictor(us, bs, ts, ss, fs, ls)
         return ret
 
 
+    # TODO fix
     def decode(self, ws, fs):
         ys = self.predictor.decode(ws, fs)
         return ys
@@ -138,6 +139,75 @@ class SequenceTagger(Classifier):
         if isinstance(self.predictor, RNNCRFTagger):
             models.util.grow_crf_layer(n_labels_org, n_labels_grown, self.predictor.crf)
                 
+
+class HybridSequenceTagger(SequenceTagger):
+    def __init__(self, predictor, task=constants.TASK_HSEG):
+        super().__init__(predictor=predictor)
+        self.task = task
+
+        
+    def load_pretrained_embedding_layer(
+            self, dic, external_unigram_model, external_chunk_model, finetuning=False):
+        id2unigram = dic.tables[constants.UNIGRAM].id2str
+        id2chunk = dic.tries[constants.CHUNK].id2chunk
+        usage = self.predictor.pretrained_embed_usage
+
+        if external_unigram_model:
+            if usage == models.util.ModelUsage.INIT:
+                models.util.load_pretrained_embedding_layer(
+                    id2unigram, self.predictor.unigram_embed, external_unigram_model, finetuning=finetuning)
+            elif usage == models.util.ModelUsage.ADD or models.util.ModelUsage.CONCAT:
+                models.util.load_pretrained_embedding_layer(
+                    id2unigram, self.predictor.pretrained_unigram_embed, external_unigram_model, 
+                    finetuning=finetuning)
+
+        if external_chunk_model:
+            if usage == models.util.ModelUsage.INIT:
+                models.util.load_pretrained_embedding_layer(
+                    id2chunk, self.predictor.chunk_embed, external_chunk_model, finetuning=finetuning)
+            elif usage == models.util.ModelUsage.ADD or models.util.ModelUsage.CONCAT:
+                models.util.load_pretrained_embedding_layer(
+                    id2chunk, self.predictor.pretrained_chunk_embed, external_chunk_model, finetuning=finetuning)
+
+
+    def grow_embedding_layers(
+            self, dic_grown, external_unigram_model=None, external_chunk_model=None, train=True):
+        if (self.predictor.pretrained_embed_usage == models.util.ModelUsage.ADD or
+            self.predictor.pretrained_embed_usage == models.util.ModelUsage.CONCAT):
+            pretrained_unigram_embed = self.predictor.pretrained_unigram_embed
+            pretrained_chunk_embed = self.predictor.pretrained_chunk_embed
+        else:
+            pretrained_unigram_embed = None
+            pretrained_chunk_embed = None
+
+        id2unigram_grown = dic_grown.tables[constants.UNIGRAM].id2str
+        n_vocab_org = self.predictor.unigram_embed.W.shape[0]
+        n_vocab_grown = len(id2unigram_grown)
+        models.util.grow_embedding_layers(
+            n_vocab_org, n_vocab_grown, self.predictor.unigram_embed, 
+            pretrained_unigram_embed, external_unigram_model, id2unigram_grown,
+            self.predictor.pretrained_embed_usage, train=train)
+
+        id2chunk_grown = dic_grown.tries[constants.CHUNK].id2chunk
+        n_vocab_org = self.predictor.chunk_embed.W.shape[0]
+        n_vocab_grown = len(id2chunk_grown)
+        models.util.grow_embedding_layers(
+            n_vocab_org, n_vocab_grown, self.predictor.chunk_embed, 
+            pretrained_chunk_embed, external_chunk_model, id2chunk_grown,
+            self.predictor.pretrained_embed_usage, train=train)
+
+        if constants.SUBTOKEN in dic_grown.tables:
+            id2subtoken_grown = dic_grown.tables[constants.SUBTOKEN].id2str
+            n_subtokens_org = self.predictor.subtoken_embed.W.shape[0]
+            n_subtokens_grown = len(id2subtoken_grown)
+            models.util.grow_embedding_layers(
+                n_subtokens_org, n_subtokens_grown, self.predictor.subtoken_embed, train=train)
+
+        
+    def __call__(self, us, cs, ms, bs, ts, ss, fs, ls, train=False):
+        ret = self.predictor(us, cs, ms, bs, ts, None, fs, ls)
+        return ret
+
 
 class DualSequenceTagger(Classifier):
     def __init__(self, predictor, task=constants.TASK_SEG):
@@ -319,6 +389,18 @@ def init_classifier(task, hparams, dic):
     else:
         unigram_embed_dim = 0
 
+    if 'bigram_embed_dim' in hparams and hparams['bigram_embed_dim'] > 0:
+        bigram_embed_dim = hparams['bigram_embed_dim']
+        n_bigrams = len(dic.tables[constants.BIGRAM])
+    else:
+        bigram_embed_dim = n_bigrams = 0
+
+    if 'tokentype_embed_dim' in hparams and hparams['tokentype_embed_dim'] > 0:
+        tokentype_embed_dim = hparams['tokentype_embed_dim']
+        n_tokentypes = len(dic.tables[constants.TOKEN_TYPE])
+    else:
+        tokentype_embed_dim = n_tokentypes = 0
+
     if 'subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0:
         subtoken_embed_dim = hparams['subtoken_embed_dim']
         n_subtokens = len(dic.tables[constants.SUBTOKEN])
@@ -335,6 +417,8 @@ def init_classifier(task, hparams, dic):
     else:
         pretrained_embed_usage = models.util.ModelUsage.NONE
 
+    use_attention = 'use_attention' in hparams and hparams['use_attention'] == True
+
     if (pretrained_embed_usage == models.util.ModelUsage.ADD or
         pretrained_embed_usage == models.util.ModelUsage.INIT):
         if pretrained_unigram_embed_dim > 0 and pretrained_unigram_embed_dim != unigram_embed_dim:
@@ -344,6 +428,12 @@ def init_classifier(task, hparams, dic):
                   file=sys.stderr)
             sys.exit()
 
+        if pretrained_chunk_embed_dim > 0 and pretrained_chunk_embed_dim != chunk_embed_dim:
+            print('Error: pre-trained and random initialized chunk embedding vectors '
+                  + 'must be the same dimension for {} operation'.format(hparams['pretrained_embed_usage'])
+                  + ': d1={}, d2={}'.format(pretrained_chunk_embed_dim, chunk_embed_dim),
+                  file=sys.stderr)
+            sys.exit()
 
     # single tagger
     if common.is_single_st_task(task):
@@ -355,16 +445,22 @@ def init_classifier(task, hparams, dic):
         use_crf = hparams['inference_layer'] == 'crf'
 
         predictor = models.tagger.construct_RNNTagger(
-            n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim, 
+            n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
+            n_subtokens, subtoken_embed_dim, n_chunks, chunk_embed_dim, 
             hparams['rnn_unit_type'], 
             hparams['rnn_bidirection'], hparams['rnn_n_layers'], hparams['rnn_n_units'], 
             hparams['mlp_n_layers'], hparams['mlp_n_units'], n_labels, use_crf=use_crf,
             feat_dim=hparams['additional_feat_dim'], mlp_n_additional_units=0,
             rnn_dropout=hparams['rnn_dropout'], mlp_dropout=hparams['mlp_dropout'],
             pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
-            pretrained_embed_usage=pretrained_embed_usage)
+            pretrained_chunk_embed_dim=pretrained_chunk_embed_dim,
+            pretrained_embed_usage=pretrained_embed_usage,
+            use_attention=use_attention)
 
-        classifier = SequenceTagger(predictor, task=task)
+        if task == constants.TASK_HSEG:
+            classifier = HybridSequenceTagger(predictor, task=task)            
+        else:
+            classifier = SequenceTagger(predictor, task=task)
 
     # dual tagger
     elif common.is_dual_st_task(task):

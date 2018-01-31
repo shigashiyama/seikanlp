@@ -152,6 +152,10 @@ class Trainer(object):
             self.dic = pickle.load(f)
         self.log('Load dic: {}'.format(dic_path))
         self.log('Num of tokens: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
+        if self.dic.has_table(constants.BIGRAM):
+            self.log('Num of bigrams: {}'.format(len(self.dic.tables[constants.BIGRAM])))
+        if self.dic.has_table(constants.TOKEN_TYPE):
+            self.log('Num of tokentypes: {}'.format(len(self.dic.tables[constants.TOKEN_TYPE])))
         if self.dic.has_table(constants.SUBTOKEN):
             self.log('Num of subtokens: {}'.format(len(self.dic.tables[constants.SUBTOKEN])))
         if self.dic.has_trie(constants.CHUNK):
@@ -249,6 +253,8 @@ class Trainer(object):
             common.is_tagging_task(task) or 
             (common.is_parsing_task(task) and 'pos_embed_dim' in hparams and hparams['pos_embed_dim'] > 0) or
             common.is_attribute_annotation_task(task))
+        use_bigram = ('bigram_embed_dim' in hparams and hparams['bigram_embed_dim'] > 0)
+        use_tokentype = ('tokentype_embed_dim' in hparams and hparams['tokentype_embed_dim'] > 0)        
         use_subtoken = ('subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0)
         use_chunk_trie = get_chunk_trie_flag(hparams)
         subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
@@ -266,7 +272,8 @@ class Trainer(object):
         else:
             train, self.dic = data_io.load_annotated_data(
                 train_path, task, input_data_format, train=True, use_pos=use_pos,
-                use_chunk_trie=use_chunk_trie, use_subtoken=use_subtoken, subpos_depth=subpos_depth, 
+                use_bigram=use_bigram, use_tokentype=use_tokentype, use_subtoken=use_subtoken, 
+                use_chunk_trie=use_chunk_trie, subpos_depth=subpos_depth, 
                 lowercase=lowercase, normalize_digits=normalize_digits, 
                 max_vocab_size=max_vocab_size, freq_threshold=freq_threshold,
                 dic=self.dic, refer_tokens=refer_tokens, refer_chunks=refer_chunks)
@@ -281,6 +288,12 @@ class Trainer(object):
         self.log('Load training data: {}'.format(train_path))
         self.log('Data length: {}'.format(len(train.inputs[0])))
         self.log('Num of tokens: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
+        if self.dic.has_table(constants.BIGRAM):
+            self.log('Num of bigrams: {}'.format(len(self.dic.tables[constants.BIGRAM])))
+        if self.dic.has_table(constants.TOKEN_TYPE):
+            self.log('Num of tokentypes: {}'.format(len(self.dic.tables[constants.TOKEN_TYPE])))
+        if self.dic.has_table(constants.SUBTOKEN):
+            self.log('Num of subtokens: {}'.format(len(self.dic.tables[constants.SUBTOKEN])))
         if self.dic.has_trie(constants.CHUNK):
             self.log('Num of chunks: {}'.format(len(self.dic.tries[constants.CHUNK])))
         self.log()
@@ -294,13 +307,20 @@ class Trainer(object):
             # dic can be updated if embed_model are used
             dev, self.dic = data_io.load_annotated_data(
                 dev_path, task, input_data_format, train=False, use_pos=use_pos, 
-                use_chunk_trie=use_chunk_trie, use_subtoken=use_subtoken, subpos_depth=subpos_depth, 
+                use_bigram=use_bigram, use_tokentype=use_tokentype, use_subtoken=use_subtoken, 
+                use_chunk_trie=use_chunk_trie, subpos_depth=subpos_depth, 
                 lowercase=lowercase, normalize_digits=normalize_digits, 
                 dic=self.dic, refer_tokens=refer_tokens, refer_chunks=refer_chunks)
 
             self.log('Load development data: {}'.format(dev_path))
             self.log('Data length: {}'.format(len(dev.inputs[0])))
             self.log('Num of tokens: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
+            if self.dic.has_table(constants.BIGRAM):
+                self.log('Num of bigrams: {}'.format(len(self.dic.tables[constants.BIGRAM])))
+            if self.dic.has_table(constants.TOKEN_TYPE):
+                self.log('Num of tokentypes: {}'.format(len(self.dic.tables[constants.TOKEN_TYPE])))
+            if self.dic.has_table(constants.SUBTOKEN):
+                self.log('Num of subtokens: {}'.format(len(self.dic.tables[constants.SUBTOKEN])))
             if self.dic.has_trie(constants.CHUNK):
                 self.log('Num of chunks: {}'.format(len(self.dic.tries[constants.CHUNK])))
             self.log()
@@ -323,15 +343,18 @@ class Trainer(object):
         input_data_format = args.input_data_format
 
         task = hparams['task']
-        use_pos = constants.POS_LABEL in self.dic.tables
-        use_subtoken = ('subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0)
-        use_chunk_trie = get_chunk_trie_flag(hparams)
+        use_pos = self.dic.has_table(constants.POS_LABEL)
+        use_bigram = self.dic.has_table(constants.BIGRAM)
+        use_tokentype = self.dic.has_table(constants.TOKEN_TYPE)
+        use_subtoken = self.dic.has_table(constants.SUBTOKEN)
+        use_chunk_trie = self.dic.has_trie(constants.CHUNK) #get_chunk_trie_flag(hparams)
         subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
         lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
 
         test, self.dic = data_io.load_annotated_data(
-            test_path, task, input_data_format, train=False, use_pos=use_pos, 
+            test_path, task, input_data_format, train=False, use_pos=use_pos,
+            use_bigram=use_bigram, use_tokentype=use_tokentype,
             use_chunk_trie=use_chunk_trie, use_subtoken=use_subtoken, subpos_depth=subpos_depth, 
             lowercase=lowercase, normalize_digits=normalize_digits, 
             dic=self.dic, refer_tokens=refer_tokens, refer_chunks=refer_chunks)
@@ -339,6 +362,12 @@ class Trainer(object):
         self.log('Load test data: {}'.format(test_path))
         self.log('Data length: {}'.format(len(test.inputs[0])))
         self.log('Num of tokens: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
+        if self.dic.has_table(constants.BIGRAM):
+            self.log('Num of bigrams: {}'.format(len(self.dic.tables[constants.BIGRAM])))
+        if self.dic.has_table(constants.TOKEN_TYPE):
+            self.log('Num of tokentypes: {}'.format(len(self.dic.tables[constants.TOKEN_TYPE])))
+        if self.dic.has_table(constants.SUBTOKEN):
+            self.log('Num of subtokens: {}'.format(len(self.dic.tables[constants.SUBTOKEN])))
         if self.dic.has_trie(constants.CHUNK):
             self.log('Num of chunks: {}'.format(len(self.dic.tries[constants.CHUNK])))
         self.log()
@@ -575,51 +604,6 @@ class TaggerTrainerBase(Trainer):
         super().__init__(args, logger)
 
 
-    def load_hyperparameters(self, hparams_path):
-        hparams = {}
-        with open(hparams_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith('#'):
-                    continue
-
-                kv = line.split('=')
-                key = kv[0]
-                val = kv[1]
-
-                if (key == 'pretrained_unigram_embed_dim' or
-                    key == 'unigram_embed_dim' or
-                    key == 'subtoken_embed_dim' or
-                    key == 'additional_feat_dim' or
-                    key == 'rnn_n_layers' or
-                    key == 'rnn_n_units' or
-                    key == 'mlp_n_layers'or
-                    key == 'mlp_n_units' or
-                    key == 'subpos_depth' or
-                    key == 'freq_threshold' or
-                    key == 'max_vocab_size'
-                ):
-                    val = int(val)
-
-                elif (key == 'rnn_dropout' or
-                      key == 'mlp_dropout'
-                ):
-                    val = float(val)
-
-                elif (key == 'rnn_bidirection' or
-                      key == 'lowercase' or
-                      key == 'normalize_digits' or
-                      key == 'fix_pretrained_embed'
-                ):
-                    val = (val.lower() == 'true')
-
-                hparams[key] = val
-
-        self.hparams = hparams
-
-        self.task = self.hparams['task']
-        
-
     def show_training_data(self):
         train = self.train
         dev = self.dev
@@ -628,6 +612,12 @@ class TaggerTrainerBase(Trainer):
         self.log('# train_gold: {} ... {}\n'.format(train.outputs[0][0], train.outputs[0][-1]))
         t2i_tmp = list(self.dic.tables[constants.UNIGRAM].str2id.items())
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
+        if self.dic.has_table(constants.BIGRAM):
+            b2i_tmp = list(self.dic.tables[constants.BIGRAM].str2id.items())
+            self.log('# bigram2id: {} ... {}\n'.format(b2i_tmp[:10], b2i_tmp[len(b2i_tmp)-10:]))
+        if self.dic.has_table(constants.TOKEN_TYPE):
+            tt2i = list(self.dic.tables[constants.TOKEN_TYPE].str2id.items())
+            self.log('# tokentype2id: {}\n'.format(tt2i))
         if self.dic.has_table(constants.SUBTOKEN):
             st2i_tmp = list(self.dic.tables[constants.SUBTOKEN].str2id.items())
             self.log('# subtoken2id: {} ... {}\n'.format(st2i_tmp[:10], st2i_tmp[len(st2i_tmp)-10:]))
@@ -652,16 +642,21 @@ class TaggerTrainerBase(Trainer):
     def gen_inputs(self, data, ids, evaluate=True):
         xp = cuda.cupy if self.args.gpu >= 0 else np
 
-        xs = [xp.asarray(data.inputs[0][j], dtype='i') for j in ids]
-        ts = [xp.asarray(data.outputs[0][j], dtype='i') for j in ids] if evaluate else None
+        us = [xp.asarray(data.inputs[0][j], dtype='i') for j in ids]
+        bs = [xp.asarray(data.inputs[1][j], dtype='i') for j in ids] if data.inputs[1] else None
+        ts = [xp.asarray(data.inputs[2][j], dtype='i') for j in ids] if data.inputs[2] else None
+        ss = ([[xp.asarray(subs, dtype='i') for subs in data.inputs[1][j]] for j in ids] 
+              if data.inputs[3] else None)
         fs = [data.featvecs[j] for j in ids] if self.hparams['feature_template'] else None
+        ls = [xp.asarray(data.outputs[0][j], dtype='i') for j in ids] if evaluate else None
 
         if evaluate:
-            return xs, fs, ts
+            return us, bs, ts, ss, fs, ls
         else:
-            return xs, fs
+            return us, bs, ts, ss, fs
         
 
+    # TODO include bigram etc
     def decode(self, rdata, use_pos=False, file=sys.stdout):
         n_ins = len(rdata.inputs[0])
         orgseqs = rdata.orgdata[0]
@@ -678,6 +673,7 @@ class TaggerTrainerBase(Trainer):
             n_ins, timer.elapsed, timer.elapsed/n_ins), file=sys.stderr)
 
 
+    # TODO include bigram etc
     def run_interactive_mode(self):
         use_pos = False
         lowercase = self.hparams['lowercase'] if 'lowercase' in self.hparams else False
@@ -730,7 +726,7 @@ class TaggerTrainer(TaggerTrainerBase):
     def __init__(self, args, logger=sys.stderr):
         super().__init__(args, logger)
         self.unigram_embed_model = None
-        self.label_begin_index = 2
+        self.label_begin_index = 5
 
 
     def load_external_embedding_models(self):
@@ -775,6 +771,8 @@ class TaggerTrainer(TaggerTrainerBase):
             'pretrained_embed_usage' : self.args.pretrained_embed_usage,
             'fix_pretrained_embed' : self.args.fix_pretrained_embed,
             'unigram_embed_dim' : self.args.unigram_embed_dim,
+            'bigram_embed_dim' : self.args.bigram_embed_dim,
+            'tokentype_embed_dim' : self.args.tokentype_embed_dim,
             'subtoken_embed_dim' : self.args.subtoken_embed_dim,
             'rnn_unit_type' : self.args.rnn_unit_type,
             'rnn_bidirection' : self.args.rnn_bidirection,
@@ -802,6 +800,53 @@ class TaggerTrainer(TaggerTrainerBase):
             self.report('[INFO] arg: {}'.format(message))
         self.log('')
 
+
+    def load_hyperparameters(self, hparams_path):
+        hparams = {}
+        with open(hparams_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('#'):
+                    continue
+
+                kv = line.split('=')
+                key = kv[0]
+                val = kv[1]
+
+                if (key == 'pretrained_unigram_embed_dim' or
+                    key == 'unigram_embed_dim' or
+                    key == 'bigram_embed_dim' or
+                    key == 'tokentype_embed_dim' or
+                    key == 'subtoken_embed_dim' or
+                    key == 'additional_feat_dim' or
+                    key == 'rnn_n_layers' or
+                    key == 'rnn_n_units' or
+                    key == 'mlp_n_layers'or
+                    key == 'mlp_n_units' or
+                    key == 'subpos_depth' or
+                    key == 'freq_threshold' or
+                    key == 'max_vocab_size'
+                ):
+                    val = int(val)
+
+                elif (key == 'rnn_dropout' or
+                      key == 'mlp_dropout'
+                ):
+                    val = float(val)
+
+                elif (key == 'rnn_bidirection' or
+                      key == 'lowercase' or
+                      key == 'normalize_digits' or
+                      key == 'fix_pretrained_embed'
+                ):
+                    val = (val.lower() == 'true')
+
+                hparams[key] = val
+
+        self.hparams = hparams
+
+        self.task = self.hparams['task']
+        
 
     def load_hyperparameter(self):
         super().load_hyperparameter(self)
@@ -865,6 +910,7 @@ class TaggerTrainer(TaggerTrainerBase):
         self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignored_labels)
 
 
+    # TODO include bigram etc
     def decode_batch(self, xs, fs, orgseqs, file=sys.stdout):
         ys = self.classifier.decode(xs, fs)
         id2label = (self.dic.tables[constants.SEG_LABEL if common.is_segmentation_task(self.task) 
@@ -901,6 +947,247 @@ class TaggerTrainer(TaggerTrainerBase):
                 print(file=file)
 
 
+# character word hybrid segmenter
+class HybridSegmenterTrainer(TaggerTrainerBase):
+    def __init__(self, args, logger=sys.stderr):
+        super().__init__(args, logger)
+        self.unigram_embed_model = None
+        self.chunk_embed_model = None
+        self.label_begin_index = 7
+
+
+    def load_external_embedding_models(self):
+        if self.args.unigram_embed_model_path:
+            self.unigram_embed_model = load_embedding_model(self.args.unigram_embed_model_path)
+        if self.args.chunk_embed_model_path:
+            self.chunk_embed_model = load_embedding_model(self.args.chunk_embed_model_path)
+
+
+    def init_model(self):
+        super().init_model()
+        # id2uni = self.dic.tables[constants.UNIGRAM].id2str
+        # model = self.classifier.predictor
+        # print('PU', model.pretrained_unigram_embed.W)
+        # print('U', model.unigram_embed.W)
+
+        finetuning = not self.hparams['fix_pretrained_embed']
+        self.classifier.load_pretrained_embedding_layer(
+            self.dic, self.unigram_embed_model, self.chunk_embed_model, finetuning)
+
+        # print('PU', model.pretrained_unigram_embed.W)
+        # print('U', model.unigram_embed.W)
+
+
+    def load_model(self):
+        super().load_model()
+        if 'rnn_dropout' in self.hparams:
+            self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
+        if 'hidden_mlp_dropout' in self.hparams:
+            self.classifier.change_hidden_mlp_dropout_ratio(self.hparams['hidden_mlp_dropout'])
+
+
+    def update_model(self):
+        if (self.args.execute_mode == 'train' or
+            self.args.execute_mode == 'eval' or
+            self.args.execute_mode == 'decode'):
+
+            self.classifier.grow_embedding_layers(
+                self.dic, self.unigram_embed_model, self.chunk_embed_model,
+                train=(self.args.execute_mode=='train'))
+            self.classifier.grow_inference_layers(self.dic)
+
+
+    def init_hyperparameters(self):
+        if self.unigram_embed_model:
+            pretrained_unigram_embed_dim = self.unigram_embed_model.wv.syn0[0].shape[0]
+        else:
+            pretrained_unigram_embed_dim = 0
+
+        if self.chunk_embed_model:
+            pretrained_chunk_embed_dim = self.chunk_embed_model.wv.syn0[0].shape[0]
+        else:
+            pretrained_chunk_embed_dim = 0
+
+        self.hparams = {
+            'pretrained_unigram_embed_dim' : pretrained_unigram_embed_dim,
+            'pretrained_chunk_embed_dim' : pretrained_chunk_embed_dim,
+            'pretrained_embed_usage' : self.args.pretrained_embed_usage,
+            'fix_pretrained_embed' : self.args.fix_pretrained_embed,
+            'use_attention' : self.args.use_attention,
+            'unigram_embed_dim' : self.args.unigram_embed_dim,
+            'bigram_embed_dim' : self.args.bigram_embed_dim,
+            'tokentype_embed_dim' : self.args.tokentype_embed_dim,
+            'subtoken_embed_dim' : self.args.subtoken_embed_dim,
+            'chunk_embed_dim' : self.args.chunk_embed_dim,
+            'rnn_unit_type' : self.args.rnn_unit_type,
+            'rnn_bidirection' : self.args.rnn_bidirection,
+            'rnn_n_layers' : self.args.rnn_n_layers,
+            'rnn_n_units' : self.args.rnn_n_units,
+            'mlp_n_layers' : self.args.mlp_n_layers,
+            'mlp_n_units' : self.args.mlp_n_units,
+            'inference_layer' : self.args.inference_layer,
+            'rnn_dropout' : self.args.rnn_dropout,
+            'mlp_dropout' : self.args.mlp_dropout,
+            'feature_template' : self.args.feature_template,
+            'task' : self.args.task,
+            'subpos_depth' : self.args.subpos_depth,
+            'lowercase' : self.args.lowercase,
+            'normalize_digits' : self.args.normalize_digits,
+            'freq_threshold' : self.args.freq_threshold,
+            'max_vocab_size' : self.args.max_vocab_size,
+        }
+
+        self.log('Init hyperparameters')
+        self.log('### arguments')
+        for k, v in self.args.__dict__.items():
+            message = '{}={}'.format(k, v)
+            self.log('# {}'.format(message))
+            self.report('[INFO] arg: {}'.format(message))
+        self.log('')
+
+
+    def load_hyperparameters(self, hparams_path):
+        hparams = {}
+        with open(hparams_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('#'):
+                    continue
+
+                kv = line.split('=')
+                key = kv[0]
+                val = kv[1]
+
+                if (key == 'pretrained_unigram_embed_dim' or
+                    key == 'pretrained_chunk_embed_dim' or
+                    key == 'unigram_embed_dim' or
+                    key == 'bigram_embed_dim' or
+                    key == 'tokentype_embed_dim' or
+                    key == 'subtoken_embed_dim' or
+                    key == 'chunk_embed_dim' or
+                    key == 'additional_feat_dim' or
+                    key == 'rnn_n_layers' or
+                    key == 'rnn_n_units' or
+                    key == 'mlp_n_layers'or
+                    key == 'mlp_n_units' or
+                    key == 'subpos_depth' or
+                    key == 'freq_threshold' or
+                    key == 'max_vocab_size'
+                ):
+                    val = int(val)
+
+                elif (key == 'rnn_dropout' or
+                      key == 'mlp_dropout'
+                ):
+                    val = float(val)
+
+                elif (key == 'rnn_bidirection' or
+                      key == 'lowercase' or
+                      key == 'normalize_digits' or
+                      key == 'fix_pretrained_embed' or
+                      key == 'use_attention'
+                ):
+                    val = (val.lower() == 'true')
+
+                hparams[key] = val
+
+        self.hparams = hparams
+
+        self.task = self.hparams['task']
+
+        if self.args.execute_mode != 'interactive':
+            if self.hparams['pretrained_unigram_embed_dim'] > 0 and not self.unigram_embed_model:
+                self.log('Error: unigram embedding model is necessary.')
+                sys.exit()
+
+            if self.hparams['pretrained_chunk_embed_dim'] > 0 and not self.chunk_embed_model:
+                self.log('Error: chunk embedding model is necessary.')
+                sys.exit()
+                
+
+        if self.unigram_embed_model:
+            pretrained_unigram_embed_dim = self.unigram_embed_model.wv.syn0[0].shape[0]
+            if hparams['pretrained_unigram_embed_dim'] != pretrained_unigram_embed_dim:
+                self.log(
+                    'Error: pretrained_unigram_embed_dim and dimension of loaded embedding model'
+                    + 'are conflicted.'.format(
+                        hparams['pretrained_unigram_embed_dim'], pretrained_unigram_embed_dim))
+                sys.exit()
+
+        if self.chunk_embed_model:
+            pretrained_chunk_embed_dim = self.chunk_embed_model.wv.syn0[0].shape[0]
+            if hparams['pretrained_chunk_embed_dim'] != pretrained_chunk_embed_dim:
+                self.log(
+                    'Error: pretrained_chunk_embed_dim and dimension of loaded embedding model'
+                    + 'are conflicted.'.format(
+                        hparams['pretrained_chunk_embed_dim'], pretrained_chunk_embed_dim))
+                sys.exit()
+
+
+    def load_data_for_training(self):
+        refer_tokens = self.unigram_embed_model.wv if self.unigram_embed_model else set()
+        refer_chunks = self.chunk_embed_model.wv if self.chunk_embed_model else set()
+
+        super().load_data_for_training(refer_tokens=refer_tokens, refer_chunks=refer_chunks)
+        xp = cuda.cupy if self.args.gpu >= 0 else np
+        
+        self.log('Start chunk search for training data\n')
+        data_io.add_chunk_sequences(self.train, self.dic, xp=xp)
+
+        if self.dev:
+            self.log('Start chunk search for development data\n')            
+            data_io.add_chunk_sequences(self.dev, self.dic, xp=xp)
+
+
+    def load_test_data(self):
+        refer_tokens = self.unigram_embed_model.wv if self.unigram_embed_model else set()
+        refer_chunks = self.chunk_embed_model.wv if self.chunk_embed_model else set()
+
+        super().load_test_data(refer_tokens=refer_tokens, refer_chunks=refer_chunks)
+        xp = cuda.cupy if self.args.gpu >= 0 else np
+        
+        self.log('Start chunk search for test data\n')
+        data_io.add_chunk_sequences(self.test, self.dic, xp=xp)
+
+
+    def setup_optimizer(self):
+        super().setup_optimizer()
+
+        delparams = []
+        if self.unigram_embed_model and self.args.fix_pretrained_embed:
+            delparams.append('pretrained_unigram_embed/W')
+            self.log('Fix parameters: pretrained_unigram_embed/W')
+
+        if self.chunk_embed_model and self.args.fix_pretrained_embed:
+            delparams.append('pretrained_chunk_embed/W')
+            self.log('Fix parameters: pretrained_chunk_embed/W')
+
+        if delparams:
+            self.optimizer.add_hook(optimizers.DeleteGradient(delparams))
+
+
+    def setup_evaluator(self):
+        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignored_labels)
+
+
+    def gen_inputs(self, data, ids, evaluate=True):
+        xp = cuda.cupy if self.args.gpu >= 0 else np
+
+        us = [xp.asarray(data.inputs[0][j], dtype='i') for j in ids]
+        bs = [xp.asarray(data.inputs[1][j], dtype='i') for j in ids] if data.inputs[1] else None
+        ts = [xp.asarray(data.inputs[2][j], dtype='i') for j in ids] if data.inputs[2] else None
+        ss = None
+        cs = [xp.asarray(data.inputs[4][j], dtype='i') for j in ids]
+        ms = [data.inputs[5][j] for j in ids]
+        fs = [data.featvecs[j] for j in ids] if self.hparams['feature_template'] else None
+        ls = [xp.asarray(data.outputs[0][j], dtype='i') for j in ids] if evaluate else None
+
+        if evaluate:
+            return us, cs, ms, bs, ts, ss, fs, ls
+        else:
+            return us, cs, ms, bs, ts, ss, fs
+
+
 class DualTaggerTrainer(TaggerTrainerBase):
     def __init__(self, args, logger=sys.stderr):
         super().__init__(args, logger)
@@ -909,8 +1196,49 @@ class DualTaggerTrainer(TaggerTrainerBase):
 
 
     def load_hyperparameters(self, hparams_path):
-        super().load_hyperparameters(hparams_path)
+        hparams = {}
+        with open(hparams_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('#'):
+                    continue
 
+                kv = line.split('=')
+                key = kv[0]
+                val = kv[1]
+
+                if (key == 'pretrained_unigram_embed_dim' or
+                    key == 'unigram_embed_dim' or
+                    key == 'subtoken_embed_dim' or
+                    key == 'additional_feat_dim' or
+                    key == 'rnn_n_layers' or
+                    key == 'rnn_n_units' or
+                    key == 'mlp_n_layers'or
+                    key == 'mlp_n_units' or
+                    key == 'subpos_depth' or
+                    key == 'freq_threshold' or
+                    key == 'max_vocab_size'
+                ):
+                    val = int(val)
+
+                elif (key == 'rnn_dropout' or
+                      key == 'mlp_dropout'
+                ):
+                    val = float(val)
+
+                elif (key == 'rnn_bidirection' or
+                      key == 'lowercase' or
+                      key == 'normalize_digits' or
+                      key == 'fix_pretrained_embed'
+                ):
+                    val = (val.lower() == 'true')
+
+                hparams[key] = val
+
+        self.hparams = hparams
+
+        self.task = self.hparams['task']
+        
 
     def init_hyperparameters(self):
         self.log('Initialize hyperparameters for full model\n')
@@ -1316,9 +1644,9 @@ class ParserTrainer(Trainer):
 
     def gen_inputs(self, data, ids, evaluate=True):
         xp = cuda.cupy if self.args.gpu >= 0 else np
-        ws = [xp.asarray(data.inputs[0][j], dtype='i') for j in ids]
-        cs = ([[xp.asarray(subs, dtype='i') for subs in data.inputs[1][j]] for j in ids] 
-              if len(data.inputs) >= 2 else None)
+        us = [xp.asarray(data.inputs[0][j], dtype='i') for j in ids]
+        ss = ([[xp.asarray(subs, dtype='i') for subs in data.inputs[1][j]] for j in ids] 
+              if data.inputs[3] else None)
         ps = ([xp.asarray(data.outputs[0][j], dtype='i') for j in ids] 
               if len(data.outputs) > 0 and data.outputs[0] else None)
 
@@ -1326,9 +1654,9 @@ class ParserTrainer(Trainer):
             ths = [xp.asarray(data.outputs[1][j], dtype='i') for j in ids]
             if common.is_typed_parsing_task(self.task):
                 tls = [xp.asarray(data.outputs[2][j], dtype='i') for j in ids]
-                return ws, cs, ps, ths, tls
+                return us, ss, ps, ths, tls
             else:
-                return ws, cs, ps, ths
+                return us, ss, ps, ths
         else:
             return ws, cs, ps
 

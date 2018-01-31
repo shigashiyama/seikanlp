@@ -32,7 +32,10 @@ def run():
     args = arguments.SelectiveArgumentParser().parse_args()
 
     if common.is_single_st_task(args.task):
-        trainer = trainers.TaggerTrainer(args)
+        if args.task == constants.TASK_HSEG:
+            trainer = trainers.HybridSegmenterTrainer(args)
+        else:
+            trainer = trainers.TaggerTrainer(args)
     elif common.is_dual_st_task(args.task):
         trainer = trainers.DualTaggerTrainer(args)
     elif common.is_parsing_task(args.task):

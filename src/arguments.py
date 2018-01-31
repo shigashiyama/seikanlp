@@ -139,7 +139,6 @@ class SelectiveArgumentParser(object):
                             + 'low frequency tokens are regarded as unknown tokens so that '
                             + 'vocaburaly size does not exceed the specified size so much '
                             + 'if set positive value (Default: -1)')
-        # parser.add_argument('--no_freq_update', action='store_true', help='')
         parser.add_argument('--unigram_embed_dim', type=int, default=300, help=
                             'The number of dimension of token (character or word) unigram embedding'
                             + '(Default: 300)')
@@ -163,6 +162,8 @@ class SelectiveArgumentParser(object):
                             'The number of hidden units of RNN (Default: 800)')
 
         # sequence tagging
+        parser.add_argument('--bigram_embed_dim', type=int, default=0, help='')
+        parser.add_argument('--tokentype_embed_dim', type=int, default=0, help='')
         parser.add_argument('--mlp_dropout', type=float, default=0.0, help=
                             'Dropout ratio for MLP of sequence tagging model (Default: 0.0)')
         parser.add_argument('--mlp_n_layers', type=int, default=1, help=
@@ -172,6 +173,13 @@ class SelectiveArgumentParser(object):
         parser.add_argument('--inference_layer_type', dest='inference_layer', default='crf', help=
                             'Choose type of inference layer for sequence tagging model from between '
                             + '\'softmax\' and \'crf\' (Default: crf)')
+
+
+        # char and word hybrid segmentation
+        parser.add_argument('--chunk_embed_dim', type=int, default=300)
+        parser.add_argument('--chunk_embed_model_path', default='', help=
+                            'File path of pretrained model of chunk (typically word) embedding')
+        parser.add_argument('--use_attention', action='store_true')
 
         # parsing
         parser.add_argument('--hidden_mlp_dropout', type=float, default=0.0, help=
@@ -497,6 +505,8 @@ class SelectiveArgumentParser(object):
             parser.add_argument('--rnn_dropout', type=float, default=args.rnn_dropout)
 
             if common.is_single_st_task(args.task):
+                parser.add_argument('--bigram_embed_dim', type=int, default=args.bigram_embed_dim)
+                parser.add_argument('--tokentype_embed_dim', type=int, default=args.tokentype_embed_dim)
                 parser.add_argument('--mlp_dropout', type=float, default=args.mlp_dropout)
                 parser.add_argument('--mlp_n_layers', type=int, default=args.mlp_n_layers)
                 parser.add_argument('--mlp_n_units', type=int, default=args.mlp_n_units)
@@ -504,12 +514,21 @@ class SelectiveArgumentParser(object):
                                          default=args.inference_layer)
 
             if common.is_segmentation_task(args.task):
+                parser.add_argument('--chunk_embed_model_path', default=args.chunk_embed_model_path)
+                parser.add_argument('--use_attention', action='store_true', default=args.use_attention)
+
                 if train:
-                    parser.add_argument('--external_dic_path', default=args.external_dic_path)
-                    parser.add_argument('--feature_template', default=args.feature_template)
-                    if args.external_dic_path and not args.feature_template:
-                        print('Warning: loaded external dictionary is not used unless specify feature_template', 
-                              file=sys.stderr)
+                    if args.task == constants.TASK_HSEG:
+                        parser.add_argument('--external_dic_path', default='')
+                        parser.add_argument('--feature_template', default='')
+                        parser.add_argument('--chunk_embed_dim', type=int, default=args.chunk_embed_dim)
+
+                    else:
+                        parser.add_argument('--external_dic_path', default=args.external_dic_path)
+                        parser.add_argument('--feature_template', default=args.feature_template)
+                        if args.external_dic_path and not args.feature_template:
+                            print('Warning: loaded external dictionary is not used '
+                                  + 'unless specify feature_template', file=sys.stderr)
 
             else:
                 if common.is_tagging_task(args.task):

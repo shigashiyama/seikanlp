@@ -4,6 +4,7 @@ import numpy as np
 ### task
 
 TASK_SEG = 'seg'
+TASK_HSEG = 'hseg'
 TASK_TAG = 'tag'
 TASK_SEGTAG = 'segtag'
 TASK_DUAL_SEG = 'dual_seg'
@@ -47,12 +48,26 @@ NONE_SYMBOL     = '<NONE>'
 ROOT_SYMBOL     = '<ROOT>'
 
 UNIGRAM    = 'unigram'   
+BIGRAM     = 'bigram'
 SUBTOKEN   = 'subtoken'
+TOKEN_TYPE = 'token_type'
 SEG_LABEL  = 'seg_label' 
 POS_LABEL  = 'pos_label'
 ARC_LABEL  = 'arc_label'
 ATTR_LABEL = 'attr_label'
 CHUNK      = 'chunk'
+
+TYPE_HIRA        = '<HR>'
+TYPE_KATA        = '<KT>'
+TYPE_LONG        = '<LG>'
+TYPE_KANJI       = '<KJ>'
+TYPE_ALPHA       = '<AL>'
+TYPE_DIGIT       = '<DG>'
+TYPE_SPACE       = '<SC>'
+TYPE_SYMBOL      = '<SY>'
+TYPE_ASCII_OTHER = '<AO>'
+
+EOS = '<EOS>'
 
 SEG_LABELS      = 'BIES'
 

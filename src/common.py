@@ -5,7 +5,8 @@ def is_segmentation_task(task):
     if (task == constants.TASK_SEG or
         task == constants.TASK_SEGTAG or
         task == constants.TASK_DUAL_SEG or
-        task == constants.TASK_DUAL_SEGTAG):
+        task == constants.TASK_DUAL_SEGTAG or
+        task == constants.TASK_HSEG):
         return True
     else:
         return False
@@ -36,7 +37,8 @@ def is_attribute_annotation_task(task):
 def is_single_st_task(task):
     if (task == constants.TASK_SEG or
         task == constants.TASK_SEGTAG or
-        task == constants.TASK_TAG):
+        task == constants.TASK_TAG or
+        task == constants.TASK_HSEG):
         return True
     else:
         return False

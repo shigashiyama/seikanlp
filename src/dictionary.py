@@ -197,7 +197,7 @@ class Dictionary(object):
 
 
 def init_dictionary(
-        use_unigram=True, use_bigram=False, use_subtoken=False, use_token_type=False, 
+        use_unigram=True, use_bigram=False, use_subtoken=False, use_tokentype=False, 
         use_seg_label=False, use_pos_label=False, use_arc_label=False, use_attr_label=False,
         use_chunk_trie=False, use_root=False): 
 
@@ -214,9 +214,8 @@ def init_dictionary(
             dic.tables[constants.UNIGRAM].get_id(ROOT_SYMBOL, update=True)
 
     if use_bigram:
-        # to be impelemented
-        # dic.create_table('bigram')
-        pass 
+        dic.create_table(constants.BIGRAM)
+        dic.tables[constants.BIGRAM].set_unk(UNK_SYMBOL)
 
     if use_subtoken:
         dic.create_table(constants.SUBTOKEN)
@@ -224,10 +223,9 @@ def init_dictionary(
         if use_root:
             dic.tables[constants.SUBTOKEN].get_id(ROOT_SYMBOL, update=True)
 
-    if use_token_type:
-        # to be impelemented
-        # dic.create_table('token_type')
-        pass
+    if use_tokentype:
+        dic.create_table(constants.TOKEN_TYPE)
+        dic.tables[constants.TOKEN_TYPE].set_unk(UNK_SYMBOL)
 
     if use_seg_label:
         dic.create_table(constants.SEG_LABEL)
