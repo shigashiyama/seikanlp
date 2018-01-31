@@ -314,7 +314,10 @@ class DependencyParser(Classifier):
 def init_classifier(task, hparams, dic):
     n_vocab = len(dic.tables['unigram'])
 
-    unigram_embed_dim = hparams['unigram_embed_dim']
+    if 'unigram_embed_dim' in hparams and hparams['unigram_embed_dim'] > 0:
+        unigram_embed_dim = hparams['unigram_embed_dim']
+    else:
+        unigram_embed_dim = 0
 
     if 'subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0:
         subtoken_embed_dim = hparams['subtoken_embed_dim']
@@ -322,21 +325,10 @@ def init_classifier(task, hparams, dic):
     else:
         subtoken_embed_dim = n_subtokens = 0
 
-    if 'chunk_embed_dim' in hparams and hparams['chunk_embed_dim'] > 0:
-        chunk_embed_dim = hparams['chunk_embed_dim']
-        n_chunks = len(dic.tries[constants.CHUNK])
-    else:
-        chunk_embed_dim = n_chunks = 0
-
     if 'pretrained_unigram_embed_dim' in hparams and hparams['pretrained_unigram_embed_dim'] > 0:
         pretrained_unigram_embed_dim = hparams['pretrained_unigram_embed_dim']
     else:
         pretrained_unigram_embed_dim = 0
-
-    if 'pretrained_chunk_embed_dim' in hparams and hparams['pretrained_chunk_embed_dim'] > 0:
-        pretrained_chunk_embed_dim = hparams['pretrained_chunk_embed_dim']
-    else:
-        pretrained_chunk_embed_dim = 0
 
     if 'pretrained_embed_usage' in hparams:
         pretrained_embed_usage = models.util.ModelUsage.get_instance(hparams['pretrained_embed_usage'])
@@ -352,13 +344,6 @@ def init_classifier(task, hparams, dic):
                   file=sys.stderr)
             sys.exit()
 
-        if pretrained_chunk_embed_dim > 0 and pretrained_chunk_embed_dim != chunk_embed_dim:
-            print('Error: pre-trained and random initialized chunk embedding vectors '
-                  + 'must be the same dimension for {} operation'.format(hparams['pretrained_embed_usage'])
-                  + ': d1={}, d2={}'.format(pretrained_chunk_embed_dim, chunk_embed_dim),
-                  file=sys.stderr)
-            sys.exit()
-
 
     # single tagger
     if common.is_single_st_task(task):
@@ -371,14 +356,12 @@ def init_classifier(task, hparams, dic):
 
         predictor = models.tagger.construct_RNNTagger(
             n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim, 
-            n_chunks, chunk_embed_dim, 
             hparams['rnn_unit_type'], 
             hparams['rnn_bidirection'], hparams['rnn_n_layers'], hparams['rnn_n_units'], 
             hparams['mlp_n_layers'], hparams['mlp_n_units'], n_labels, use_crf=use_crf,
             feat_dim=hparams['additional_feat_dim'], mlp_n_additional_units=0,
             rnn_dropout=hparams['rnn_dropout'], mlp_dropout=hparams['mlp_dropout'],
             pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
-            pretrained_chunk_embed_dim=pretrained_chunk_embed_dim,
             pretrained_embed_usage=pretrained_embed_usage)
 
         classifier = SequenceTagger(predictor, task=task)
@@ -463,7 +446,7 @@ def init_classifier(task, hparams, dic):
     
 
 def init_evaluator(task, dic, ignored_labels):
-    if task == constants.TASK_SEG or task == constants.TASK_DUAL_SEG or task == constants.TASK_HSEG:
+    if task == constants.TASK_SEG or task == constants.TASK_DUAL_SEG:
         return evaluators.SegmenterEvaluator(dic.tables[constants.SEG_LABEL].id2str)
 
     elif task == constants.TASK_SEGTAG or task == constants.TASK_DUAL_SEGTAG:

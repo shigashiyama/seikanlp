@@ -639,7 +639,8 @@ def load_annotated_data_WL(
                     if pos_clm < 0:
                         use_pos = False
                         pos_seqs = pos_seq = pos_seq_ = []
-                        del dic.tables[constants.POS_LABEL]
+                        if dic.has_table(constants.POS_LABEL):
+                            del dic.tables[constants.POS_LABEL]
                         if tagging: 
                             print('POS label is mandatory for POS tagging', file=sys.stderr)
                             sys.exit()
@@ -890,7 +891,7 @@ def load_external_dictionary(path, use_pos=False):
         use_unigram=True, use_seg_label=True, use_pos_label=use_pos, use_chunk_trie=True)
     get_unigram_id = dic.tables[constants.UNIGRAM].get_id
     get_pos_id = dic.tables[constants.POS_LABEL].get_id if use_pos else None
-    get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id if use_chunk_trie else None
+    get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id
 
     use_pos = False            # pos information in dictionary is not used yet
     n_elems = 2 if use_pos else 1

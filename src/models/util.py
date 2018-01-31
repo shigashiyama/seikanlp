@@ -86,6 +86,7 @@ def load_pretrained_embedding_layer(id2unigram, embed, external_model, finetunin
 
     weight = []
     count = 0
+
     for i in range(n_vocab):
         key = id2unigram[i]
         if key in external_model.wv.vocab:

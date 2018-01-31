@@ -205,3 +205,37 @@ class RNNCRFTagger(RNNTaggerBase):
             loss = chainer.Variable(xp.array(0, dtype='f'))
 
         return loss, ps
+
+
+def construct_RNNTagger(
+        n_vocab, unigram_embed_dim,
+        n_subtokens, subtoken_embed_dim, 
+        rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units,
+        mlp_n_layers, mlp_n_units, n_labels, use_crf=True,
+        feat_dim=0, mlp_n_additional_units=0,
+        rnn_dropout=0, mlp_dropout=0,
+        pretrained_unigram_embed_dim=0, 
+        pretrained_embed_usage=ModelUsage.NONE, 
+        file=sys.stderr):
+    
+    tagger = None
+    if use_crf:
+        tagger = models.tagger.RNNCRFTagger(
+            n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
+            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units,
+            mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim,
+            mlp_n_additional_units=mlp_n_additional_units,
+            rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout,
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
+            pretrained_embed_usage=pretrained_embed_usage, file=file)
+    else:
+        tagger = models.tagger.RNNTagger(
+            n_vocab, unigram_embed_dim, n_subtokens, subtoken_embed_dim,
+            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units,
+            mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim,
+            mlp_n_additional_units=mlp_n_additional_units,
+            rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout,
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
+            pretrained_embed_usage=pretrained_embed_usage, file=file)
+
+    return tagger

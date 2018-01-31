@@ -480,6 +480,13 @@ class SelectiveArgumentParser(object):
             if train:
                 parser.add_argument('--fix_pretrained_embed', action='store_true')
                 parser.add_argument('--pretrained_embed_usage', default=args.pretrained_embed_usage)
+                if (not args.model_path and args.unigram_embed_model_path and
+                    not (args.pretrained_embed_usage == 'init' or args.pretrained_embed_usage == 'concat' or
+                         args.pretrained_embed_usage == 'add')):
+                    print('Error: pretrained_embed_usage must be specified among from {init, concat, add} '
+                          + ':{}'.format(args.pretrained_embed_usage), file=sys.stderr)
+                    sys.exit()
+
                 parser.add_argument('--unigram_embed_dim', type=int, default=args.unigram_embed_dim)
                 parser.add_argument('--subtoken_embed_dim', type=int, default=args.subtoken_embed_dim)
                 parser.add_argument('--rnn_unit_type', default=args.rnn_unit_type)
