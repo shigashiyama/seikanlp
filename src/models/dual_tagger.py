@@ -6,7 +6,7 @@ import chainer.links as L
 
 import models.tagger
 from models.common import MLP
-from models.tagger import RNNTagger, RNNCRFTagger
+from models.tagger_v0_0_2 import RNNTagger, RNNCRFTagger
 
 
 class DualRNNTagger(chainer.Chain):

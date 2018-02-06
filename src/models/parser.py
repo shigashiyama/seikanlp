@@ -214,7 +214,7 @@ class RNNBiaffineParser(chainer.Chain):
                     output_activation=F.identity, dropout=pred_layers_dropout, file=file)
 
 
-    def get_features(self, ws, cs=None, ps=None):
+    def extract_features(self, ws, cs=None, ps=None):
         xs = []
 
         xp = cuda.get_array_module(ws[0])
@@ -344,7 +344,7 @@ class RNNBiaffineParser(chainer.Chain):
             gls = [None] * data_size
 
         # embed
-        xs = self.get_features(ws, cs, ps)
+        xs = self.extract_features(ws, cs, ps)
 
         # rnn layers
         rs = self.rnn_output(xs)

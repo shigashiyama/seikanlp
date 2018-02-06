@@ -12,7 +12,7 @@ import constants
 import evaluators
 import models.util
 import models.tagger
-from models.tagger import RNNCRFTagger
+import models.tagger_v0_0_2
 from models.dual_tagger import DualRNNTagger
 from models.parser import RNNBiaffineParser
 from models.attribute_annotator import AttributeAnnotator
@@ -136,8 +136,12 @@ class SequenceTagger(Classifier):
             n_labels_grown = len(dic_grown.tables[constants.POS_LABEL].id2str)
 
         models.util.grow_MLP(n_labels_org, n_labels_grown, self.predictor.mlp.layers[-1])
-        if isinstance(self.predictor, RNNCRFTagger):
-            models.util.grow_crf_layer(n_labels_org, n_labels_grown, self.predictor.crf)
+        if constants.__version__ == 'v0.0.3':
+            if self.predictor.use_crf:
+                models.util.grow_crf_layer(n_labels_org, n_labels_grown, self.predictor.crf)
+        elif constants.__version__ == 'v0.0.2':
+            if isinstance(self.predictor, models.tagger_v0_0_2.RNNCRFTagger):
+                models.util.grow_crf_layer(n_labels_org, n_labels_grown, self.predictor.crf)
                 
 
 class HybridSequenceTagger(SequenceTagger):
@@ -254,8 +258,11 @@ class DualSequenceTagger(Classifier):
         n_labels_org = sut.mlp.layers[-1].W.shape[0]
         n_labels_grown = lut.mlp.layers[-1].W.shape[0]
         models.util.grow_MLP(n_labels_org, n_labels_grown, sut.mlp.layers[-1])        
-        if isinstance(sut, RNNCRFTagger):
-            models.util.grow_crf_layer(n_labels_org, n_labels_grown, sut.crf)
+        if constants.__version__ == 'v0.0.3':
+            pass
+        elif constants.__version__ == 'v0.0.2':
+            if isinstance(sut, models.tagger_v0_0_2.RNNCRFTagger):
+                models.util.grow_crf_layer(n_labels_org, n_labels_grown, sut.crf)
         print('Copied parameters from loaded short unit model', file=file)
 
 
@@ -295,9 +302,12 @@ class DualSequenceTagger(Classifier):
 
         models.util.grow_MLP(n_labels_org, n_labels_grown, self.predictor.su_tagger.mlp.layers[-1])
         models.util.grow_MLP(n_labels_org, n_labels_grown, self.predictor.lu_tagger.mlp.layers[-1])
-        if isinstance(self.predictor.su_tagger, RNNCRFTagger):
-            models.util.grow_crf_layer(n_labels_org, n_labels_grown, self.predictor.su_tagger.crf)
-            models.util.grow_crf_layer(n_labels_org, n_labels_grown, self.predictor.lu_tagger.crf)
+        if constants.__version__ == 'v0.0.3':
+            pass
+        elif constants.__version__ == 'v0.0.2':
+            if isinstance(self.predictor.su_tagger, models.tagger_v0_0_2.RNNCRFTagger):
+                models.util.grow_crf_layer(n_labels_org, n_labels_grown, self.predictor.su_tagger.crf)
+                models.util.grow_crf_layer(n_labels_org, n_labels_grown, self.predictor.lu_tagger.crf)
 
 
 class DependencyParser(Classifier):
@@ -389,6 +399,12 @@ def init_classifier(task, hparams, dic):
     else:
         unigram_embed_dim = 0
 
+    if 'chunk_embed_dim' in hparams and hparams['chunk_embed_dim'] > 0:
+        chunk_embed_dim = hparams['chunk_embed_dim']
+        n_chunks = len(dic.tries[constants.CHUNK])
+    else:
+        chunk_embed_dim = n_chunks = 0
+
     if 'bigram_embed_dim' in hparams and hparams['bigram_embed_dim'] > 0:
         bigram_embed_dim = hparams['bigram_embed_dim']
         n_bigrams = len(dic.tables[constants.BIGRAM])
@@ -412,12 +428,18 @@ def init_classifier(task, hparams, dic):
     else:
         pretrained_unigram_embed_dim = 0
 
+    if 'pretrained_chunk_embed_dim' in hparams and hparams['pretrained_chunk_embed_dim'] > 0:
+        pretrained_chunk_embed_dim = hparams['pretrained_chunk_embed_dim']
+    else:
+        pretrained_chunk_embed_dim = 0
+
     if 'pretrained_embed_usage' in hparams:
         pretrained_embed_usage = models.util.ModelUsage.get_instance(hparams['pretrained_embed_usage'])
     else:
         pretrained_embed_usage = models.util.ModelUsage.NONE
 
     use_attention = 'use_attention' in hparams and hparams['use_attention'] == True
+    use_chunk_first = 'use_chunk_first' in hparams and hparams['use_chunk_first'] == True
 
     if (pretrained_embed_usage == models.util.ModelUsage.ADD or
         pretrained_embed_usage == models.util.ModelUsage.INIT):
@@ -455,7 +477,7 @@ def init_classifier(task, hparams, dic):
             pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
             pretrained_chunk_embed_dim=pretrained_chunk_embed_dim,
             pretrained_embed_usage=pretrained_embed_usage,
-            use_attention=use_attention)
+            use_attention=use_attention, use_chunk_first=use_chunk_first)
 
         if task == constants.TASK_HSEG:
             classifier = HybridSequenceTagger(predictor, task=task)            
@@ -542,7 +564,7 @@ def init_classifier(task, hparams, dic):
     
 
 def init_evaluator(task, dic, ignored_labels):
-    if task == constants.TASK_SEG or task == constants.TASK_DUAL_SEG:
+    if task == constants.TASK_SEG or task == constants.TASK_DUAL_SEG or constants.TASK_HSEG:
         return evaluators.SegmenterEvaluator(dic.tables[constants.SEG_LABEL].id2str)
 
     elif task == constants.TASK_SEGTAG or task == constants.TASK_DUAL_SEGTAG:

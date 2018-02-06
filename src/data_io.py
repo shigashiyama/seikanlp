@@ -104,7 +104,7 @@ def load_annotated_data(
             use_pos=use_pos, subpos_depth=subpos_depth, use_bigram=use_bigram, use_tokentype=use_tokentype,
             use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie, 
             lowercase=lowercase, normalize_digits=normalize_digits,
-            dic=dic, freq_tokens=freq_tokens, refer_tokens=refer_tokens)
+            dic=dic, freq_tokens=freq_tokens, refer_tokens=refer_tokens, refer_chunks=refer_chunks)
         
     else:
         print('Invalid data format: {}'.format(data_format))
@@ -486,20 +486,30 @@ def load_annotated_data_SL(
                         update_chunk or to_be_registered(pword[i], train, freq_tokens, refer_tokens) 
                         for i in range(wlen)]
 
+                    # tmp
                     uni_seq.extend([get_unigram_id(pword[i], update_tokens[i]) for i in range(wlen)])
+                    # uni_seq.extend(
+                    #     [get_unigram_id(get_char_bigram(pword, i), 
+                    #                     update_tokens[i] and (update_tokens[i+1] if i+1 < wlen else True))
+                    #      for i in range(wlen)])
+
                     seg_seq.extend(
                         [get_seg_id(
                             get_label_BIES(i, wlen-1, cate=pos), update=train) for i in range(wlen)])
 
-                    if use_chunk_trie and (update_chunk or update_token == [True for i in range(wlen)]):
-                        ids = chars[-wlen:]
-                        get_chunk_id(ids, pword, True)
+                    if use_chunk_trie and (update_chunk or update_tokens == [True for i in range(wlen)]):
+                        token_ids = uni_seq[-wlen:]
+                        get_chunk_id(token_ids, pword if pword else constants.NONE_SYMBOL, True)
 
                     if use_bigram:
                         bi_seq.extend(
                             [get_bigram_id(get_char_bigram(pword, i), 
-                                           update_tokens[i] and (update_tokens[i+1] if i < wlen else True))
+                                           update_tokens[i] and (update_tokens[i+1] if i+1 < wlen else True))
                              for i in range(wlen)])
+                        # bi_seq.extend(
+                        #     [get_bigram_id(get_char_bigram2(pword, i), 
+                        #                    update_tokens[i] and (update_tokens[i-1] if i > 0 else True))
+                        #      for i in range(wlen)])
 
                     if use_tokentype:
                         type_seq.extend(
@@ -717,7 +727,13 @@ def load_annotated_data_WL(
                     update_chunk or to_be_registered(pword[i], train, freq_tokens, refer_tokens) 
                     for i in range(wlen)]
                 
+                # tmp
                 uni_seq.extend([get_unigram_id(pword[i], update_tokens[i]) for i in range(wlen)])
+                # uni_seq.extend(
+                #         [get_unigram_id(get_char_bigram(pword, i), 
+                #                        update_tokens[i] and (update_tokens[i+1] if i+1 < wlen else True))
+                #          for i in range(wlen)])
+
                 seg_seq.extend(
                     [get_seg_id(
                         get_label_BIES(i, wlen-1, cate=pos), update=train) for i in range(wlen)])
@@ -771,7 +787,7 @@ def load_annotated_data_WL(
         if len(uni_seq) - n_non_words > 0:
             token_seqs.append(uni_seq)
             if bi_seq:
-                bi_seqs.append(bi_seq)
+                bigram_seqs.append(bi_seq)
             if type_seq:
                toktype_seqs.append(type_seq)
             if sub_seq:
@@ -1069,6 +1085,16 @@ def get_char_bigram(word, i):
         return '{}-{}'.format(word[i], constants.EOS)
     else:
         return '{}-{}'.format(word[i], word[i+1])
+
+
+def get_char_bigram2(word, i):
+    if i >= len(word):
+        return
+
+    if i == 0:
+        return '{}-{}'.format(constants.BOS, word[i])
+    else:
+        return '{}-{}'.format(word[i-1], word[i])
 
 
 def get_label_BI(index, cate=None):

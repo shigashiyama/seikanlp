@@ -1014,6 +1014,8 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
             'pretrained_embed_usage' : self.args.pretrained_embed_usage,
             'fix_pretrained_embed' : self.args.fix_pretrained_embed,
             'use_attention' : self.args.use_attention,
+            'use_chunk_first' : self.args.use_chunk_first,
+            'max_chunk_len' : self.args.max_chunk_len,
             'unigram_embed_dim' : self.args.unigram_embed_dim,
             'bigram_embed_dim' : self.args.bigram_embed_dim,
             'tokentype_embed_dim' : self.args.tokentype_embed_dim,
@@ -1060,6 +1062,7 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
 
                 if (key == 'pretrained_unigram_embed_dim' or
                     key == 'pretrained_chunk_embed_dim' or
+                    key == 'max_chunk_len' or
                     key == 'unigram_embed_dim' or
                     key == 'bigram_embed_dim' or
                     key == 'tokentype_embed_dim' or
@@ -1085,7 +1088,8 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
                       key == 'lowercase' or
                       key == 'normalize_digits' or
                       key == 'fix_pretrained_embed' or
-                      key == 'use_attention'
+                      key == 'use_attention' or
+                      key == 'use_chunk_first'
                 ):
                     val = (val.lower() == 'true')
 
@@ -1131,12 +1135,12 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
         super().load_data_for_training(refer_tokens=refer_tokens, refer_chunks=refer_chunks)
         xp = cuda.cupy if self.args.gpu >= 0 else np
         
-        self.log('Start chunk search for training data\n')
-        data_io.add_chunk_sequences(self.train, self.dic, xp=xp)
+        self.log('Start chunk search for training data (max_len={})\n'.format(self.args.max_chunk_len))
+        data_io.add_chunk_sequences(self.train, self.dic, max_len=self.args.max_chunk_len, xp=xp)
 
         if self.dev:
-            self.log('Start chunk search for development data\n')            
-            data_io.add_chunk_sequences(self.dev, self.dic, xp=xp)
+            self.log('Start chunk search for development data (max_len={})\n'.format(self.args.max_chunk_len))
+            data_io.add_chunk_sequences(self.dev, self.dic, max_len=self.args.max_chunk_len, xp=xp)
 
 
     def load_test_data(self):
@@ -1146,8 +1150,8 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
         super().load_test_data(refer_tokens=refer_tokens, refer_chunks=refer_chunks)
         xp = cuda.cupy if self.args.gpu >= 0 else np
         
-        self.log('Start chunk search for test data\n')
-        data_io.add_chunk_sequences(self.test, self.dic, xp=xp)
+        self.log('Start chunk search for test data (max_len={})\n'.format(self.args.max_chunk_len))
+        data_io.add_chunk_sequences(self.test, self.dic, max_len=self.args.max_chunk_len, xp=xp)
 
 
     def setup_optimizer(self):

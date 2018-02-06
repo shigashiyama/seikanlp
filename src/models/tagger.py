@@ -1,4 +1,5 @@
 import sys
+import traceback
 
 import numpy as np
 
@@ -9,19 +10,21 @@ from chainer import cuda
 from chainer.functions.loss import softmax_cross_entropy
 from chainer.links.connection.n_step_rnn import argsort_list_descent, permutate_list
 
+import constants
 import models.util
+import models.tagger_v0_0_2
 from models.util import ModelUsage
 from models.common import MLP
 from models.parser import BiaffineCombination
 
 
-# Base model that consists of embedding layer, recurrent network (RNN) layers and affine layer.
-class RNNTaggerBase(chainer.Chain):
+class RNNTagger(chainer.Chain):
     def __init__(
             self, n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim,
             n_tokentypes, tokentype_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, feat_dim=0, mlp_n_additional_units=0,
+            mlp_n_layers, mlp_n_units, n_labels, 
+            use_crf=True, feat_dim=0, mlp_n_additional_units=0,
             rnn_dropout=0, mlp_dropout=0, 
             pretrained_unigram_embed_dim=0, pretrained_embed_usage=ModelUsage.NONE,
             file=sys.stderr):
@@ -61,12 +64,11 @@ class RNNTaggerBase(chainer.Chain):
                 embed_dim += feat_dim
                 print('# Additional features dimension: {}'.format(feat_dim), file=file)
 
-            #embed_dim += mlp_n_additional_units
-
             # subtoken embedding layer
 
             if n_subtokens > 0 and subtoken_embed_dim > 0:
                 self.subtoken_embed = L.EmbedID(n_subtokens, subtoken_embed_dim)
+                embed_dim += subtoken_embed_dim
                 print('# Subtoken embedding matrix: W={}'.format(self.subtoken_embed.W.shape), file=file)
             self.subtoken_embed_dim = subtoken_embed_dim;
 
@@ -81,29 +83,27 @@ class RNNTaggerBase(chainer.Chain):
 
             print('# MLP', file=file)
             mlp_in = rnn_output_dim + mlp_n_additional_units
-            #mlp_in = rnn_output_dim
             self.mlp = MLP(mlp_in, n_labels, n_hidden_units=mlp_n_units, n_layers=mlp_n_layers,
                            output_activation=F.identity, dropout=mlp_dropout, file=file)
 
+            self.use_crf = use_crf
+            if self.use_crf:
+                self.crf = L.CRF1d(n_labels)
+                print('# CRF cost: {}'.format(self.crf.cost.shape), file=file)
+            else:
+                self.softmax_cross_entropy = softmax_cross_entropy.softmax_cross_entropy
 
-    # TODO fixed bug: subtoken embed is not used
+
     # unigram, bigram, type, subtoken, feature, label
     def __call__(self, us, bs=None, ts=None, ss=None, fs=None, ls=None, calculate_loss=True):
-        # print((len(us), us[0].shape))
-        # print((len(bs), bs[0].shape) if bs is not None else None)
-        # print((len(ts), ts[0].shape) if ts is not None else None)
-        # print((len(ss), ss[0].shape) if ss is not None else None)
-        # print((len(fs), fs[0].shape) if fs is not None else None)
-        # print((len(ls), ls[0]) if ls is not None else None)
-        xs = self.get_features(us, bs, ts, ss, fs)
-        # print(len(xs), xs[0].shape)
+        xs = self.extract_features(us, bs, ts, ss, fs)
         rs = self.rnn_output(xs)
         loss, ps = self.predict(rs, ls=ls, calculate_loss=calculate_loss)
 
         return loss, ps
         
 
-    def get_features(self, us, bs, ts, ss, fs):
+    def extract_features(self, us, bs, ts, ss, fs):
         xs = []
         if bs is None:
             bs = [None] * len(us)
@@ -154,41 +154,13 @@ class RNNTaggerBase(chainer.Chain):
 
 
     def predict(self, rs, ls=None, calculate_loss=True):
-        # to be implemented in sub-class
-        pass
+        if self.use_crf:
+            return self.predict_crf(rs, ls, calculate_loss)
+        else:
+            return self.predict_softmax(rs, ls, calculate_loss)
 
 
-    def decode(self, us, fs):
-        with chainer.no_backprop_mode():
-            _, ps = self.__call__(us, fs, calculate_loss=False)
-
-        return ps
-
-
-class RNNTagger(RNNTaggerBase):
-    def __init__(
-            self, n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim,
-            n_tokentypes, tokentype_embed_dim, n_subtokens, subtoken_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, feat_dim=0, mlp_n_additional_units=0,
-            rnn_dropout=0, mlp_dropout=0, 
-            pretrained_unigram_embed_dim=0, pretrained_embed_usage=ModelUsage.NONE,
-            file=sys.stderr):
-        super().__init__(
-            n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim,
-            n_tokentypes, tokentype_embed_dim, n_subtokens, subtoken_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
-            mlp_n_additional_units=mlp_n_additional_units,
-            rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, 
-            pretrained_embed_usage=pretrained_embed_usage,
-            file=file)
-
-        self.softmax_cross_entropy = softmax_cross_entropy.softmax_cross_entropy
-
-
-    def predict(self, rs, ls=None, calculate_loss=True):
+    def predict_softmax(self, rs, ls=None, calculate_loss=True):
         ys = self.mlp(rs)
         ps = []
 
@@ -204,33 +176,7 @@ class RNNTagger(RNNTaggerBase):
         return loss, ps
 
 
-class RNNCRFTagger(RNNTaggerBase):
-    def __init__(
-            self, n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim,
-            n_tokentypes, tokentype_embed_dim, n_subtokens, subtoken_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, feat_dim=0, mlp_n_additional_units=0,
-            rnn_dropout=0, mlp_dropout=0, 
-            pretrained_unigram_embed_dim=0, pretrained_embed_usage=ModelUsage.NONE,
-            file=sys.stderr):
-        super().__init__(
-            n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim,
-            n_tokentypes, tokentype_embed_dim, n_subtokens, subtoken_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
-            mlp_n_additional_units=mlp_n_additional_units,
-            rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, 
-            pretrained_embed_usage=pretrained_embed_usage,
-            file=file)
-
-        with self.init_scope():
-            self.crf = L.CRF1d(n_labels)
-
-            print('# CRF cost: {}'.format(self.crf.cost.shape), file=file)
-
-
-    def predict(self, rs, ls=None, calculate_loss=True):
+    def predict_crf(self, rs, ls=None, calculate_loss=True):
         hs = self.mlp(rs)
 
         indices = argsort_list_descent(hs)
@@ -249,24 +195,43 @@ class RNNCRFTagger(RNNTaggerBase):
         return loss, ps
 
 
-class RNNCRFTaggerWithAttention(RNNCRFTagger):
+    def decode(self, us, fs):
+        with chainer.no_backprop_mode():
+            _, ps = self.__call__(us, fs, calculate_loss=False)
+        return ps
+
+
+class RNNTaggerWithChunk(RNNTagger):
     def __init__(
             self, n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim,
             n_tokentypes, tokentype_embed_dim, n_subtokens, subtoken_embed_dim,
             n_chunks, chunk_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, feat_dim=0, mlp_n_additional_units=0,
+            mlp_n_layers, mlp_n_units, n_labels, use_crf=True,
+            feat_dim=0, mlp_n_additional_units=0,
             rnn_dropout=0, mlp_dropout=0, 
             pretrained_unigram_embed_dim=0, pretrained_chunk_embed_dim=0, 
-            pretrained_embed_usage=ModelUsage.NONE, use_attention=False,
+            pretrained_embed_usage=ModelUsage.NONE, use_attention=False, use_chunk_first=True,
             file=sys.stderr):
+
+        self.chunk_embed_out_dim = (
+            chunk_embed_dim +
+            (pretrained_chunk_embed_dim if pretrained_embed_usage == ModelUsage.CONCAT else 0))
+
+        self.use_chunk_first = use_chunk_first
+        if self.use_chunk_first:
+            feat_dim = self.chunk_embed_out_dim
+            mlp_n_additional_units = 0
+        else:
+            feat_dim = 0
+            mlp_n_additional_units = self.chunk_embed_out_dim
+
         super().__init__(
             n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim,
             n_tokentypes, tokentype_embed_dim, n_subtokens, subtoken_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
-            mlp_n_additional_units=chunk_embed_dim+(
-                pretrained_chunk_embed_dim if pretrained_embed_usage == ModelUsage.CONCAT else 0),  
+            mlp_n_layers, mlp_n_units, n_labels, use_crf=use_crf, 
+            feat_dim=feat_dim, mlp_n_additional_units=mlp_n_additional_units,
             rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
             pretrained_embed_usage=pretrained_embed_usage,
             file=file)
@@ -274,19 +239,18 @@ class RNNCRFTaggerWithAttention(RNNCRFTagger):
         with self.init_scope():
             self.chunk_embed, self.pretrained_chunk_embed = models.util.construct_embeddings(
                 n_chunks, chunk_embed_dim, pretrained_chunk_embed_dim, pretrained_embed_usage)
-            self.cembed_out_dim = chunk_embed_dim
             print('# Chunk embedding matrix: W={}'.format(self.chunk_embed.W.shape), file=file)
             if self.pretrained_chunk_embed is not None:
-                if pretrained_embed_usage == ModelUsage.CONCAT:
-                    self.cembed_out_dim += self.pretrained_chunk_embed.W.shape[1]
                 print('# Pretrained chunk embedding matrix: W={}'.format(
                     self.pretrained_chunk_embed.W.shape), file=file)
 
-
             self.use_attention = use_attention
             if self.use_attention:
-                rnn_output_dim = rnn_n_units * (2 if rnn_bidirection else 1)
-                self.biaffine = BiaffineCombination(rnn_output_dim, self.cembed_out_dim)
+                if self.use_chunk_first: # tmp
+                    biaffine_left_dim = self.rnn._children[0].w0.shape[1] - chunk_embed_dim
+                else:
+                    biaffine_left_dim = rnn_output_dim = rnn_n_units * (2 if rnn_bidirection else 1)
+                self.biaffine = BiaffineCombination(biaffine_left_dim, self.chunk_embed_out_dim)
                 print('# Biaffine layer for attention:   W={}, U={}, b={}, dropout={}\n'.format(
                     self.biaffine.W.shape, 
                     self.biaffine.U.shape if self.biaffine.U is not None else None, 
@@ -303,21 +267,26 @@ class RNNCRFTaggerWithAttention(RNNCRFTagger):
   
     """
     def __call__(self, us, cs, ms, bs=None, ts=None, ss=None, fs=None, ls=None, calculate_loss=True):
-        xs = self.get_token_features(us, bs, ts, ss, fs)
-        rs = self.rnn_output(xs)
-        ws = self.get_chunk_features(cs)
-        hs = self.get_hidden_vectors(rs, ws, ms)
+        xs = self.extract_token_features(us, bs, ts, ss, fs) # token unigram etc. -[Embed]-> x
+        ws = self.extract_chunk_features(cs)                 # chunk              -[Embed]-> w
 
+        if self.use_chunk_first:
+            vs = self.act_and_merge_features(xs, ws, ms) # x @ x$w -> v
+            hs = self.rnn_output(vs)                     # v -[RNN]-> h
+        else:
+            rs = self.rnn_output(xs)                     # x -[RNN]-> r
+            hs = self.act_and_merge_features(rs, ws, ms) # r @ r$w -> h
+            
         loss, ps = self.predict(hs, ls=ls, calculate_loss=calculate_loss)
 
         return loss, ps
-        
-
-    def get_token_features(self, us, bs, ts, ss, fs):
-        return super().get_features(us, bs, ts, ss, fs)
 
 
-    def get_chunk_features(self, cs):
+    def extract_token_features(self, us, bs, ts, ss, fs):
+        return super().extract_features(us, bs, ts, ss, fs)
+
+
+    def extract_chunk_features(self, cs):
         xs = []
         for c in cs:
             xe = self.chunk_embed(c) if c.any() else None
@@ -334,18 +303,18 @@ class RNNCRFTaggerWithAttention(RNNCRFTagger):
         return xs
 
 
-    def get_hidden_vectors(self, rs, ws, ms):
+    def act_and_merge_features(self, xs, ws, ms):
         hs = []
-        xp = cuda.get_array_module(rs[0])
+        xp = cuda.get_array_module(xs[0])
 
-        for r, w, mask in zip(rs, ws, ms):
-            if w is None:       # no words are found for devel/test data
-                a = xp.zeros((len(r), self.cembed_out_dim), dtype='f')  
+        for x, w, mask in zip(xs, ws, ms):
+            if w is None:       # no words were found for devel/test data
+                a = xp.zeros((len(x), self.chunk_embed_out_dim), dtype='f')  
 
             else:
                 # TODO dropout
                 if self.use_attention:
-                    scores = self.biaffine(r, w) # (n, m)
+                    scores = self.biaffine(x, w) # (n, m)
                     max_elems = F.broadcast_to(F.max(scores, axis=1, keepdims=True), scores.shape)
                     masked_scores = F.exp(scores - max_elems) * mask
                 else:
@@ -353,8 +322,8 @@ class RNNCRFTaggerWithAttention(RNNCRFTagger):
                 weight = self.normalize(masked_scores, xp=xp)
                 a = F.matmul(weight, w)      # (n, m) * (m, dc)  => (n, dc)
 
-                # print('r:', r.shape, 'w:', w.shape)
-                # print('r', r)
+                # print('x:', x.shape, 'w:', w.shape)
+                # print('x', x)
                 # print('w', w)
                 # print('W', self.biaffine.W)
                 # print('s', scores)
@@ -365,7 +334,7 @@ class RNNCRFTaggerWithAttention(RNNCRFTagger):
                 # print('w', w)
                 # print()
 
-            h = F.concat((r, a), axis=1) # (n, dt) @ (n, dc) => (n, dt+dc)
+            h = F.concat((x, a), axis=1) # (n, dt) @ (n, dc) => (n, dt+dc)
             hs.append(h)
 
         return hs
@@ -388,43 +357,61 @@ def construct_RNNTagger(
         feat_dim=0, mlp_n_additional_units=0,
         rnn_dropout=0, mlp_dropout=0, 
         pretrained_unigram_embed_dim=0, pretrained_chunk_embed_dim=0, 
-        pretrained_embed_usage=ModelUsage.NONE, use_attention=False,
+        pretrained_embed_usage=ModelUsage.NONE, use_attention=False, use_chunk_first=True,
         file=sys.stderr):
 
     tagger = None
     if n_chunks > 0 and chunk_embed_dim > 0:
-        tagger = models.tagger.RNNCRFTaggerWithAttention(
+        tagger = models.tagger.RNNTaggerWithChunk(
             n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
             n_subtokens, subtoken_embed_dim, n_chunks, chunk_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
+            mlp_n_layers, mlp_n_units, n_labels, use_crf=use_crf, feat_dim=feat_dim, 
             mlp_n_additional_units=mlp_n_additional_units,
             rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
             pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, 
             pretrained_chunk_embed_dim=pretrained_chunk_embed_dim, 
-            pretrained_embed_usage=pretrained_embed_usage,
-            use_attention=use_attention,
+            pretrained_embed_usage=pretrained_embed_usage, 
+            use_attention=use_attention, use_chunk_first=use_chunk_first,
             file=file)
 
-    elif use_crf:
-        tagger = models.tagger.RNNCRFTagger(
-            n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
-            n_subtokens, subtoken_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
-            mlp_n_additional_units=mlp_n_additional_units,
-            rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, 
-            pretrained_embed_usage=pretrained_embed_usage, file=file)
     else:
-        tagger = models.tagger.RNNTagger(
-            n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
-            n_subtokens, subtoken_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
-            mlp_n_additional_units=mlp_n_additional_units,
-            rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
-            pretrained_embed_usage=pretrained_embed_usage, file=file)
+        if constants.__version__ == 'v0.0.3':
+            tagger = RNNTagger(
+                n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
+                n_subtokens, subtoken_embed_dim,
+                rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
+                mlp_n_layers, mlp_n_units, n_labels, use_crf=use_crf,
+                feat_dim=feat_dim, 
+                mlp_n_additional_units=mlp_n_additional_units,
+                rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
+                pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, 
+                pretrained_embed_usage=pretrained_embed_usage, file=file)
+
+        elif constants.__version__ == 'v0.0.2':
+            if use_crf:
+                tagger = models.tagger_v0_0_2.RNNCRFTagger(
+                    n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
+                    n_subtokens, subtoken_embed_dim,
+                    rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
+                    mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
+                    mlp_n_additional_units=mlp_n_additional_units,
+                    rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
+                    pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, 
+                    pretrained_embed_usage=pretrained_embed_usage, file=file)
+            else:
+                tagger = models.tagger_v0_0_2.RNNTagger(
+                    n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
+                    n_subtokens, subtoken_embed_dim,
+                    rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
+                    mlp_n_layers, mlp_n_units, n_labels, feat_dim=feat_dim, 
+                    mlp_n_additional_units=mlp_n_additional_units,
+                    rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
+                    pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
+                    pretrained_embed_usage=pretrained_embed_usage, file=file)
+
+        else:
+            print('Invalid seikanlp version: {}'.format(constants.__version__))
+            sys.exit()
 
     return tagger

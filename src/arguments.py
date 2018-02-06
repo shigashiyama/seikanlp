@@ -180,6 +180,8 @@ class SelectiveArgumentParser(object):
         parser.add_argument('--chunk_embed_model_path', default='', help=
                             'File path of pretrained model of chunk (typically word) embedding')
         parser.add_argument('--use_attention', action='store_true')
+        parser.add_argument('--use_chunk_first', action='store_true')
+        parser.add_argument('--max_chunk_len', type=int, default=4)
 
         # parsing
         parser.add_argument('--hidden_mlp_dropout', type=float, default=0.0, help=
@@ -516,6 +518,8 @@ class SelectiveArgumentParser(object):
             if common.is_segmentation_task(args.task):
                 parser.add_argument('--chunk_embed_model_path', default=args.chunk_embed_model_path)
                 parser.add_argument('--use_attention', action='store_true', default=args.use_attention)
+                parser.add_argument('--use_chunk_first', action='store_true', default=args.use_chunk_first)
+                parser.add_argument('--max_chunk_len', type=int, default=args.max_chunk_len)
 
                 if train:
                     if args.task == constants.TASK_HSEG:
