@@ -211,7 +211,7 @@ class FMeasureCalculator(object):
                 raise StopIteration
             x_str = str(x[i])
             t_str = self.id2label[int(t[i])] if int(t[i]) > -1 else 'NONE'
-            y_str = self.id2label[int(y[i])]
+            y_str = self.id2label[int(y[i])] if int(y[i]) > -1 else 'NONE'
 
             yield [x_str, t_str, y_str]
             i += 1

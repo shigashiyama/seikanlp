@@ -1,5 +1,7 @@
 import numpy as np
 
+global __version
+__version__ = 'v0.0.3'
 
 ### task
 
@@ -23,7 +25,7 @@ MODEL_DIR = 'models/main'
 ### for data io
 
 SL_TOKEN_DELIM  = ' '
-SL_ATTR_DELIM   = '/'
+SL_ATTR_DELIM   = '_'
 WL_TOKEN_DELIM  = '\n'
 WL_ATTR_DELIM   = '\t'
 KEY_VALUE_DELIM = '='
@@ -67,7 +69,7 @@ TYPE_SPACE       = '<SC>'
 TYPE_SYMBOL      = '<SY>'
 TYPE_ASCII_OTHER = '<AO>'
 
-EOS = '<EOS>'
+EOS = '<E>'
 
 SEG_LABELS      = 'BIES'
 

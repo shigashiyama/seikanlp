@@ -25,11 +25,12 @@ class RestorableData(Data):
         self.orgdata = orgdata
 
 
-# TODO add refer_chunks
+
 def load_decode_data(
         path, dic, task, data_format=constants.WL_FORMAT,
-        use_pos=True, use_subtoken=False, 
-        subpos_depth=-1, lowercase=False, normalize_digits=False, refer_tokens=set()):
+        use_pos=True, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False,
+        subpos_depth=-1, lowercase=False, normalize_digits=False, max_chunk_len=0, 
+        refer_tokens=set(), refer_chunks=set()):
 
     segmentation = common.is_segmentation_task(task)
     parsing = common.is_parsing_task(task)
@@ -39,13 +40,18 @@ def load_decode_data(
     if segmentation or data_format == constants.SL_FORMAT:
         data = load_decode_data_SL(
             path, dic, segmentation=segmentation, parsing=parsing, attribute_annotation=attribute_annotation,
-            use_pos=use_pos, subpos_depth=subpos_depth, lowercase=lowercase, 
-            normalize_digits=normalize_digits, use_subtoken=use_subtoken, refer_tokens=refer_tokens)
+            use_pos=use_pos, use_bigram=use_bigram, use_tokentype=use_tokentype,
+            use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie,
+            subpos_depth=subpos_depth, lowercase=lowercase, normalize_digits=normalize_digits, 
+            max_chunk_len=max_chunk_len, refer_tokens=refer_tokens, refer_chunks=refer_chunks)
 
     elif data_format == constants.WL_FORMAT:
         data = load_decode_data_WL(
-            path, dic, parsing=parsing, use_pos=use_pos, subpos_depth=subpos_depth, lowercase=lowercase,
-            normalize_digits=normalize_digits, use_subtoken=use_subtoken, refer_tokens=refer_tokens)
+            path, dic, parsing=parsing,
+            use_pos=use_pos, use_bigram=use_bigram, use_tokentype=use_tokentype,
+            use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie,
+            subpos_depth=subpos_depth, lowercase=lowercase, normalize_digits=normalize_digits, 
+            max_chunk_len=max_chunk_len, refer_tokens=refer_tokens, refer_chunks=refer_chunks)
         
     else:
         print('Invalid data format: {}'.format(data_format))
@@ -58,7 +64,7 @@ def load_annotated_data(
         path, task, data_format, train=True, 
         use_pos=True, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False, 
         subpos_depth=-1, lowercase=False, normalize_digits=False, 
-        max_vocab_size=-1, freq_threshold=1, dic=None, refer_tokens=set(), refer_chunks=set()):
+        max_vocab_size=-1, freq_threshold=1, max_chunk_len=0, dic=None, refer_tokens=set(), refer_chunks=set()):
     pos_seqs = []
 
     segmentation = common.is_segmentation_task(task)
@@ -83,9 +89,10 @@ def load_annotated_data(
             path, train=train,
             segmentation=segmentation, tagging=tagging, parsing=parsing, typed_parsing=typed_parsing,
             attribute_annotation=attr_annotation,
-            use_pos=use_pos, subpos_depth=subpos_depth, use_bigram=use_bigram, use_tokentype=use_tokentype,
+            use_pos=use_pos, use_bigram=use_bigram, use_tokentype=use_tokentype,
             use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie,
-            lowercase=lowercase, normalize_digits=normalize_digits,
+            subpos_depth=subpos_depth, lowercase=lowercase, normalize_digits=normalize_digits,
+            max_chunk_len=max_chunk_len, 
             dic=dic, freq_tokens=freq_tokens, refer_tokens=refer_tokens, refer_chunks=refer_chunks)
 
     elif data_format == constants.SL_FORMAT and not parsing:
@@ -101,9 +108,10 @@ def load_annotated_data(
 
         data, dic = load_annotated_data_SL(
             path, train=train, segmentation=segmentation, tagging=tagging, 
-            use_pos=use_pos, subpos_depth=subpos_depth, use_bigram=use_bigram, use_tokentype=use_tokentype,
+            use_pos=use_pos, use_bigram=use_bigram, use_tokentype=use_tokentype,
             use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie, 
-            lowercase=lowercase, normalize_digits=normalize_digits,
+            subpos_depth=subpos_depth, lowercase=lowercase, normalize_digits=normalize_digits,
+            max_chunk_len=max_chunk_len, 
             dic=dic, freq_tokens=freq_tokens, refer_tokens=refer_tokens, refer_chunks=refer_chunks)
         
     else:
@@ -180,21 +188,30 @@ def parse_commandline_input(
 
 def load_decode_data_SL(
         path, dic, segmentation=False, parsing=False, attribute_annotation=False, 
-        use_pos=False, subpos_depth=-1, lowercase=False, normalize_digits=True, use_subtoken=False,
-        refer_tokens=set()):
+        use_pos=False, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False,
+        subpos_depth=-1, lowercase=False, normalize_digits=True, max_chunk_len=0,
+        refer_tokens=set(), refer_chunks=set()):
+
     attr_delim = constants.SL_ATTR_DELIM
 
     ins_cnt = 0
 
     token_seqs = []
+    bigram_seqs = []            # only available for segmentation
+    toktype_seqs = []           # only available for segmentation
     subtoken_seqs = []
     pos_seqs = []
     org_token_seqs = []
     org_pos_seqs = []
 
     get_unigram_id = dic.tables[constants.UNIGRAM].get_id
+    get_bigram_id = dic.tables[constants.BIGRAM].get_id if use_bigram else None
+    get_toktype_id = dic.tables[constants.TOKEN_TYPE].get_id if use_tokentype else None
     get_subtoken_id = dic.tables[constants.SUBTOKEN].get_id if use_subtoken else None
+    get_seg_id = dic.tables[constants.SEG_LABEL].get_id if segmentation else None
     get_pos_id = dic.tables[constants.POS_LABEL].get_id if use_pos else None
+    get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id if use_chunk_trie else None
+
     if parsing:
         root_token = constants.ROOT_SYMBOL
         root_token_id = dic.tables[constants.UNIGRAM].get_id(constants.ROOT_SYMBOL)
@@ -223,10 +240,28 @@ def load_decode_data_SL(
                 continue
 
             if segmentation:    # raw text: seg or seg_tag
-                token_seqs.append(
-                    [get_unigram_id(preprocess_token(
-                        char, lowercase, normalize_digits, refer_tokens)) for char in line])
+                pchars = [preprocess_token(char, lowercase, normalize_digits, refer_tokens) for char in line]
+                token_seqs.append([get_unigram_id(char) for char in pchars])
                 org_token_seqs.append([char for char in line])
+
+                if use_chunk_trie:
+                    cids = token_seqs[-1]
+                    pstr = ''.join(pchars)
+                    for n in range(1, max_chunk_len+1):
+                        cid_ngrams = create_all_char_ngrams(cids, n)
+                        str_ngrams = create_all_char_ngrams(pstr, n)
+                        for cn, sn in zip (cid_ngrams, str_ngrams):
+                            if sn in refer_chunks:
+                                get_chunk_id(cn, sn, True)
+
+                # TODO fix
+                # if use_bigram:
+                #     bigram_seqs.append(
+                #         [get_bigram_id(get_char_bigram(char, i)) for i, char in enumerate(pchars)])
+                #     print(bigram_seqs[-1]) # tmp
+
+                if use_tokentype:
+                    toktype_seqs.append([get_toktype_id(get_char_type(char)) for char in pchars])
 
             else:               # tokeniized text w/ or w/o pos: tag or (t)dep
                 org_arr = line.split(constants.SL_TOKEN_DELIM)
@@ -266,8 +301,9 @@ def load_decode_data_SL(
                 print('read', ins_cnt, 'sentences', file=sys.stderr)
 
     inputs = [token_seqs]
-    if subtoken_seqs:
-        inputs.append(subtoken_seqs)
+    inputs.append(bigram_seqs if bigram_seqs else None)
+    inputs.append(toktype_seqs if toktype_seqs else None)
+    inputs.append(subtoken_seqs if subtoken_seqs else None)
 
     outputs = []
     if use_pos:
@@ -281,8 +317,10 @@ def load_decode_data_SL(
 
 
 def load_decode_data_WL(
-        path, dic, parsing=False, use_pos=True, subpos_depth=-1,
-        lowercase=False, normalize_digits=True, use_subtoken=False, refer_tokens=set()):
+        path, dic, parsing=False, 
+        use_pos=True, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False, 
+        subpos_depth=-1, lowercase=False, normalize_digits=True, refer_tokens=set(), refer_chunks=set()):
+
     ins_cnt = 0
 
     token_seqs = []
@@ -300,9 +338,9 @@ def load_decode_data_WL(
         if use_pos:
             root_pos_id = dic.tables[constants.POS_LABEL].get_id(constants.ROOT_SYMBOL)
 
-    ot_seq_ = [constants.ROOT_SYMBOL] if parsing else []
+    ouni_seq_ = [constants.ROOT_SYMBOL] if parsing else []
     opos_seq_ = [constants.ROOT_SYMBOL] if parsing and use_pos else []
-    t_seq_ = [get_unigram_id(constants.ROOT_SYMBOL)] if parsing else []
+    uni_seq_ = [get_unigram_id(constants.ROOT_SYMBOL)] if parsing else []
     sub_seq_ = [[get_subtoken_id(constants.ROOT_SYMBOL)]] if parsing and use_subtoken else []
     pos_seq_ = [get_pos_id(constants.ROOT_SYMBOL)] if parsing and use_pos else []
 
@@ -311,9 +349,9 @@ def load_decode_data_WL(
     pos_clm = 1
 
     with open(path) as f:
-        ot_seq = ot_seq_.copy()
+        ouni_seq = ouni_seq_.copy()
         opos_seq = opos_seq_.copy()
-        t_seq = t_seq_.copy()
+        uni_seq = uni_seq_.copy()
         sub_seq = sub_seq_.copy()
         pos_seq = pos_seq_.copy() 
 
@@ -321,11 +359,11 @@ def load_decode_data_WL(
             line = re.sub(' +', ' ', line)
             line = line.strip(' \t\n')
             if len(line) < 1:
-                if len(t_seq) - (1 if parsing else 0) > 0:
-                    token_seqs.append(t_seq)
-                    t_seq = t_seq_.copy()
-                    org_token_seqs.append(ot_seq)
-                    ot_seq = ot_seq_.copy()
+                if len(uni_seq) - (1 if parsing else 0) > 0:
+                    token_seqs.append(uni_seq)
+                    uni_seq = uni_seq_.copy()
+                    org_token_seqs.append(ouni_seq)
+                    ouni_seq = ouni_seq_.copy()
                     if sub_seq:
                         subtoken_seqs.append(sub_seq)
                         sub_seq = sub_seq_.copy()
@@ -363,9 +401,9 @@ def load_decode_data_WL(
 
             array = line.split(attr_delim)
             word = array[word_clm]
-            ot_seq.append(word)
+            ouni_seq.append(word)
             pword = preprocess_token(word, lowercase, normalize_digits, refer_tokens)
-            t_seq.append(get_unigram_id(pword, update=pword in refer_tokens))
+            uni_seq.append(get_unigram_id(pword, update=pword in refer_tokens))
 
             if use_pos:
                 pos = get_subpos(array[pos_clm], subpos_depth)
@@ -380,9 +418,9 @@ def load_decode_data_WL(
                     sub_seq.append([get_subtoken_id(pword[i]) for i in range(len(pword))])
 
         n_non_words = 1 if parsing else 0
-        if len(t_seq) - n_non_words > 0:
-            org_token_seqs.append(ot_seq)
-            token_seqs.append(t_seq)
+        if len(uni_seq) - n_non_words > 0:
+            org_token_seqs.append(ouni_seq)
+            token_seqs.append(uni_seq)
             if opos_seq:
                 org_pos_seqs.append(opos_seq)
             if subtoken_seqs:
@@ -413,9 +451,8 @@ otherwise, the following format is expected for segmentation:
 """
 def load_annotated_data_SL(
         path, train=True, segmentation=True, tagging=False,
-        use_pos=True, subpos_depth=-1, use_bigram=False, use_tokentype=False, 
-        use_subtoken=False, use_chunk_trie=False, 
-        lowercase=False, normalize_digits=True,
+        use_pos=True, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False, 
+        subpos_depth=-1, lowercase=False, normalize_digits=True, max_chunk_len=0, 
         dic=None, freq_tokens=set(), refer_tokens=set(), refer_chunks=set()):
     use_pos = tagging 
     if not dic:
@@ -461,11 +498,13 @@ def load_annotated_data_SL(
             sub_seq = []
             seg_seq = []
             pos_seq = []
+            pstr = ''
 
             for entry in entries:
                 attrs = entry.split(attr_delim)
                 pword = preprocess_token(attrs[0], lowercase, normalize_digits, refer_tokens)
-                
+                pstr += pword
+
                 if tagging:
                     if len(attrs) < 2:
                         continue
@@ -476,44 +515,19 @@ def load_annotated_data_SL(
                             get_seg_id('{}-{}'.format(seg_lab, pos) , True)
                 else:
                     pos = None    
-                        
+                       
                 wlen = len(pword)
 
-                # TODO fixed bug: partial pword
                 if segmentation:
-                    update_chunk = use_chunk_trie and to_be_registered(pword, train, set(), refer_chunks)
-                    update_tokens = [
-                        update_chunk or to_be_registered(pword[i], train, freq_tokens, refer_tokens) 
-                        for i in range(wlen)]
-
-                    # tmp
-                    uni_seq.extend([get_unigram_id(pword[i], update_tokens[i]) for i in range(wlen)])
-                    # uni_seq.extend(
-                    #     [get_unigram_id(get_char_bigram(pword, i), 
-                    #                     update_tokens[i] and (update_tokens[i+1] if i+1 < wlen else True))
-                    #      for i in range(wlen)])
+                    uni_seq.extend([get_unigram_id(pword[i], True) for i in range(wlen)])
 
                     seg_seq.extend(
                         [get_seg_id(
                             get_label_BIES(i, wlen-1, cate=pos), update=train) for i in range(wlen)])
 
-                    if use_chunk_trie and (update_chunk or update_tokens == [True for i in range(wlen)]):
-                        token_ids = uni_seq[-wlen:]
-                        get_chunk_id(token_ids, pword if pword else constants.NONE_SYMBOL, True)
-
-                    if use_bigram:
-                        bi_seq.extend(
-                            [get_bigram_id(get_char_bigram(pword, i), 
-                                           update_tokens[i] and (update_tokens[i+1] if i+1 < wlen else True))
-                             for i in range(wlen)])
-                        # bi_seq.extend(
-                        #     [get_bigram_id(get_char_bigram2(pword, i), 
-                        #                    update_tokens[i] and (update_tokens[i-1] if i > 0 else True))
-                        #      for i in range(wlen)])
-
                     if use_tokentype:
                         type_seq.extend(
-                            [get_toktype_id(get_char_type(pword[i]), update_tokens[i]) for i in range(wlen)])
+                            [get_toktype_id(get_char_type(pword[i]), update=train) for i in range(wlen)])
 
                 else:
                     update_token = to_be_registered(pword, train, freq_tokens, refer_tokens)
@@ -527,6 +541,23 @@ def load_annotated_data_SL(
                         else:
                             sub_seq.append(
                                 [get_subtoken_id(pword[i], update_token) for i in range(wlen)])
+
+            if segmentation:
+                if use_bigram:
+                    str_bigrams = create_all_char_ngrams(pstr, 2)
+                    for sb in str_bigrams:
+                        bi_seq.append(get_bigram_id(sb, update=train))
+                    bi_last = '{}{}'.format(pstr[-1], constants.EOS)
+                    bi_seq.append(get_bigram_id(bi_last, update=train))
+
+                if use_chunk_trie:
+                    for n in range(1, max_chunk_len+1):
+                        cid_ngrams = create_all_char_ngrams(uni_seq, n)
+                        str_ngrams = create_all_char_ngrams(pstr, n)
+                        for cn, sn in zip (cid_ngrams, str_ngrams):
+                            if sn in refer_chunks:
+                                # print(cn, sn)
+                                get_chunk_id(cn, sn, True)
 
             ins_cnt += 1
 
@@ -574,9 +605,8 @@ otherwise, the following format is expected for segmentation:
 def load_annotated_data_WL(
         path, train=True, 
         segmentation=True, tagging=False, parsing=False, typed_parsing=False, attribute_annotation=False, 
-        use_pos=True, subpos_depth=-1, use_bigram=False, use_tokentype=False, 
-        use_subtoken=False, use_chunk_trie=False, 
-        lowercase=False, normalize_digits=True,
+        use_pos=True, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False, 
+        subpos_depth=-1, lowercase=False, normalize_digits=True, max_chunk_len=0, 
         dic=None, freq_tokens=set(), refer_tokens=set(), refer_chunks=set()):
     if not dic:
         dic = dictionary.init_dictionary(
@@ -639,6 +669,23 @@ def load_annotated_data_WL(
 
             if len(line) < 1:
                 if len(uni_seq) - (1 if parsing else 0) > 0:
+                    if segmentation:
+                        if use_bigram:  # TODO confirm
+                            str_bigrams = create_all_char_ngrams(pstr, 2)
+                            for sb in str_bigrams:
+                                bi_seq.append(get_bigram_id(sb, update=train))
+                            bi_last = '{}{}'.format(pstr[-1], constants.EOS)
+                            bi_seq.append(get_bigram_id(bi_last, update=train))
+
+                        if use_chunk_trie:
+                            dic.tables['unigram'].create_id2str()
+                            for n in range(1, max_chunk_len+1):
+                                cid_ngrams = create_all_char_ngrams(uni_seq, n)
+                                str_ngrams = create_all_char_ngrams(pstr, n)
+                                for cn, sn in zip (cid_ngrams, str_ngrams):
+                                    if sn in refer_chunks:
+                                        get_chunk_id(cn, sn, True)
+
                     token_seqs.append(uni_seq)
                     uni_seq = uni_seq_.copy()
                     if bi_seq:
@@ -665,6 +712,7 @@ def load_annotated_data_WL(
                     if attr_seq:
                         attr_seqs.append(attr_seq)
                         attr_seq = attr_seq_.copy()
+                    pstr = ''
 
                     ins_cnt += 1
                     if ins_cnt % 100000 == 0:
@@ -711,6 +759,7 @@ def load_annotated_data_WL(
 
             array = line.split(attr_delim)
             pword = preprocess_token(array[word_clm], lowercase, normalize_digits, refer_tokens)
+            pstr += pword
 
             if use_pos:
                 pos = get_subpos(array[pos_clm], subpos_depth)
@@ -727,27 +776,12 @@ def load_annotated_data_WL(
                     update_chunk or to_be_registered(pword[i], train, freq_tokens, refer_tokens) 
                     for i in range(wlen)]
                 
-                # tmp
-                uni_seq.extend([get_unigram_id(pword[i], update_tokens[i]) for i in range(wlen)])
-                # uni_seq.extend(
-                #         [get_unigram_id(get_char_bigram(pword, i), 
-                #                        update_tokens[i] and (update_tokens[i+1] if i+1 < wlen else True))
-                #          for i in range(wlen)])
+                uni_seq.extend([get_unigram_id(pword[i], True) for i in range(wlen)])
 
                 seg_seq.extend(
                     [get_seg_id(
                         get_label_BIES(i, wlen-1, cate=pos), update=train) for i in range(wlen)])
 
-                if use_chunk_trie and (update_chunk or update_tokens == [True for i in range(wlen)]):
-                    token_ids = uni_seq[-wlen:]
-                    get_chunk_id(token_ids, pword, True)
-
-                if use_bigram:
-                    bi_seq.extend(
-                        [get_bigram_id(get_char_bigram(pword, i), 
-                                       update_tokens[i] and (update_tokens[i+1] if i+1 < wlen else True))
-                         for i in range(wlen)])
-                    
                 if use_tokentype:
                     type_seq.extend(
                         [get_toktype_id(get_char_type(pword[i]), update_tokens[i]) for i in range(wlen)])
@@ -785,6 +819,23 @@ def load_annotated_data_WL(
 
         n_non_words = 1 if parsing else 0
         if len(uni_seq) - n_non_words > 0:
+            if segmentation:
+                if use_bigram:  # TODO confirm
+                    str_bigrams = create_all_char_ngrams(pstr, 2)
+                    for sb in str_bigrams:
+                        bi_seq.append(get_bigram_id(sb, update=train))
+                    bi_last = '{}{}'.format(pstr[-1], constants.EOS)
+                    bi_seq.append(get_bigram_id(bi_last, update=train))
+
+                if use_chunk_trie:
+                    dic.tables['unigram'].create_id2str()
+                    for n in range(1, max_chunk_len+1):
+                        cid_ngrams = create_all_char_ngrams(uni_seq, n)
+                        str_ngrams = create_all_char_ngrams(pstr, n)
+                        for cn, sn in zip (cid_ngrams, str_ngrams):
+                            if sn in refer_chunks:
+                                get_chunk_id(cn, sn, True)
+
             token_seqs.append(uni_seq)
             if bi_seq:
                 bigram_seqs.append(bi_seq)
@@ -1077,24 +1128,25 @@ def get_char_type(char):
         return constants.TYPE_SYMBOL
     
 
-def get_char_bigram(word, i):
-    if i >= len(word):
-        return
+def create_all_char_ngrams(chars, n):
+    seq_len = len(chars)
+    if n > seq_len or n <= 0 or seq_len == 0:
+        return []
 
-    if i == len(word) - 1:
-        return '{}-{}'.format(word[i], constants.EOS)
-    else:
-        return '{}-{}'.format(word[i], word[i+1])
+    ngrams = []
+    for i in range(seq_len-n+1):
+        ngrams.append(chars[i:i+n])
+    return ngrams
+    
 
+# def get_char_bigram(word, i):
+#     if i >= len(word):
+#         return
 
-def get_char_bigram2(word, i):
-    if i >= len(word):
-        return
-
-    if i == 0:
-        return '{}-{}'.format(constants.BOS, word[i])
-    else:
-        return '{}-{}'.format(word[i-1], word[i])
+#     if i == len(word) - 1:
+#         return '{}-{}'.format(word[i], constants.EOS)
+#     else:
+#         return '{}-{}'.format(word[i], word[i+1])
 
 
 def get_label_BI(index, cate=None):

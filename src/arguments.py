@@ -176,12 +176,15 @@ class SelectiveArgumentParser(object):
 
 
         # char and word hybrid segmentation
+        parser.add_argument('--rnn_n_layers2', type=int, default=0, help='')
+        parser.add_argument('--rnn_n_units2', type=int, default=0, help='')
         parser.add_argument('--chunk_embed_dim', type=int, default=300)
         parser.add_argument('--chunk_embed_model_path', default='', help=
                             'File path of pretrained model of chunk (typically word) embedding')
         parser.add_argument('--use_attention', action='store_true')
         parser.add_argument('--use_chunk_first', action='store_true')
         parser.add_argument('--max_chunk_len', type=int, default=4)
+        parser.add_argument('--biaffine_dropout', type=float, default=0.0)
 
         # parsing
         parser.add_argument('--hidden_mlp_dropout', type=float, default=0.0, help=
@@ -501,7 +504,7 @@ class SelectiveArgumentParser(object):
                 parser.add_argument('--subtoken_embed_dim', type=int, default=args.subtoken_embed_dim)
                 parser.add_argument('--rnn_unit_type', default=args.rnn_unit_type)
                 parser.add_argument('--rnn_bidirection', action='store_true', default=args.rnn_bidirection)
-                parser.add_argument('--rnn_n_layers', '-l', type=int, default=args.rnn_n_layers)
+                parser.add_argument('--rnn_n_layers', type=int, default=args.rnn_n_layers)
                 parser.add_argument('--rnn_n_units', type=int, default=args.rnn_n_units)
 
             parser.add_argument('--rnn_dropout', type=float, default=args.rnn_dropout)
@@ -516,10 +519,13 @@ class SelectiveArgumentParser(object):
                                          default=args.inference_layer)
 
             if common.is_segmentation_task(args.task):
+                parser.add_argument('--rnn_n_layers2', type=int, default=args.rnn_n_layers2)
+                parser.add_argument('--rnn_n_units2', type=int, default=args.rnn_n_units2)
                 parser.add_argument('--chunk_embed_model_path', default=args.chunk_embed_model_path)
                 parser.add_argument('--use_attention', action='store_true', default=args.use_attention)
                 parser.add_argument('--use_chunk_first', action='store_true', default=args.use_chunk_first)
                 parser.add_argument('--max_chunk_len', type=int, default=args.max_chunk_len)
+                parser.add_argument('--biaffine_dropout', type=float, default=args.biaffine_dropout)
 
                 if train:
                     if args.task == constants.TASK_HSEG:

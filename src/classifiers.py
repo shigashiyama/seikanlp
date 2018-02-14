@@ -84,9 +84,8 @@ class SequenceTagger(Classifier):
         return ret
 
 
-    # TODO fix
-    def decode(self, ws, fs):
-        ys = self.predictor.decode(ws, fs)
+    def decode(self, *inputs):
+        ys = self.predictor.decode(*inputs)
         return ys
 
 
@@ -150,6 +149,18 @@ class HybridSequenceTagger(SequenceTagger):
         self.task = task
 
         
+    def change_dropout_ratio(self, dropout_ratio, file=sys.stderr):
+        self.change_rnn_dropout_ratio(dropout_ratio, file=file)
+        self.change_biaffine_dropout_ratio(dropout_ratio, file=file)
+        self.change_hidden_mlp_dropout_ratio(dropout_ratio, file=file)
+        print('', file=file)
+
+
+    def change_biaffine_dropout_ratio(self, dropout_ratio, file=sys.stderr):
+        self.predictor.biaffine_dropout = dropout_ratio
+        print('Set {} dropout ratio to {}'.format('Biaffine', self.predictor.biaffine_dropout), file=file)
+
+
     def load_pretrained_embedding_layer(
             self, dic, external_unigram_model, external_chunk_model, finetuning=False):
         id2unigram = dic.tables[constants.UNIGRAM].id2str
@@ -225,8 +236,8 @@ class DualSequenceTagger(Classifier):
         return ret
 
 
-    def decode(self, ws, fs):
-        sys, lys = self.predictor.decode(ws, fs)
+    def decode(self, *inputs):
+        sys, lys = self.predictor.decode(*inputs)
         return sys, lys
 
 
@@ -320,8 +331,8 @@ class DependencyParser(Classifier):
         return ret
 
 
-    def decode(self, ws, cs, ps, label_prediction=False):
-        ret = self.predictor.decode(ws, cs, ps, label_prediction)
+    def decode(self, *inputs, label_prediction=False):
+        ret = self.predictor.decode(*inputs, label_prediction)
         return ret
 
 
@@ -466,14 +477,18 @@ def init_classifier(task, hparams, dic):
 
         use_crf = hparams['inference_layer'] == 'crf'
 
+        rnn_n_layers2 = hparams['rnn_n_layers2'] if 'rnn_n_layers2' in hparams else 0
+        rnn_n_units2 = hparams['rnn_n_units2'] if 'rnn_n_units2' in hparams else 0
         predictor = models.tagger.construct_RNNTagger(
             n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
             n_subtokens, subtoken_embed_dim, n_chunks, chunk_embed_dim, 
-            hparams['rnn_unit_type'], 
-            hparams['rnn_bidirection'], hparams['rnn_n_layers'], hparams['rnn_n_units'], 
+            hparams['rnn_unit_type'], hparams['rnn_bidirection'], 
+            hparams['rnn_n_layers'], hparams['rnn_n_units'], rnn_n_layers2, rnn_n_units2,
             hparams['mlp_n_layers'], hparams['mlp_n_units'], n_labels, use_crf=use_crf,
             feat_dim=hparams['additional_feat_dim'], mlp_n_additional_units=0,
-            rnn_dropout=hparams['rnn_dropout'], mlp_dropout=hparams['mlp_dropout'],
+            rnn_dropout=hparams['rnn_dropout'],
+            biaffine_dropout=hparams['biaffine_dropout'] if 'biaffine_dropout' in hparams else 0.0,
+            mlp_dropout=hparams['mlp_dropout'],
             pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
             pretrained_chunk_embed_dim=pretrained_chunk_embed_dim,
             pretrained_embed_usage=pretrained_embed_usage,

@@ -19,6 +19,11 @@ from models.parser import BiaffineCombination
 
 
 class RNNTagger(chainer.Chain):
+    # tmp
+    def __init__chain__(self):
+        super().__init__()
+
+
     def __init__(
             self, n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim,
             n_tokentypes, tokentype_embed_dim, n_subtokens, subtoken_embed_dim,
@@ -40,7 +45,7 @@ class RNNTagger(chainer.Chain):
             self.unigram_embed, self.pretrained_unigram_embed = models.util.construct_embeddings(
                 n_vocab, unigram_embed_dim, pretrained_unigram_embed_dim, pretrained_embed_usage)
             if self.pretrained_embed_usage != ModelUsage.NONE:
-                print('# Pretrained embedding usage: {}'.format(self.pretrained_embed_usage))
+                print('# Pretrained embedding usage: {}'.format(self.pretrained_embed_usage), file=file)
             print('# Unigram embedding matrix: W={}'.format(self.unigram_embed.W.shape), file=file)
             embed_dim = self.unigram_embed.W.shape[1]
             if self.pretrained_unigram_embed is not None:
@@ -59,18 +64,16 @@ class RNNTagger(chainer.Chain):
                 embed_dim += tokentype_embed_dim
                 print('# Token type embedding matrix: W={}'.format(self.type_embed.W.shape), file=file)
 
-            self.additional_feat_dim = feat_dim
-            if feat_dim > 0:
-                embed_dim += feat_dim
-                print('# Additional features dimension: {}'.format(feat_dim), file=file)
-
-            # subtoken embedding layer
-
             if n_subtokens > 0 and subtoken_embed_dim > 0:
                 self.subtoken_embed = L.EmbedID(n_subtokens, subtoken_embed_dim)
                 embed_dim += subtoken_embed_dim
                 print('# Subtoken embedding matrix: W={}'.format(self.subtoken_embed.W.shape), file=file)
             self.subtoken_embed_dim = subtoken_embed_dim;
+
+            self.additional_feat_dim = feat_dim
+            if feat_dim > 0:
+                embed_dim += feat_dim
+                print('# Additional features dimension: {}'.format(feat_dim), file=file)
 
             # recurrent layers
 
@@ -85,6 +88,8 @@ class RNNTagger(chainer.Chain):
             mlp_in = rnn_output_dim + mlp_n_additional_units
             self.mlp = MLP(mlp_in, n_labels, n_hidden_units=mlp_n_units, n_layers=mlp_n_layers,
                            output_activation=F.identity, dropout=mlp_dropout, file=file)
+
+            # CRF or softmax
 
             self.use_crf = use_crf
             if self.use_crf:
@@ -195,9 +200,9 @@ class RNNTagger(chainer.Chain):
         return loss, ps
 
 
-    def decode(self, us, fs):
+    def decode(self, us, bs=None, ts=None, ss=None, fs=None):
         with chainer.no_backprop_mode():
-            _, ps = self.__call__(us, fs, calculate_loss=False)
+            _, ps = self.__call__(us, bs, ts, ss, fs, calculate_loss=False)
         return ps
 
 
@@ -206,56 +211,118 @@ class RNNTaggerWithChunk(RNNTagger):
             self, n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim,
             n_tokentypes, tokentype_embed_dim, n_subtokens, subtoken_embed_dim,
             n_chunks, chunk_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
+            rnn_unit_type, rnn_bidirection, rnn_n_layers1, rnn_n_units1, rnn_n_layers2, rnn_n_units2,
             mlp_n_layers, mlp_n_units, n_labels, use_crf=True,
-            feat_dim=0, mlp_n_additional_units=0,
-            rnn_dropout=0, mlp_dropout=0, 
+            feat_dim=0, rnn_dropout=0, biaffine_dropout=0, mlp_dropout=0, 
             pretrained_unigram_embed_dim=0, pretrained_chunk_embed_dim=0, 
             pretrained_embed_usage=ModelUsage.NONE, use_attention=False, use_chunk_first=True,
             file=sys.stderr):
+        self.__init__chain__()
 
+        # TODO refactor with super class
+        self.use_chunk_first = use_chunk_first
+        self.use_attention = use_attention
+        self.use_rnn2 = not self.use_chunk_first and rnn_n_layers2 > 0 and rnn_n_units2 > 0
         self.chunk_embed_out_dim = (
             chunk_embed_dim +
             (pretrained_chunk_embed_dim if pretrained_embed_usage == ModelUsage.CONCAT else 0))
 
-        self.use_chunk_first = use_chunk_first
-        if self.use_chunk_first:
-            feat_dim = self.chunk_embed_out_dim
-            mlp_n_additional_units = 0
-        else:
-            feat_dim = 0
-            mlp_n_additional_units = self.chunk_embed_out_dim
-
-        super().__init__(
-            n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim,
-            n_tokentypes, tokentype_embed_dim, n_subtokens, subtoken_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
-            mlp_n_layers, mlp_n_units, n_labels, use_crf=use_crf, 
-            feat_dim=feat_dim, mlp_n_additional_units=mlp_n_additional_units,
-            rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
-            pretrained_embed_usage=pretrained_embed_usage,
-            file=file)
-
         with self.init_scope():
+            print('### Parameters', file=file)
+
+            # embedding layer(s)
+
+            self.pretrained_embed_usage = pretrained_embed_usage
+
+            self.unigram_embed, self.pretrained_unigram_embed = models.util.construct_embeddings(
+                n_vocab, unigram_embed_dim, pretrained_unigram_embed_dim, pretrained_embed_usage)
+            if self.pretrained_embed_usage != ModelUsage.NONE:
+                print('# Pretrained embedding usage: {}'.format(self.pretrained_embed_usage), file=file)
+            print('# Unigram embedding matrix: W={}'.format(self.unigram_embed.W.shape), file=file)
+            embed_dim = self.unigram_embed.W.shape[1]
+            if self.pretrained_unigram_embed is not None:
+                if self.pretrained_embed_usage == ModelUsage.CONCAT:
+                    embed_dim += self.pretrained_unigram_embed.W.shape[1]
+                print('# Pretrained unigram embedding matrix: W={}'.format(
+                    self.pretrained_unigram_embed.W.shape), file=file)
+
+            if n_bigrams > 0 and bigram_embed_dim > 0:
+                self.bigram_embed = L.EmbedID(n_bigrams, bigram_embed_dim)
+                embed_dim += bigram_embed_dim
+                print('# Bigram embedding matrix: W={}'.format(self.bigram_embed.W.shape), file=file)
+                    
+            if n_tokentypes > 0 and tokentype_embed_dim > 0:
+                self.type_embed = L.EmbedID(n_tokentypes, tokentype_embed_dim)
+                embed_dim += tokentype_embed_dim
+                print('# Token type embedding matrix: W={}'.format(self.type_embed.W.shape), file=file)
+
+            if n_subtokens > 0 and subtoken_embed_dim > 0:
+                self.subtoken_embed = L.EmbedID(n_subtokens, subtoken_embed_dim)
+                embed_dim += subtoken_embed_dim
+                print('# Subtoken embedding matrix: W={}'.format(self.subtoken_embed.W.shape), file=file)
+            self.subtoken_embed_dim = subtoken_embed_dim;
+
+            self.additional_feat_dim = feat_dim
+            if feat_dim > 0:
+                embed_dim += feat_dim
+                print('# Additional features dimension: {}'.format(feat_dim), file=file)
+
             self.chunk_embed, self.pretrained_chunk_embed = models.util.construct_embeddings(
                 n_chunks, chunk_embed_dim, pretrained_chunk_embed_dim, pretrained_embed_usage)
             print('# Chunk embedding matrix: W={}'.format(self.chunk_embed.W.shape), file=file)
             if self.pretrained_chunk_embed is not None:
                 print('# Pretrained chunk embedding matrix: W={}'.format(
                     self.pretrained_chunk_embed.W.shape), file=file)
+            if self.use_chunk_first:
+                embed_dim += self.chunk_embed_out_dim
 
-            self.use_attention = use_attention
+            # recurrent layers1
+
+            self.rnn_unit_type = rnn_unit_type
+            self.rnn = models.util.construct_RNN(
+                rnn_unit_type, rnn_bidirection, rnn_n_layers1, embed_dim, rnn_n_units1, rnn_dropout)
+            rnn_output_dim1 = rnn_n_units1 * (2 if rnn_bidirection else 1)
+
+            # biaffine b/w token and chunk
             if self.use_attention:
-                if self.use_chunk_first: # tmp
-                    biaffine_left_dim = self.rnn._children[0].w0.shape[1] - chunk_embed_dim
+                if self.use_chunk_first:
+                    #biaffine_left_dim = self.rnn._children[0].w0.shape[1] - chunk_embed_dim
+                    biaffine_left_dim = embed_dim
                 else:
-                    biaffine_left_dim = rnn_output_dim = rnn_n_units * (2 if rnn_bidirection else 1)
+                    biaffine_left_dim = rnn_output_dim1
                 self.biaffine = BiaffineCombination(biaffine_left_dim, self.chunk_embed_out_dim)
-                print('# Biaffine layer for attention:   W={}, U={}, b={}, dropout={}\n'.format(
+                self.biaffine_dropout = biaffine_dropout
+                print('# Biaffine layer for attention:   W={}, U={}, b={}, dropout={}'.format(
                     self.biaffine.W.shape, 
                     self.biaffine.U.shape if self.biaffine.U is not None else None, 
                     self.biaffine.b.shape if self.biaffine.b is not None else None, 
-                    0.0), file=file)
+                    self.biaffine_dropout), file=file)
+
+            # recurrent layers2
+         
+            if self.use_rnn2:
+                rnn_input_dim2 = rnn_output_dim1 + self.chunk_embed_out_dim
+                self.rnn2 = models.util.construct_RNN(
+                    rnn_unit_type, rnn_bidirection, rnn_n_layers2, rnn_input_dim2, rnn_n_units2, rnn_dropout)
+                rnn_output_dim2 = rnn_n_units2 * (2 if rnn_bidirection else 1)
+                mlp_input_dim = rnn_output_dim2
+            else:
+                mlp_input_dim = rnn_output_dim1 + self.chunk_embed_out_dim
+
+            # MLP
+
+            print('# MLP', file=file)
+            self.mlp = MLP(mlp_input_dim, n_labels, n_hidden_units=mlp_n_units, n_layers=mlp_n_layers,
+                           output_activation=F.identity, dropout=mlp_dropout, file=file)
+
+            # CRF or softmax
+
+            self.use_crf = use_crf
+            if self.use_crf:
+                self.crf = L.CRF1d(n_labels)
+                print('# CRF cost: {}'.format(self.crf.cost.shape), file=file)
+            else:
+                self.softmax_cross_entropy = softmax_cross_entropy.softmax_cross_entropy
 
 
     """
@@ -276,10 +343,26 @@ class RNNTaggerWithChunk(RNNTagger):
         else:
             rs = self.rnn_output(xs)                     # x -[RNN]-> r
             hs = self.act_and_merge_features(rs, ws, ms) # r @ r$w -> h
+            if self.use_rnn2:
+                hs = self.rnn2_output(hs)                # h -[RNN]-> h'
             
         loss, ps = self.predict(hs, ls=ls, calculate_loss=calculate_loss)
 
         return loss, ps
+
+
+    def decode(self, us, cs, ms, bs=None, ts=None, ss=None, fs=None):
+        with chainer.no_backprop_mode():
+            _, ps = self.__call__(us, cs, ms, bs, ts, ss, fs, calculate_loss=False)
+        return ps
+
+
+    def rnn2_output(self, xs):
+        if self.rnn_unit_type == 'lstm':
+            hy, cy, hs = self.rnn2(None, None, xs)
+        else:
+            hy, hs = self.rnn2(None, xs)
+        return hs
 
 
     def extract_token_features(self, us, bs, ts, ss, fs):
@@ -312,16 +395,16 @@ class RNNTaggerWithChunk(RNNTagger):
                 a = xp.zeros((len(x), self.chunk_embed_out_dim), dtype='f')  
 
             else:
-                # TODO dropout
                 if self.use_attention:
-                    scores = self.biaffine(x, w) # (n, m)
+                    scores = self.biaffine(
+                        F.dropout(x, self.biaffine_dropout),
+                        F.dropout(w, self.biaffine_dropout)) # (n, m)
                     max_elems = F.broadcast_to(F.max(scores, axis=1, keepdims=True), scores.shape)
                     masked_scores = F.exp(scores - max_elems) * mask
                 else:
                     masked_scores = mask
                 weight = self.normalize(masked_scores, xp=xp)
                 a = F.matmul(weight, w)      # (n, m) * (m, dc)  => (n, dc)
-
                 # print('x:', x.shape, 'w:', w.shape)
                 # print('x', x)
                 # print('w', w)
@@ -352,10 +435,10 @@ class RNNTaggerWithChunk(RNNTagger):
 def construct_RNNTagger(
         n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
         n_subtokens, subtoken_embed_dim, n_chunks, chunk_embed_dim,
-        rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
+        rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, rnn_n_layers2, rnn_n_units2, 
         mlp_n_layers, mlp_n_units, n_labels, use_crf=True,
         feat_dim=0, mlp_n_additional_units=0,
-        rnn_dropout=0, mlp_dropout=0, 
+        rnn_dropout=0, biaffine_dropout=0, mlp_dropout=0, 
         pretrained_unigram_embed_dim=0, pretrained_chunk_embed_dim=0, 
         pretrained_embed_usage=ModelUsage.NONE, use_attention=False, use_chunk_first=True,
         file=sys.stderr):
@@ -365,10 +448,9 @@ def construct_RNNTagger(
         tagger = models.tagger.RNNTaggerWithChunk(
             n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
             n_subtokens, subtoken_embed_dim, n_chunks, chunk_embed_dim,
-            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
+            rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, rnn_n_layers2, rnn_n_units2, 
             mlp_n_layers, mlp_n_units, n_labels, use_crf=use_crf, feat_dim=feat_dim, 
-            mlp_n_additional_units=mlp_n_additional_units,
-            rnn_dropout=rnn_dropout, mlp_dropout=mlp_dropout, 
+            rnn_dropout=rnn_dropout, biaffine_dropout=biaffine_dropout, mlp_dropout=mlp_dropout, 
             pretrained_unigram_embed_dim=pretrained_unigram_embed_dim, 
             pretrained_chunk_embed_dim=pretrained_chunk_embed_dim, 
             pretrained_embed_usage=pretrained_embed_usage, 

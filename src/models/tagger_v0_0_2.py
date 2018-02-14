@@ -37,7 +37,7 @@ class RNNTaggerBase(chainer.Chain):
             self.unigram_embed, self.pretrained_unigram_embed = models.util.construct_embeddings(
                 n_vocab, unigram_embed_dim, pretrained_unigram_embed_dim, pretrained_embed_usage)
             if self.pretrained_embed_usage != ModelUsage.NONE:
-                print('# Pretrained embedding usage: {}'.format(self.pretrained_embed_usage))
+                print('# Pretrained embedding usage: {}'.format(self.pretrained_embed_usage), file=file)
             print('# Unigram embedding matrix: W={}'.format(self.unigram_embed.W.shape), file=file)
             embed_dim = self.unigram_embed.W.shape[1]
             if self.pretrained_unigram_embed is not None:

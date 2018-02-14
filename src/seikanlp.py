@@ -10,7 +10,7 @@ from chainer import cuda
 import common
 import constants
 import arguments
-import trainers
+from trainers import tagger_trainer, parser_trainer, attribute_annotator_trainer
 
 
 def run():
@@ -33,15 +33,15 @@ def run():
 
     if common.is_single_st_task(args.task):
         if args.task == constants.TASK_HSEG:
-            trainer = trainers.HybridSegmenterTrainer(args)
+            trainer = tagger_trainer.HybridSegmenterTrainer(args)
         else:
-            trainer = trainers.TaggerTrainer(args)
+            trainer = tagger_trainer.TaggerTrainer(args)
     elif common.is_dual_st_task(args.task):
-        trainer = trainers.DualTaggerTrainer(args)
+        trainer = tagger_trainer.DualTaggerTrainer(args)
     elif common.is_parsing_task(args.task):
-        trainer = trainers.ParserTrainer(args)
+        trainer = parser_trainer.ParserTrainer(args)
     elif common.is_attribute_annotation_task(args.task):
-        trainer = trainers.AttributeAnnotatorTrainer(args)
+        trainer = attribute_annotator_trainer.AttributeAnnotatorTrainer(args)
 
     ################################
     # Prepare GPU

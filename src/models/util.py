@@ -136,6 +136,7 @@ def grow_embedding_layer_without_pretrained_model(
         w2_rand = initializers.generate_array(initialW, (diff, d_rand), np)
     else:
         w2_rand = np.zeros((diff, d_rand), dtype='f')
+        #w2_rand = rand_embed.W[0].data # use pretrained vector of unknown token
     w_rand = F.concat((rand_embed.W, w2_rand), axis=0)
     rand_embed.W = chainer.Parameter(initializer=w_rand.data, name='W')
     print('Grow embedding matrix: {} -> {}'.format(n_vocab_org, rand_embed.W.shape[0]), file=file)
@@ -157,8 +158,10 @@ def grow_embedding_layer_with_pretrained_model(
         if key in external_model.wv.vocab:
             vec_rand = external_model.wv[key]
             count += 1
-        else:
+        elif train:
             vec_rand = initializers.generate_array(initialW, (d_rand, ), np)
+        else:
+            vec_rand = rand_embed.W[0].data # use pretrained vector of unknown token
         w2_rand.append(vec_rand)
 
     w2_rand = np.reshape(w2_rand, (diff, d_rand))
