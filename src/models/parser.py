@@ -37,7 +37,7 @@ class BiaffineCombination(chainer.Chain):
 
             if use_V:
                 initialV = None
-                v_shape = (right_size, 1)
+                v_shape = (1, right_size)
                 self.V = chainer.variable.Parameter(initializers._get_initializer(initialV), v_shape)
             else:
                 self.V = None
@@ -57,11 +57,8 @@ class BiaffineCombination(chainer.Chain):
         n1 = x1.shape[0]
         n2 = x2.shape[0]
         x2T = F.transpose(x2)
-        # print('w^T', x2T.shape)
-        x1_W = F.matmul(x1, self.W)                           # (n1, d1) * (d1, d2) => (n1, d2)
-        # print('r*W', x1_W.shape)
+        x1_W = F.matmul(x1, self.W)                       # (n1, d1) * (d1, d2) => (n1, d2)
         res = F.matmul(x1_W, x2T)                         # (n1, d2) * (d2, n2) => (n1, n2)
-        # print('r*W*w', res.shape)
 
         if self.U is not None:
             x1_U = F.broadcast_to(F.matmul(x1, self.U), (n1, n2)) # (n1, d1) * (d1, 1)  => (n1, 1) -> (n1, n2)
@@ -69,10 +66,8 @@ class BiaffineCombination(chainer.Chain):
             res = res + x1_U
 
         if self.V is not None: # TODO fix
-            # x2_V = F.broadcast_to(
-            #     F.transpose(F.matmul(x2, self.V)), (n1, n2)) # (n2, d2) * (d2, 1)  => (n2, 1) -> (n1, n2)
-            #res = x1_W_x2 + x2_V
-            pass
+            V_x2 = F.broadcast_to(F.matmul(self.V, x2T), (n1, n2)) # (1, d2) * (d2, n2) => (1, n2) -> (n1, n2)
+            res = res + V_x2
 
         if self.b is not None:
             b = F.broadcast_to(self.b, (n1, n2))

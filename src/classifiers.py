@@ -95,6 +95,11 @@ class SequenceTagger(Classifier):
         print('', file=file)
 
 
+    def change_embed_dropout_ratio(self, dropout_ratio, file=sys.stderr):
+        self.predictor.embed_dropout = dropout_ratio
+        print('Set {} dropout ratio to {}'.format('embedding', self.predictor.embed_dropout), file=file)
+
+
     def change_rnn_dropout_ratio(self, dropout_ratio, file=sys.stderr):
         self.predictor.rnn.dropout = dropout_ratio
         print('Set {} dropout ratio to {}'.format('RNN', self.predictor.rnn.dropout), file=file)
@@ -105,21 +110,59 @@ class SequenceTagger(Classifier):
         print('Set {} dropout ratio to {}'.format('MLP', dropout_ratio), file=file)
 
 
-    def grow_embedding_layers(self, dic_grown, external_model=None, train=True):
-        id2unigram_grown = dic_grown.tables[constants.UNIGRAM].id2str
-        n_vocab_org = self.predictor.unigram_embed.W.shape[0]
-        n_vocab_grown = len(id2unigram_grown)
+    def load_pretrained_embedding_layer(
+            self, dic, external_unigram_model, external_bigram_model, finetuning=False):
+        usage = self.predictor.pretrained_embed_usage
+
+        if external_unigram_model:
+            id2unigram = dic.tables[constants.UNIGRAM].id2str
+            if usage == models.util.ModelUsage.INIT:
+                models.util.load_pretrained_embedding_layer(
+                    id2unigram, self.predictor.unigram_embed, external_unigram_model, finetuning=finetuning)
+            elif usage == models.util.ModelUsage.ADD or models.util.ModelUsage.CONCAT:
+                models.util.load_pretrained_embedding_layer(
+                    id2unigram, self.predictor.pretrained_unigram_embed, external_unigram_model, 
+                    finetuning=finetuning)
+
+        if external_bigram_model: #and dic.has_table(constants.BIGRAM):
+            id2bigram = dic.tables[constants.BIGRAM].id2str
+            if usage == models.util.ModelUsage.INIT:
+                models.util.load_pretrained_embedding_layer(
+                    id2bigram, self.predictor.bigram_embed, external_bigram_model, finetuning=finetuning)
+            elif usage == models.util.ModelUsage.ADD or models.util.ModelUsage.CONCAT:
+                models.util.load_pretrained_embedding_layer(
+                    id2bigram, self.predictor.pretrained_bigram_embed, external_bigram_model, 
+                    finetuning=finetuning)
+
+
+    def grow_embedding_layers(self, dic_grown, external_unigram_model=None, external_bigram_model=None, 
+                              train=True):
         if (self.predictor.pretrained_embed_usage == models.util.ModelUsage.ADD or
             self.predictor.pretrained_embed_usage == models.util.ModelUsage.CONCAT):
             pretrained_unigram_embed = self.predictor.pretrained_unigram_embed
+            pretrained_bigram_embed = self.predictor.pretrained_bigram_embed
         else:
             pretrained_unigram_embed = None
+            pretrained_bigram_embed = None
+
+        id2unigram_grown = dic_grown.tables[constants.UNIGRAM].id2str
+        n_unigrams_org = self.predictor.unigram_embed.W.shape[0]
+        n_unigrams_grown = len(id2unigram_grown)
         models.util.grow_embedding_layers(
-            n_vocab_org, n_vocab_grown, self.predictor.unigram_embed, 
-            pretrained_unigram_embed, external_model, id2unigram_grown,
+            n_unigrams_org, n_unigrams_grown, self.predictor.unigram_embed, 
+            pretrained_unigram_embed, external_unigram_model, id2unigram_grown,
             self.predictor.pretrained_embed_usage, train=train)
 
-        if constants.SUBTOKEN in dic_grown.tables:
+        if dic_grown.has_table(constants.BIGRAM):
+            id2bigram_grown = dic_grown.tables[constants.BIGRAM].id2str
+            n_bigrams_org = self.predictor.bigram_embed.W.shape[0]
+            n_bigrams_grown = len(id2bigram_grown)
+            models.util.grow_embedding_layers(
+                n_bigrams_org, n_bigrams_grown, self.predictor.bigram_embed, 
+                pretrained_bigram_embed, external_bigram_model, id2bigram_grown,
+                self.predictor.pretrained_embed_usage, train=train)
+
+        if dic_grown.has_table(constants.SUBTOKEN):
             id2subtoken_grown = dic_grown.tables[constants.SUBTOKEN].id2str
             n_subtokens_org = self.predictor.subtoken_embed.W.shape[0]
             n_subtokens_grown = len(id2subtoken_grown)
@@ -150,9 +193,11 @@ class HybridSequenceTagger(SequenceTagger):
 
         
     def change_dropout_ratio(self, dropout_ratio, file=sys.stderr):
+        self.change_embed_dropout_ratio(dropout_ratio, file=file)
         self.change_rnn_dropout_ratio(dropout_ratio, file=file)
         self.change_biaffine_dropout_ratio(dropout_ratio, file=file)
         self.change_hidden_mlp_dropout_ratio(dropout_ratio, file=file)
+        self.change_chunk_vector_dropout_ratio(dropout_ratio, file=file)
         print('', file=file)
 
 
@@ -161,13 +206,18 @@ class HybridSequenceTagger(SequenceTagger):
         print('Set {} dropout ratio to {}'.format('Biaffine', self.predictor.biaffine_dropout), file=file)
 
 
+    def change_chunk_vector_dropout_ratio(self, dropout_ratio, file=sys.stderr):
+        self.predictor.chunk_vector_dropout = dropout_ratio
+        print('Set {} dropout ratio to {}'.format(
+            'Chunk vector', self.predictor.chunk_vector_dropout), file=file)
+
+
     def load_pretrained_embedding_layer(
-            self, dic, external_unigram_model, external_chunk_model, finetuning=False):
-        id2unigram = dic.tables[constants.UNIGRAM].id2str
-        id2chunk = dic.tries[constants.CHUNK].id2chunk
+            self, dic, external_unigram_model, external_bigram_model, external_chunk_model, finetuning=False):
         usage = self.predictor.pretrained_embed_usage
 
         if external_unigram_model:
+            id2unigram = dic.tables[constants.UNIGRAM].id2str
             if usage == models.util.ModelUsage.INIT:
                 models.util.load_pretrained_embedding_layer(
                     id2unigram, self.predictor.unigram_embed, external_unigram_model, finetuning=finetuning)
@@ -176,7 +226,18 @@ class HybridSequenceTagger(SequenceTagger):
                     id2unigram, self.predictor.pretrained_unigram_embed, external_unigram_model, 
                     finetuning=finetuning)
 
+        if external_bigram_model: #and dic.has_table(constants.BIGRAM):
+            id2bigram = dic.tables[constants.BIGRAM].id2str
+            if usage == models.util.ModelUsage.INIT:
+                models.util.load_pretrained_embedding_layer(
+                    id2bigram, self.predictor.bigram_embed, external_bigram_model, finetuning=finetuning)
+            elif usage == models.util.ModelUsage.ADD or models.util.ModelUsage.CONCAT:
+                models.util.load_pretrained_embedding_layer(
+                    id2bigram, self.predictor.pretrained_bigram_embed, external_bigram_model, 
+                    finetuning=finetuning)
+
         if external_chunk_model:
+            id2chunk = dic.tries[constants.CHUNK].id2chunk
             if usage == models.util.ModelUsage.INIT:
                 models.util.load_pretrained_embedding_layer(
                     id2chunk, self.predictor.chunk_embed, external_chunk_model, finetuning=finetuning)
@@ -186,28 +247,40 @@ class HybridSequenceTagger(SequenceTagger):
 
 
     def grow_embedding_layers(
-            self, dic_grown, external_unigram_model=None, external_chunk_model=None, train=True):
+            self, dic_grown, external_unigram_model=None, external_bigram_model=None,
+            external_chunk_model=None, train=True):
         if (self.predictor.pretrained_embed_usage == models.util.ModelUsage.ADD or
             self.predictor.pretrained_embed_usage == models.util.ModelUsage.CONCAT):
             pretrained_unigram_embed = self.predictor.pretrained_unigram_embed
+            pretrained_bigram_embed = self.predictor.pretrained_bigram_embed
             pretrained_chunk_embed = self.predictor.pretrained_chunk_embed
         else:
             pretrained_unigram_embed = None
+            pretrained_bigram_embed = None
             pretrained_chunk_embed = None
 
         id2unigram_grown = dic_grown.tables[constants.UNIGRAM].id2str
-        n_vocab_org = self.predictor.unigram_embed.W.shape[0]
-        n_vocab_grown = len(id2unigram_grown)
+        n_unigrams_org = self.predictor.unigram_embed.W.shape[0]
+        n_unigrams_grown = len(id2unigram_grown)
         models.util.grow_embedding_layers(
-            n_vocab_org, n_vocab_grown, self.predictor.unigram_embed, 
+            n_unigrams_org, n_unigrams_grown, self.predictor.unigram_embed, 
             pretrained_unigram_embed, external_unigram_model, id2unigram_grown,
             self.predictor.pretrained_embed_usage, train=train)
 
+        if external_bigram_model: #and dic.has_table(constants.BIGRAM):
+            id2bigram_grown = dic_grown.tables[constants.BIGRAM].id2str
+            n_bigrams_org = self.predictor.bigram_embed.W.shape[0]
+            n_bigrams_grown = len(id2bigram_grown)
+            models.util.grow_embedding_layers(
+                n_bigrams_org, n_bigrams_grown, self.predictor.bigram_embed, 
+                pretrained_bigram_embed, external_bigram_model, id2bigram_grown,
+                self.predictor.pretrained_embed_usage, train=train)
+
         id2chunk_grown = dic_grown.tries[constants.CHUNK].id2chunk
-        n_vocab_org = self.predictor.chunk_embed.W.shape[0]
-        n_vocab_grown = len(id2chunk_grown)
+        n_chunks_org = self.predictor.chunk_embed.W.shape[0]
+        n_chunks_grown = len(id2chunk_grown)
         models.util.grow_embedding_layers(
-            n_vocab_org, n_vocab_grown, self.predictor.chunk_embed, 
+            n_chunks_org, n_chunks_grown, self.predictor.chunk_embed, 
             pretrained_chunk_embed, external_chunk_model, id2chunk_grown,
             self.predictor.pretrained_embed_usage, train=train)
 
@@ -219,8 +292,12 @@ class HybridSequenceTagger(SequenceTagger):
                 n_subtokens_org, n_subtokens_grown, self.predictor.subtoken_embed, train=train)
 
         
-    def __call__(self, us, cs, ms, bs, ts, ss, fs, ls, train=False):
-        ret = self.predictor(us, cs, ms, bs, ts, None, fs, ls)
+    # def __call__(self, us, cs, ms, bs, ts, ss, fs, ls, train=False):
+    #     ret = self.predictor(us, cs, ms, bs, ts, None, fs, ls)
+    #     return ret
+
+    def __call__(self, us, cs, ds, ms, bs, ts, ss, fs, gls, gcs, train=False):
+        ret = self.predictor(us, cs, ds, ms, bs, ts, None, fs, gls, gcs)
         return ret
 
 
@@ -439,6 +516,11 @@ def init_classifier(task, hparams, dic):
     else:
         pretrained_unigram_embed_dim = 0
 
+    if 'pretrained_bigram_embed_dim' in hparams and hparams['pretrained_bigram_embed_dim'] > 0:
+        pretrained_bigram_embed_dim = hparams['pretrained_bigram_embed_dim']
+    else:
+        pretrained_bigram_embed_dim = 0
+
     if 'pretrained_chunk_embed_dim' in hparams and hparams['pretrained_chunk_embed_dim'] > 0:
         pretrained_chunk_embed_dim = hparams['pretrained_chunk_embed_dim']
     else:
@@ -449,15 +531,19 @@ def init_classifier(task, hparams, dic):
     else:
         pretrained_embed_usage = models.util.ModelUsage.NONE
 
-    use_attention = 'use_attention' in hparams and hparams['use_attention'] == True
-    use_chunk_first = 'use_chunk_first' in hparams and hparams['use_chunk_first'] == True
-
     if (pretrained_embed_usage == models.util.ModelUsage.ADD or
         pretrained_embed_usage == models.util.ModelUsage.INIT):
         if pretrained_unigram_embed_dim > 0 and pretrained_unigram_embed_dim != unigram_embed_dim:
             print('Error: pre-trained and random initialized unigram embedding vectors '
                   + 'must be the same dimension for {} operation'.format(hparams['pretrained_embed_usage'])
                   + ': d1={}, d2={}'.format(pretrained_unigram_embed_dim, unigram_embed_dim),
+                  file=sys.stderr)
+            sys.exit()
+
+        if pretrained_bigram_embed_dim > 0 and pretrained_bigram_embed_dim != bigram_embed_dim:
+            print('Error: pre-trained and random initialized bigram embedding vectors '
+                  + 'must be the same dimension for {} operation'.format(hparams['pretrained_embed_usage'])
+                  + ': d1={}, d2={}'.format(pretrained_bigram_embed_dim, bigram_embed_dim),
                   file=sys.stderr)
             sys.exit()
 
@@ -488,14 +574,20 @@ def init_classifier(task, hparams, dic):
             feat_dim=hparams['additional_feat_dim'], mlp_n_additional_units=0,
             rnn_dropout=hparams['rnn_dropout'],
             biaffine_dropout=hparams['biaffine_dropout'] if 'biaffine_dropout' in hparams else 0.0,
+            embed_dropout=hparams['embed_dropout'] if 'embed_dropout' in hparams else 0.0,
             mlp_dropout=hparams['mlp_dropout'],
+            chunk_vector_dropout=hparams['chunk_vector_dropout'] if 'chunk_vector_dropout' in hparams else 0.0,
             pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
+            pretrained_bigram_embed_dim=pretrained_bigram_embed_dim,
             pretrained_chunk_embed_dim=pretrained_chunk_embed_dim,
             pretrained_embed_usage=pretrained_embed_usage,
-            use_attention=use_attention, use_chunk_first=use_chunk_first)
+            chunk_pooling_type=hparams['chunk_pooling_type'] if 'chunk_pooling_type' in hparams else '',
+            max_chunk_len=hparams['max_chunk_len'],
+            chunk_loss_ratio=hparams['chunk_loss_ratio'] if 'chunk_loss_ratio' in hparams else 0.0,
+            biaffine_type=hparams['biaffine_type'] if 'biaffine_type' in hparams else '')
 
         if task == constants.TASK_HSEG:
-            classifier = HybridSequenceTagger(predictor, task=task)            
+            classifier = HybridSequenceTagger(predictor, task=task)
         else:
             classifier = SequenceTagger(predictor, task=task)
 
@@ -514,6 +606,7 @@ def init_classifier(task, hparams, dic):
             feat_dim=hparams['additional_feat_dim'],
             rnn_dropout=hparams['rnn_dropout'], mlp_dropout=hparams['mlp_dropout'],
             pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
+            pretrained_bigram_embed_dim=pretrained_bigram_embed_dim,
             short_model_usage=hparams['submodel_usage'])
 
         classifier = DualSequenceTagger(predictor, task=task)
@@ -579,8 +672,11 @@ def init_classifier(task, hparams, dic):
     
 
 def init_evaluator(task, dic, ignored_labels):
-    if task == constants.TASK_SEG or task == constants.TASK_DUAL_SEG or constants.TASK_HSEG:
+    if task == constants.TASK_SEG or task == constants.TASK_DUAL_SEG:
         return evaluators.SegmenterEvaluator(dic.tables[constants.SEG_LABEL].id2str)
+
+    elif task == constants.TASK_HSEG:
+        return evaluators.HybridSegmenterEvaluator(dic.tables[constants.SEG_LABEL].id2str)
 
     elif task == constants.TASK_SEGTAG or task == constants.TASK_DUAL_SEGTAG:
         return evaluators.JointSegmenterEvaluator(dic.tables[constants.SEG_LABEL].id2str)

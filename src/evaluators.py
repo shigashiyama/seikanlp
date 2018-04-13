@@ -40,7 +40,33 @@ def merge_counts(c1, c2):
         return c
 
 
-    elif isinstance(c1, conlleval.FCounts) or isinstance(c2, conlleval.FCounts):
+    elif isinstance(c1, DFCounts) or isinstance(c2, DFCounts):
+        if c1 is None:
+            return c2
+        if c2 is None:
+            return c1
+
+        c = DFCounts()
+        c.l1 = merge_counts(c1.l1, c2.l1)
+        c.l2 = merge_counts(c1.l2, c2.l2)        
+
+        return c
+
+
+    elif isinstance(c1, FACounts) or isinstance(c2, FACounts):
+        if c1 is None:
+            return c2
+        if c2 is None:
+            return c1
+
+        c = FACounts()
+        c.l1 = merge_counts(c1.l1, c2.l1)
+        c.l2 = merge_counts(c1.l2, c2.l2)        
+
+        return c
+
+    elif isinstance(c1, conlleval.FCounts) or isinstance(c2, conlleval.FCounts) or True:
+    # else:
         if c1 is None:
             return c2
         if c2 is None:
@@ -57,21 +83,9 @@ def merge_counts(c1, c2):
 
         return c
 
-    elif isinstance(c1, DFCounts) or isinstance(c2, DFCounts):
-        if c1 is None:
-            return c2
-        if c2 is None:
-            return c1
-
-        c = DFCounts()
-        c.l1 = merge_counts(c1.l1, c2.l1)
-        c.l2 = merge_counts(c1.l2, c2.l2)        
-
-        return c
-
-    else:
-        print('Invalid count object', file=sys.stderr)
-        return None
+    # else:
+    #     print('Invalid count object', file=sys.stderr)
+    #     return None
 
 
 class ACounts(object):
@@ -97,6 +111,12 @@ class DFCounts(object):
     def __init__(self):
         self.l1 = conlleval.FCounts()
         self.l2 = conlleval.FCounts()
+
+
+class FACounts(object):
+    def __init__(self):
+        self.l1 = conlleval.FCounts()
+        self.l2 = ACounts()
 
 
 class AccuracyCalculator(object):
@@ -194,13 +214,40 @@ class TripleAccuracyCalculator(object):
 class FMeasureCalculator(object):
     def __init__(self, id2label):
         self.id2label = id2label
+        self.id2token = None    # tmp
 
 
     def __call__(self, xs, ts, ys):
         counts = conlleval.FCounts()
+        # i = 1
         for x, t, y in zip(xs, ts, ys):
             generator = self.generate_lines(x, t, y)
             counts = conlleval.evaluate(generator, counts=counts)
+
+            # tmp
+            # print('# sentence', i)
+            # x_str = [self.id2token[int(xi)] for xi in x]
+            # t_str = [self.id2label[int(yi)] for yi in y]
+            # y_str = [self.id2label[int(ti)] for ti in t]
+            # print('_'.join(x_str))
+            # print(' '.join(t_str)) 
+            # print(' '.join(y_str)) 
+            # res = ['{}{}'.format(xi_str, 
+            #                      ' ' if (ti_str.startswith('E') or ti_str.startswith('S')) else '')
+            #        for xi_str, ti_str in zip(x_str, t_str)]
+            # print(''.join(res).rstrip())
+            # res = ['{}{}'.format(xi_str, 
+            #                      ' ' if (yi_str.startswith('E') or yi_str.startswith('S')) else '')
+            #        for xi_str, yi_str in zip(x_str, y_str)]
+            # print(''.join(res).rstrip())
+
+            # counts = conlleval.evaluate(generator)
+            # print('gold,pred,TP;token,T_tag :{},{},{},{},{}'.format(
+            #     counts.found_correct, counts.found_guessed, counts.correct_chunk, 
+            #     counts.token_counter, counts.correct_tags, ))
+            # print()
+            # i += 1
+            
         return counts
 
 
@@ -262,6 +309,45 @@ class DoubleFMeasureCalculator(object):
             i += 1
 
 
+class FMeasureAndAccuracyCalculator(object):
+    def __init__(self, id2label):
+        self.id2label = id2label
+
+
+    def __call__(self, xs, t1s, t2s, y1s, y2s):
+        counts = FACounts()
+        if not t2s or not y2s:
+            t2s = [None] * len(xs)
+            y2s = [None] * len(xs)
+
+        for x, t1, t2, y1, y2 in zip(xs, t1s, t2s, y1s, y2s):
+            generator_seg = self.generate_lines_seg(x, t1, y1)
+            counts.l1 = conlleval.evaluate(generator_seg, counts=counts.l1)
+
+            if t2 is not None:
+                for ti, yi in zip(t2, y2):
+                    counts.l2.total += 1 
+                    if ti == yi:
+                        counts.l2.correct += 1 
+
+        return counts
+
+
+    def generate_lines_seg(self, x, t, y):
+        i = 0
+        while True:
+            if i == len(x):
+                raise StopIteration
+            x_str = str(x[i])
+            t_str = self.id2label[int(t[i])] if int(t[i]) > -1 else 'NONE'
+            y_str = self.id2label[int(y[i])] 
+            tseg_str = t_str.split('-')[0]
+            yseg_str = y_str.split('-')[0]
+
+            yield [x_str, tseg_str, yseg_str]
+            i += 1
+
+
 class SegmenterEvaluator(object):
     def __init__(self, id2label):
         self.calculator = FMeasureCalculator(id2label)
@@ -286,6 +372,36 @@ class SegmenterEvaluator(object):
 
         res = '%.2f\t%.2f\t%.2f\t%.2f\t%.4f' % (
             (100.*met.acc), (100.*met.prec), (100.*met.rec), (100.*met.fscore), ave_loss)
+        return res
+
+
+class HybridSegmenterEvaluator(object):
+    def __init__(self, id2label):
+        self.calculator = FMeasureAndAccuracyCalculator(id2label)
+
+
+    def calculate(self, *inputs):
+        counts = self.calculator(*inputs)
+        return counts
+
+
+    def report_results(self, sen_counter, counts, loss, file=sys.stderr):
+        ave_loss = loss / counts.l1.token_counter
+        l1_met = conlleval.calculate_metrics(
+            counts.l1.correct_chunk, counts.l1.found_guessed, counts.l1.found_correct)
+        l2_acc = 1.*counts.l2.correct / counts.l2.total if counts.l2.total > 0 else 0
+        
+        print('ave loss: %.5f'% ave_loss, file=file)
+        print('sen, token, chunk, chunk_pred: {} {} {} {}'.format(
+            sen_counter, counts.l1.token_counter, counts.l1.found_correct, counts.l1.found_guessed), file=file)
+        print('TP, FP, FN: %d %d %d' % (l1_met.tp, l1_met.fp, l1_met.fn), file=file)
+        print('A, P, R, F, AW:%6.2f %6.2f %6.2f %6.2f %6.2f' % 
+              (100.*l1_met.acc, 100.*l1_met.prec, 100.*l1_met.rec, 100.*l1_met.fscore, (100.*l2_acc)), file=file)
+
+        res = '%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.4f' % (
+            (100.*l1_met.acc), (100.*l1_met.prec), (100.*l1_met.rec), (100.*l1_met.fscore), (100.*l2_acc),
+            ave_loss)
+
         return res
 
 

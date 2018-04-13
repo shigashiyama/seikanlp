@@ -60,6 +60,8 @@ class SelectiveArgumentParser(object):
                             + ' where start indicates the number of epochs to start decay,'
                             + ' width indicates the number epochs maintaining the same decayed learning rate,'
                             + ' and rate indicates the decay late to multipy privious learning late')
+        parser.add_argument('--sgd_cyclical_lr', default='', help='\'stepsize:min_lr:max_lr\'')
+
         parser.add_argument('--sgd_momentum_ratio', dest='momentum', type=float, default=0.0, help=
                             'Momentum ratio for SGD (Default: 0.0)')
         parser.add_argument('--adam_alpha', type=float, default=0.001, help='alpha for Adam (Default: 0.001)')
@@ -131,10 +133,10 @@ class SelectiveArgumentParser(object):
 
         ### model parameters
         # common
-        parser.add_argument('--freq_threshold', type=int, default=1, help=
+        parser.add_argument('--token_freq_threshold', type=int, default=1, help=
                             'Token frequency threshold. Tokens whose frequency are lower than'
                             + 'the the threshold are regarded as unknown tokens (Default: 1)')
-        parser.add_argument('--max_vocab_size', type=int, default=-1, help=
+        parser.add_argument('--token_max_vocab_size', type=int, default=-1, help=
                             'Maximum vocaburaly size. '
                             + 'low frequency tokens are regarded as unknown tokens so that '
                             + 'vocaburaly size does not exceed the specified size so much '
@@ -151,6 +153,8 @@ class SelectiveArgumentParser(object):
                             'Fix paramerters of pretrained token unigram embedding duaring training')
 
         # sequene tagging and parsing
+        parser.add_argument('--embed_dropout', type=float, default=0.0, help=
+                            'Dropout ratio for embedding layers (Default: 0.0)')
         parser.add_argument('--rnn_dropout', type=float, default=0.0, help=
                             'Dropout ratio for RNN vertical layers (Default: 0.0)')
         parser.add_argument('--rnn_unit_type', default='lstm', help=
@@ -162,7 +166,10 @@ class SelectiveArgumentParser(object):
                             'The number of hidden units of RNN (Default: 800)')
 
         # sequence tagging
+        parser.add_argument('--bigram_freq_threshold', type=int, default=1, help='')
+        parser.add_argument('--bigram_max_vocab_size', type=int, default=-1, help='')
         parser.add_argument('--bigram_embed_dim', type=int, default=0, help='')
+        parser.add_argument('--bigram_embed_model_path', default='', help='')
         parser.add_argument('--tokentype_embed_dim', type=int, default=0, help='')
         parser.add_argument('--mlp_dropout', type=float, default=0.0, help=
                             'Dropout ratio for MLP of sequence tagging model (Default: 0.0)')
@@ -176,15 +183,22 @@ class SelectiveArgumentParser(object):
 
 
         # char and word hybrid segmentation
+        parser.add_argument('--biaffine_type', default='', help='')
+        parser.add_argument('--chunk_loss_ratio', type=float, default=0.0, help='')
+        parser.add_argument('--chunk_freq_threshold', type=int, default=1, help='')
+        parser.add_argument('--chunk_max_vocab_size', type=int, default=-1, help='')
         parser.add_argument('--rnn_n_layers2', type=int, default=0, help='')
         parser.add_argument('--rnn_n_units2', type=int, default=0, help='')
         parser.add_argument('--chunk_embed_dim', type=int, default=300)
         parser.add_argument('--chunk_embed_model_path', default='', help=
                             'File path of pretrained model of chunk (typically word) embedding')
-        parser.add_argument('--use_attention', action='store_true')
-        parser.add_argument('--use_chunk_first', action='store_true')
+        parser.add_argument('--chunk_pooling_type', default='ave')
         parser.add_argument('--max_chunk_len', type=int, default=4)
         parser.add_argument('--biaffine_dropout', type=float, default=0.0)
+        parser.add_argument('--chunk_vector_dropout', type=float, default=0.0)
+        parser.add_argument('--chunk_vector_element_dropout', type=float, default=0.0)
+        parser.add_argument('--use_gold_chunk', action='store_true')
+        parser.add_argument('--ignore_unknown_pretrained_chunk', action='store_true')
 
         # parsing
         parser.add_argument('--hidden_mlp_dropout', type=float, default=0.0, help=
@@ -268,10 +282,6 @@ class SelectiveArgumentParser(object):
                                  default=args.lowercase)
         parser.add_argument('--normalize_digits',  action='store_true', default=args.normalize_digits)
 
-        # model parameters
-        parser.add_argument('--freq_threshold', type=int, default=args.freq_threshold)
-        parser.add_argument('--max_vocab_size', type=int, default=args.max_vocab_size)
-
 
     def add_gpu_options(self, parser, args):
         # gpu options
@@ -294,6 +304,9 @@ class SelectiveArgumentParser(object):
         parser.add_argument('--devel_data', default=args.devel_data)
         self.add_input_data_format_option(parser, args)
 
+        # model parameters
+        parser.add_argument('--token_freq_threshold', type=int, default=args.token_freq_threshold)
+        parser.add_argument('--token_max_vocab_size', type=int, default=args.token_max_vocab_size)
 
         # optimizer parameters
         parser.add_argument('--grad_clip', type=float, default=args.grad_clip)
@@ -427,18 +440,38 @@ class SelectiveArgumentParser(object):
                 
 
     def add_sgd_options(self, parser, args):
-        parser.add_argument('--learning_rate', type=float, default=args.learning_rate)
         parser.add_argument('--sgd_lr_decay', default=args.sgd_lr_decay)
+        parser.add_argument('--sgd_cyclical_lr', default=args.sgd_cyclical_lr)
         parser.add_argument('--sgd_momentum_ratio', dest='momentum', type=float, default=args.momentum)
 
-        if args.sgd_lr_decay:
-            array = args.sgd_lr_decay.split(':')
-            start = int(array[0])
-            width = int(array[1])
-            rate = float(array[2])
-            parser.add_argument('--sgd_lr_decay_start', type=int, default=start)
-            parser.add_argument('--sgd_lr_decay_width', type=int, default=width)
-            parser.add_argument('--sgd_lr_decay_rate', type=float, default=rate)
+        if args.sgd_lr_decay and args.sgd_cyclical_lr:
+            print('Error: sgd_lr_decay and sgd_cyclical_lr can not be specified simultaneously',
+                  file=sys.stderr)
+            sys.exit()
+
+
+        if args.sgd_cyclical_lr:
+            array = args.sgd_cyclical_lr.split(':')
+            stepsize = int(array[0])
+            min_lr = float(array[1])
+            max_lr = float(array[2])
+            parser.add_argument('--clr_stepsize', type=int, default=stepsize)
+            parser.add_argument('--clr_min_lr', type=float, default=min_lr)
+            parser.add_argument('--clr_max_lr', type=float, default=max_lr)
+            parser.add_argument('--learning_rate', type=float, default=min_lr)
+
+        else:
+            parser.add_argument('--learning_rate', type=float, default=args.learning_rate)
+
+            if args.sgd_lr_decay:
+                array = args.sgd_lr_decay.split(':')
+                start = int(array[0])
+                width = int(array[1])
+                rate = float(array[2])
+                parser.add_argument('--sgd_lr_decay_start', type=int, default=start)
+                parser.add_argument('--sgd_lr_decay_width', type=int, default=width)
+                parser.add_argument('--sgd_lr_decay_rate', type=float, default=rate)
+
 
     def add_adam_options(self, parser, args):
         parser.add_argument('--adam_alpha', type=float, default=args.adam_alpha)
@@ -507,10 +540,14 @@ class SelectiveArgumentParser(object):
                 parser.add_argument('--rnn_n_layers', type=int, default=args.rnn_n_layers)
                 parser.add_argument('--rnn_n_units', type=int, default=args.rnn_n_units)
 
+            parser.add_argument('--embed_dropout', type=float, default=args.embed_dropout)
             parser.add_argument('--rnn_dropout', type=float, default=args.rnn_dropout)
 
             if common.is_single_st_task(args.task):
+                parser.add_argument('--bigram_freq_threshold', type=int, default=args.bigram_freq_threshold)
+                parser.add_argument('--bigram_max_vocab_size', type=int, default=args.bigram_max_vocab_size)
                 parser.add_argument('--bigram_embed_dim', type=int, default=args.bigram_embed_dim)
+                parser.add_argument('--bigram_embed_model_path', default=args.bigram_embed_model_path)
                 parser.add_argument('--tokentype_embed_dim', type=int, default=args.tokentype_embed_dim)
                 parser.add_argument('--mlp_dropout', type=float, default=args.mlp_dropout)
                 parser.add_argument('--mlp_n_layers', type=int, default=args.mlp_n_layers)
@@ -518,14 +555,35 @@ class SelectiveArgumentParser(object):
                 parser.add_argument('--inference_layer_type', dest='inference_layer', 
                                          default=args.inference_layer)
 
+                if (not args.model_path and args.bigram_embed_model_path):
+                    if args.bigram_embed_dim <= 0:
+                        print('Error: bigram_embed_dim must be positive value to use '
+                              + 'pretrained bigram embed model: {}'.format(args.bigram_embed_dim),
+                              file=sys.stderr)
+                        sys.exit()
+
+                    if not (args.pretrained_embed_usage == 'init' or args.pretrained_embed_usage == 'concat' or
+                            args.pretrained_embed_usage == 'add'):
+                        print('Error: pretrained_embed_usage must be specified among from {init, concat, add} '
+                          + ':{}'.format(args.pretrained_embed_usage), file=sys.stderr)
+                        sys.exit()
+
             if common.is_segmentation_task(args.task):
+                parser.add_argument('--biaffine_type', default=args.biaffine_type)
+                parser.add_argument('--chunk_loss_ratio', type=float, default=args.chunk_loss_ratio)
+                parser.add_argument('--chunk_freq_threshold', type=int, default=args.chunk_freq_threshold)
+                parser.add_argument('--chunk_max_vocab_size', type=int, default=args.chunk_max_vocab_size)
                 parser.add_argument('--rnn_n_layers2', type=int, default=args.rnn_n_layers2)
                 parser.add_argument('--rnn_n_units2', type=int, default=args.rnn_n_units2)
                 parser.add_argument('--chunk_embed_model_path', default=args.chunk_embed_model_path)
-                parser.add_argument('--use_attention', action='store_true', default=args.use_attention)
-                parser.add_argument('--use_chunk_first', action='store_true', default=args.use_chunk_first)
+                parser.add_argument('--chunk_pooling_type', default=args.chunk_pooling_type)
                 parser.add_argument('--max_chunk_len', type=int, default=args.max_chunk_len)
                 parser.add_argument('--biaffine_dropout', type=float, default=args.biaffine_dropout)
+                parser.add_argument('--chunk_vector_dropout', type=float, default=args.chunk_vector_dropout)
+                parser.add_argument('--chunk_vector_element_dropout', 
+                                    type=float, default=args.chunk_vector_element_dropout)
+                parser.add_argument('--use_gold_chunk', action='store_true')
+                parser.add_argument('--ignore_unknown_pretrained_chunk', action='store_true')
 
                 if train:
                     if args.task == constants.TASK_HSEG:

@@ -34,11 +34,11 @@ def train_model():
         # sample=args.th_downsampling, # default 1e-5
         # negative=arg.num_negative,   # default 5
         iter=args.num_iter,     # default 5
-        compute_loss=True,
+        #compute_loss=True,
     )
-    print('ave loss:', model.running_training_loss / (args.num_iter * len(model.wv.vocab)),
-          file=sys.stderr)
     save_model(model, args.out_path, binary=True)
+    # print('ave loss:', model.running_training_loss / (args.num_iter * len(model.wv.vocab)),
+    #       file=sys.stderr)
 
 
 def load_model(model_path):

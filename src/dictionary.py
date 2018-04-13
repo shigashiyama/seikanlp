@@ -229,6 +229,9 @@ def init_dictionary(
 
     if use_seg_label:
         dic.create_table(constants.SEG_LABEL)
+        if not use_pos_label:   # tmp
+            for label in constants.SEG_LABELS:
+                dic.tables[constants.SEG_LABEL].get_id(label, update=True)
 
     if use_pos_label:
         dic.create_table(constants.POS_LABEL)

@@ -14,9 +14,9 @@ from trainers import tagger_trainer, parser_trainer, attribute_annotator_trainer
 
 
 def run():
-    if int(chainer.__version__[0]) < 3:
-        print("chainer version>=3.0.0 is required.")
-        sys.exit()
+    # if int(chainer.__version__[0]) < 3:
+    #     print("chainer version>=3.0.0 is required.")
+    #     sys.exit()
 
     ################################
     # Make necessary directories
@@ -88,8 +88,8 @@ def run():
 
     if not trainer.classifier:
         trainer.init_model()
-    else:
-        trainer.update_model()
+    # else:
+    #     trainer.update_model()
 
     if use_gpu:
         trainer.classifier.to_gpu()

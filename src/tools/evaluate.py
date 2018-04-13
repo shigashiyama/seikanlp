@@ -6,7 +6,8 @@ import subprocess
 
 import conlleval
 sys.path.append('src')
-import data
+import data_io
+import evaluators
 
 
 class Evaluater(object):
@@ -31,7 +32,7 @@ class Evaluater(object):
         bounds = []
         for word in res.split(' '):
             chars.extend([word[i] for i in range(len(word))])
-            bounds.extend([data.get_label_BI(i, None) for i in range(len(word))])
+            bounds.extend([data_io.get_label_BI(i, None) for i in range(len(word))])
         return chars, bounds
 
 
@@ -45,9 +46,18 @@ class Evaluater(object):
                 # 文頭末尾の空白改行コードを除去、重複する空白を除去
                 gline = gline.strip()
                 gline = re.sub(' +', ' ', gline)
+                if not gline:
+                    continue
+
                 g_chars, g_bounds = self.parse_result(gline)
                 pres = self.get_predicted_result(gline)
                 _, p_bounds = self.parse_result(pres)
+                # print('g', gline)
+                # print('g', g_chars)
+                # print('g', g_bounds)
+                # print('p', pres)
+                # print('p', _)
+                # print('p', p_bounds)
 
                 yield g_chars, g_bounds, p_bounds
 
@@ -75,11 +85,12 @@ class Evaluater(object):
 
         for g_chars, g_bounds, k_bounds in self.iterate_sentences(gold_path):
             token_iter = self.iterate_tokens_for_eval(g_chars, g_bounds, k_bounds)
-            eval_counts = conlleval.merge_counts(eval_counts, conlleval.evaluate(token_iter))
+            tmp = conlleval.evaluate(token_iter)
+            eval_counts = evaluators.merge_counts(eval_counts, tmp)
             sen_count += 1
 
-            if sen_count % 50000 == 0:
-                show_results(sen_count, eval_counts)
+            # if sen_count % 50000 == 0:
+            #     show_results(sen_count, eval_counts)
 
         # evaluate
         sen_count += 1
@@ -123,21 +134,20 @@ class KyteaEvaluater(Evaluater):
             # read = feats[2]
 
             chars.extend([word[i] for i in range(len(word))])
-            bounds.extend([data.get_label_BI(i, None) for i in range(len(word))])
+            bounds.extend([data_io.get_label_BI(i, None) for i in range(len(word))])
         
         return chars, bounds
 
 
 def show_results(sen_count, eval_count):
     c = eval_count
-    acc = conlleval.calculate_accuracy(c.correct_tags, c.token_counter)
-    overall = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
+    met = conlleval.calculate_metrics(c.correct_chunk, c.found_guessed, c.found_correct)
 
     print('#sen, #token, #chunk, #chunk_pred: %d %d %d %d' %
           (sen_count, c.token_counter, c.found_correct, c.found_guessed))
-    print('TP, FP, FN: %d %d %d' % (overall.tp, overall.fp, overall.fn))
+    print('TP, FP, FN: %d %d %d' % (met.tp, met.fp, met.fn))
     print('A, P, R, F:%6.2f %6.2f %6.2f %6.2f' % 
-          (100.*acc, 100.*overall.prec, 100.*overall.rec, 100.*overall.fscore))
+          (100.*met.acc, 100.*met.prec, 100.*met.rec, 100.*met.fscore))
 
 
 if __name__ == '__main__':
@@ -155,3 +165,4 @@ if __name__ == '__main__':
 
     print('<result>')
     evaluater.run(args.gold_path)
+

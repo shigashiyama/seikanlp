@@ -7,6 +7,7 @@ import chainer
 import chainer.functions as F
 import chainer.links as L
 from chainer import initializers
+from chainer import cuda
 
 
 class ModelUsage(Enum):
@@ -80,6 +81,8 @@ def construct_RNN(unit_type, bidirection, n_layers, n_input, n_units, dropout, f
 
 
 def load_pretrained_embedding_layer(id2unigram, embed, external_model, finetuning=False):
+    xp = cuda.get_array_module(embed.W)
+
     n_vocab = len(id2unigram)
     dim = external_model.wv.syn0[0].shape[0]
     initialW = initializers.normal.Normal(1.0)
@@ -94,12 +97,12 @@ def load_pretrained_embedding_layer(id2unigram, embed, external_model, finetunin
             count += 1
         else:
             if finetuning:
-                vec = initializers.generate_array(initialW, (dim, ), np)
+                vec = initializers.generate_array(initialW, (dim, ), xp)
             else:
-                vec = np.zeros(dim, dtype='f')
+                vec = xp.zeros(dim, dtype='f')
         weight.append(vec)
 
-    weight = np.reshape(weight, (n_vocab, dim))
+    weight = xp.reshape(weight, (n_vocab, dim))
     embed.W = chainer.Parameter(initializer=weight)
 
     if count >= 1:
@@ -130,13 +133,15 @@ def grow_embedding_layers(
 
 def grow_embedding_layer_without_pretrained_model(
         n_vocab_org, n_vocab_grown, rand_embed, train=False, file=sys.stderr):
+    xp = cuda.get_array_module(rand_embed.W)
     diff = n_vocab_grown - n_vocab_org
     d_rand = rand_embed.W.shape[1]
+
     if train:
-        w2_rand = initializers.generate_array(initialW, (diff, d_rand), np)
+        w2_rand = initializers.generate_array(initialW, (diff, d_rand), xp)
     else:
-        w2_rand = np.zeros((diff, d_rand), dtype='f')
-        #w2_rand = rand_embed.W[0].data # use pretrained vector of unknown token
+        w2_rand = xp.zeros((diff, d_rand), dtype='f')
+
     w_rand = F.concat((rand_embed.W, w2_rand), axis=0)
     rand_embed.W = chainer.Parameter(initializer=w_rand.data, name='W')
     print('Grow embedding matrix: {} -> {}'.format(n_vocab_org, rand_embed.W.shape[0]), file=file)
@@ -165,6 +170,10 @@ def grow_embedding_layer_with_pretrained_model(
         w2_rand.append(vec_rand)
 
     w2_rand = np.reshape(w2_rand, (diff, d_rand))
+    if cuda.get_array_module(rand_embed.W) == cuda.cupy:
+        w2_rand = chainer.Variable(w2_rand)
+        w2_rand.to_gpu()
+
     w_rand = F.concat((rand_embed.W, w2_rand), axis=0)
     rand_embed.W = chainer.Parameter(initializer=w_rand.data, name='W')
 
@@ -203,10 +212,16 @@ def grow_embedding_layers_with_pretrained_model(
         w2_pretrained.append(vec_pretrained)
 
     w2_rand = np.reshape(w2_rand, (diff, d_rand))
+    if cuda.get_array_module(rand_embed.W) == cuda.cupy:
+        w2_rand = chainer.Variable(w2_rand)
+        w2_rand.to_gpu()
     w_rand = F.concat((rand_embed.W, w2_rand), axis=0)
     rand_embed.W = chainer.Parameter(initializer=w_rand.data, name='W')
 
     w2_pretrained = np.reshape(w2_pretrained, (diff, d_pretrained))
+    if cuda.get_array_module(rand_embed.W) == cuda.cupy:
+        w2_pretrained = chainer.Variable(w2_pretrained)
+        w2_pretrained.to_gpu()
     w_pretrained = F.concat((pretrained_embed.W, w2_pretrained), 0)
     pretrained_embed.W = chainer.Parameter(initializer=w_pretrained.data, name='W')
 
@@ -217,40 +232,41 @@ def grow_embedding_layers_with_pretrained_model(
         print('Add {} pretrained embedding vectors'.format(count), file=file)
 
 
-def grow_affine_layer(n_labels_org, n_labels_grown, affine, file=sys.stderr):
-    diff = n_labels_grown - n_labels_org
-    if diff <= 0:
-        return
+# def grow_affine_layer(n_labels_org, n_labels_grown, affine, file=sys.stderr):
+#     diff = n_labels_grown - n_labels_org
+#     if diff <= 0:
+#         return
 
-    w_org = predictor.affine.W
-    b_org = predictor.affine.b
-    w_org_shape = w_org.shape
-    b_org_shape = b_org.shape
+#     w_org = predictor.affine.W
+#     b_org = predictor.affine.b
+#     w_org_shape = w_org.shape
+#     b_org_shape = b_org.shape
 
-    dim = w_org.shape[1]
-    initialW = initializers.normal.Normal(1.0)
+#     dim = w_org.shape[1]
+#     initialW = initializers.normal.Normal(1.0)
 
-    w_diff = chainer.Parameter(initialW, (diff, dim))
-    w_new = F.concat((w_org, w_diff), 0)
+#     w_diff = chainer.Parameter(initialW, (diff, dim))
+#     w_new = F.concat((w_org, w_diff), 0)
 
-    b_diff = chainer.Parameter(initialW, (diff,))
-    b_new = F.concat((b_org, b_diff), 0)
+#     b_diff = chainer.Parameter(initialW, (diff,))
+#     b_new = F.concat((b_org, b_diff), 0)
             
-    affine.W = chainer.Parameter(initializer=w_new.data, name='W')
-    affine.b = chainer.Parameter(initializer=b_new.data, name='b')
+#     affine.W = chainer.Parameter(initializer=w_new.data, name='W')
+#     affine.b = chainer.Parameter(initializer=b_new.data, name='b')
 
-    print('Grow affine layer: {}, {} -> {}, {}'.format(
-        w_org_shape, b_org_shape, affine.W.shape, affine.b.shape), file=file)
+#     print('Grow affine layer: {}, {} -> {}, {}'.format(
+#         w_org_shape, b_org_shape, affine.W.shape, affine.b.shape), file=file)
     
 
 def grow_crf_layer(n_labels_org, n_labels_grown, crf, file=sys.stderr):
+    xp = cuda.get_array_module(crf.cost)
     diff = n_labels_grown - n_labels_org
     if diff <= 0:
         return
 
     c_org = crf.cost
-    c_diff1 = chainer.Parameter(0, (n_labels_org, diff))
-    c_diff2 = chainer.Parameter(0, (diff, n_labels_grown))
+    c_diff1 = chainer.Parameter(xp.zeros((n_labels_org, diff)))
+    c_diff2 = chainer.Parameter(xp.zeros((diff, n_labels_grown)))
     c_tmp = F.concat((c_org, c_diff1), 1)
     c_new = F.concat((c_tmp, c_diff2), 0)
     crf.cost = chainer.Parameter(initializer=c_new.data, name='cost')
@@ -259,6 +275,7 @@ def grow_crf_layer(n_labels_org, n_labels_grown, crf, file=sys.stderr):
 
 
 def grow_MLP(n_labels_org, n_labels_grown, out_layer, file=sys.stderr):
+    xp = cuda.get_array_module(out_layer.W)
     diff = n_labels_grown - n_labels_org
     if diff <= 0:
         return
@@ -267,9 +284,7 @@ def grow_MLP(n_labels_org, n_labels_grown, out_layer, file=sys.stderr):
     w_org_shape = w_org.shape
 
     dim = w_org.shape[1]
-    initialW = initializers.normal.Normal(1.0)
-
-    w_diff = chainer.Parameter(initialW, (diff, dim))
+    w_diff = chainer.Parameter(xp.random.normal(scale=1.0, size=(diff, dim)))
     w_new = F.concat((w_org, w_diff), 0)
     out_layer.W = chainer.Parameter(initializer=w_new.data)
     w_shape = out_layer.W.shape
@@ -277,7 +292,7 @@ def grow_MLP(n_labels_org, n_labels_grown, out_layer, file=sys.stderr):
     if 'b' in out_layer.__dict__:
         b_org = out_layer.b
         b_org_shape = b_org.shape
-        b_diff = chainer.Parameter(initialW, (diff,))
+        b_diff = chainer.Parameter(xp.random.normal(scale=1.0), size=(diff,))
         b_new = F.concat((b_org, b_diff), 0)
         out_layer.b = chainer.Parameter(initializer=b_new.data)
         b_shape = out_layer.b.shape
@@ -289,6 +304,7 @@ def grow_MLP(n_labels_org, n_labels_grown, out_layer, file=sys.stderr):
 
 
 def grow_biaffine_layer(n_labels_org, n_labels_grown, biaffine, file=sys.stderr):
+    xp = cuda.get_array_module(biaffinie.W)
     diff = n_labels_grown - n_labels_org
     if diff <= 0:
         return
@@ -297,9 +313,7 @@ def grow_biaffine_layer(n_labels_org, n_labels_grown, biaffine, file=sys.stderr)
     w_org_shape = w_org.shape
 
     dim = w_org.shape[1]
-    initialW = initializers.normal.Normal(1.0)
-
-    w_diff = chainer.Parameter(initialW, (diff, dim))
+    w_diff = chainer.Parameter(xp.random.normal(scale=1.0, size=(diff, dim)))
     w_new = F.concat((w_org, w_diff), 0)
     affine.W = chainer.Parameter(initializer=w_new.data)
     w_shape = affine.W.shape
@@ -307,7 +321,7 @@ def grow_biaffine_layer(n_labels_org, n_labels_grown, biaffine, file=sys.stderr)
     if 'b' in affine.__dict__:
         b_org = affine.b
         b_org_shape = b_org.shape
-        b_diff = chainer.Parameter(initialW, (diff,))
+        b_diff = chainer.Parameter(xp.random.normal(scale=1.0, size=(diff,)))
         b_new = F.concat((b_org, b_diff), 0)
         affine.b = chainer.Parameter(initializer=b_new.data)
         b_shape = affine.b.shape

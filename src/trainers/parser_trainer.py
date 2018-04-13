@@ -89,8 +89,8 @@ class ParserTrainer(Trainer):
             'subpos_depth' : self.args.subpos_depth,
             'lowercase' : self.args.lowercase,
             'normalize_digits' : self.args.normalize_digits,
-            'freq_threshold' : self.args.freq_threshold,
-            'max_vocab_size' : self.args.max_vocab_size,
+            'token_freq_threshold' : self.args.token_freq_threshold,
+            'token_max_vocab_size' : self.args.token_max_vocab_size,
         }
 
         self.log('Init hyperparameters')
@@ -130,8 +130,8 @@ class ParserTrainer(Trainer):
                     key == 'mlp4labelpred_n_layers' or
                     key == 'mlp4labelpred_n_units' or
                     key == 'subpos_depth' or
-                    key == 'freq_threshold' or
-                    key == 'max_vocab_size'
+                    key == 'token_freq_threshold' or
+                    key == 'token_max_vocab_size'
                 ):
                     val = int(val)
 

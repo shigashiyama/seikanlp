@@ -1,6 +1,7 @@
 import sys
 import os
 import pickle
+import copy
 from datetime import datetime
 
 import chainer
@@ -28,10 +29,6 @@ class Trainer(object):
             if not args.task and not args.model_path:
                 msg = 'Error: the following argument is required for {} mode unless resuming a trained model: {}'.format('train', '--task')
                 err_msgs.append(msg)
-
-            # if not args.input_data_format:
-            #     msg = ''
-            #     err_msgs.append(msg)
 
         elif args.execute_mode == 'eval':
             if not args.model_path:
@@ -78,9 +75,10 @@ class Trainer(object):
         self.train = None
         self.dev = None
         self.test = None
-        self.decode_txt = None
+        self.decode_data = None
         self.hparams = None
         self.dic = None
+        self.dic_dev = None
         self.classifier = None
         self.evaluator = None
         self.feat_extractor = None
@@ -138,6 +136,11 @@ class Trainer(object):
         self.classifier = classifiers.init_classifier(self.task, self.hparams, self.dic)
 
 
+    def reinit_model(self):
+        self.log('Re-initialize model from hyperparameters\n')
+        self.classifier = classifiers.init_classifier(self.task, self.hparams, self.dic)
+
+
     def load_dic(self, dic_path):
         with open(dic_path, 'rb') as f:
             self.dic = pickle.load(f)
@@ -178,7 +181,7 @@ class Trainer(object):
         self.show_hyperparameters()
 
         # model
-        self.init_model()
+        self.reinit_model()
         chainer.serializers.load_npz(model_path, self.classifier)
         self.log('Load model parameters: {}\n'.format(model_path))
 
@@ -187,7 +190,7 @@ class Trainer(object):
         self.log('### arguments')
         for k, v in self.args.__dict__.items():
             if (k in self.hparams and
-                ('dropout' in k or k == 'freq_threshold' or k == 'max_vocab_size')):
+                ('dropout' in k or 'freq_threshold' in k or 'max_vocab_size' in k)):
                 update = self.hparams[k] != v
                 message = '{}={}{}'.format(
                     k, v, ' (original value ' + str(self.hparams[k]) + ' was updated)' if update else '')
@@ -229,7 +232,7 @@ class Trainer(object):
         pass
 
 
-    def load_data_for_training(self, refer_tokens=set(), refer_chunks=set()):
+    def load_data_for_training(self, refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set()):
         args = self.args
         hparams = self.hparams
         prefix = args.path_prefix if args.path_prefix else ''
@@ -248,17 +251,28 @@ class Trainer(object):
         use_tokentype = ('tokentype_embed_dim' in hparams and hparams['tokentype_embed_dim'] > 0)        
         use_subtoken = ('subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0)
         use_chunk_trie = get_chunk_trie_flag(hparams)
+        add_gold_chunk = 'use_gold_chunk' in hparams and hparams['use_gold_chunk']
+        add_unknown_pretrained_chunk = (
+            'use_unknown_pretrained_chunk' in hparams and hparams['use_unknown_pretrained_chunk'])
         subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
         lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
-        freq_threshold = hparams['freq_threshold'] if 'freq_threshold' in hparams else 1
-        max_vocab_size = hparams['max_vocab_size'] if 'max_vocab_size' in hparams else -1
         max_chunk_len = self.hparams['max_chunk_len'] if 'max_chunk_len' in hparams else 0
-        
+        bigram_max_vocab_size = hparams['bigram_max_vocab_size'] if 'bigram_max_vocab_size' in hparams else -1
+        bigram_freq_threshold = hparams['bigram_freq_threshold'] if 'bigram_freq_threshold' in hparams else 1
+        if common.is_segmentation_task(task):
+            word_max_vocab_size = hparams['chunk_max_vocab_size'] if 'chunk_max_vocab_size' in hparams else -1
+            word_freq_threshold = hparams['chunk_freq_threshold'] if 'chunk_freq_threshold' in hparams else 1
+        else:
+            word_freq_threshold = hparams['token_freq_threshold'] if 'token_freq_threshold' in hparams else 1
+            word_max_vocab_size = hparams['token_max_vocab_size'] if 'token_max_vocab_size' in hparams else -1
+
         if args.train_data.endswith('pickle'):
-            name, ext = os.path.splitext(train_path)
-            train = data_io.load_pickled_data(name)
-            self.log('Load dumpped data:'.format(train_path))
+            pass
+
+            # name, ext = os.path.splitext(train_path)
+            # train = data_io.load_pickled_data(name)
+            # self.log('Load dumpped data:'.format(train_path))
             #TODO update dic when re-training using another training data
 
         else:
@@ -267,8 +281,11 @@ class Trainer(object):
                 use_bigram=use_bigram, use_tokentype=use_tokentype, use_subtoken=use_subtoken, 
                 use_chunk_trie=use_chunk_trie, subpos_depth=subpos_depth, 
                 lowercase=lowercase, normalize_digits=normalize_digits, 
-                max_vocab_size=max_vocab_size, freq_threshold=freq_threshold, max_chunk_len=max_chunk_len, 
-                dic=self.dic, refer_tokens=refer_tokens, refer_chunks=refer_chunks)
+                word_max_vocab_size=word_max_vocab_size, word_freq_threshold=word_freq_threshold, 
+                bigram_max_vocab_size=bigram_max_vocab_size, bigram_freq_threshold=bigram_freq_threshold, 
+                max_chunk_len=max_chunk_len, dic=self.dic, 
+                refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,
+                add_gold_chunk=add_gold_chunk, add_unknown_pretrained_chunk=False)
         
             # if self.args.dump_train_data:
             #     name, ext = os.path.splitext(train_path)
@@ -294,41 +311,45 @@ class Trainer(object):
             self.extract_features(train)
 
         if args.devel_data:
-            use_pos = constants.POS_LABEL in self.dic.tables
-
-            # dic can be updated if embed_model are used
-            dev, self.dic = data_io.load_annotated_data(
+            # use_pos = constants.POS_LABEL in self.dic.tables
+            self.dic_dev = copy.deepcopy(self.dic)
+            dev, self.dic_dev = data_io.load_annotated_data(
                 dev_path, task, input_data_format, train=False, use_pos=use_pos, 
                 use_bigram=use_bigram, use_tokentype=use_tokentype, use_subtoken=use_subtoken, 
                 use_chunk_trie=use_chunk_trie, subpos_depth=subpos_depth, 
                 lowercase=lowercase, normalize_digits=normalize_digits, max_chunk_len=max_chunk_len, 
-                dic=self.dic, refer_tokens=refer_tokens, refer_chunks=refer_chunks)
+                dic=self.dic_dev,
+                refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,
+                add_gold_chunk=False, add_unknown_pretrained_chunk=add_unknown_pretrained_chunk)
 
             self.log('Load development data: {}'.format(dev_path))
             self.log('Data length: {}'.format(len(dev.inputs[0])))
-            self.log('Num of tokens: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
-            if self.dic.has_table(constants.BIGRAM):
-                self.log('Num of bigrams: {}'.format(len(self.dic.tables[constants.BIGRAM])))
-            if self.dic.has_table(constants.TOKEN_TYPE):
-                self.log('Num of tokentypes: {}'.format(len(self.dic.tables[constants.TOKEN_TYPE])))
-            if self.dic.has_table(constants.SUBTOKEN):
-                self.log('Num of subtokens: {}'.format(len(self.dic.tables[constants.SUBTOKEN])))
-            if self.dic.has_trie(constants.CHUNK):
-                self.log('Num of chunks: {}'.format(len(self.dic.tries[constants.CHUNK])))
+            self.log('Num of tokens: {}'.format(len(self.dic_dev.tables[constants.UNIGRAM])))
+            if self.dic_dev.has_table(constants.BIGRAM):
+                self.log('Num of bigrams: {}'.format(len(self.dic_dev.tables[constants.BIGRAM])))
+            if self.dic_dev.has_table(constants.TOKEN_TYPE):
+                self.log('Num of tokentypes: {}'.format(len(self.dic_dev.tables[constants.TOKEN_TYPE])))
+            if self.dic_dev.has_table(constants.SUBTOKEN):
+                self.log('Num of subtokens: {}'.format(len(self.dic_dev.tables[constants.SUBTOKEN])))
+            if self.dic_dev.has_trie(constants.CHUNK):
+                self.log('Num of chunks: {}'.format(len(self.dic_dev.tries[constants.CHUNK])))
             self.log()
             if 'feature_template' in self.hparams and self.hparams['feature_template']:
                 self.log('Start feature extraction for development data\n')
                 self.extract_features(dev)
+
         else:
             dev = None
         
         self.train = train
         self.dev = dev
         self.dic.create_id2strs()
+        if self.dic_dev:
+            self.dic_dev.create_id2strs()
         self.show_training_data()
 
 
-    def load_test_data(self, refer_tokens=set(), refer_chunks=set()):
+    def load_test_data(self, refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set()):
         args = self.args
         hparams = self.hparams
         test_path = (args.path_prefix if args.path_prefix else '') + args.test_data
@@ -340,6 +361,8 @@ class Trainer(object):
         use_tokentype = self.dic.has_table(constants.TOKEN_TYPE)
         use_subtoken = self.dic.has_table(constants.SUBTOKEN)
         use_chunk_trie = self.dic.has_trie(constants.CHUNK) #get_chunk_trie_flag(hparams)
+        add_unknown_pretrained_chunk = (
+            'use_unknown_pretrained_chunk' in hparams and hparams['use_unknown_pretrained_chunk'])
         subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
         lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
         normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
@@ -347,10 +370,12 @@ class Trainer(object):
 
         test, self.dic = data_io.load_annotated_data(
             test_path, task, input_data_format, train=False, use_pos=use_pos,
-            use_bigram=use_bigram, use_tokentype=use_tokentype,
-            use_chunk_trie=use_chunk_trie, use_subtoken=use_subtoken, subpos_depth=subpos_depth, 
+            use_bigram=use_bigram, use_tokentype=use_tokentype, use_subtoken=use_subtoken, 
+            use_chunk_trie=use_chunk_trie, subpos_depth=subpos_depth, 
             lowercase=lowercase, normalize_digits=normalize_digits, max_chunk_len=max_chunk_len, 
-            dic=self.dic, refer_tokens=refer_tokens, refer_chunks=refer_chunks)
+            dic=self.dic,
+            refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,
+            add_gold_chunk=False, add_unknown_pretrained_chunk=add_unknown_pretrained_chunk)
 
         self.log('Load test data: {}'.format(test_path))
         self.log('Data length: {}'.format(len(test.inputs[0])))
@@ -373,7 +398,7 @@ class Trainer(object):
         self.dic.create_id2strs()
 
 
-    def load_decode_data(self, refer_tokens=set(), refer_chunks=set()):
+    def load_decode_data(self, refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set()):
         text_path = (self.args.path_prefix if self.args.path_prefix else '') + self.args.decode_data
         if 'input_data_format' in self.args:
             data_format = self.args.input_data_format
@@ -395,7 +420,8 @@ class Trainer(object):
             use_pos=use_pos, use_bigram=use_bigram, use_tokentype=use_tokentype,
             use_chunk_trie=use_chunk_trie, use_subtoken=use_subtoken, 
             subpos_depth=subpos_depth, lowercase=lowercase, normalize_digits=normalize_digits, 
-            max_chunk_len=max_chunk_len, refer_tokens=refer_tokens, refer_chunks=refer_chunks)
+            max_chunk_len=max_chunk_len,
+            refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks)
 
         self.log('Load decode data: {}'.format(text_path))
         self.log('Data length: {}'.format(len(rdata.inputs[0])))
@@ -518,6 +544,7 @@ class Trainer(object):
             classifier = self.classifier
         else:
             classifier = self.classifier.copy()
+            self.update_model(classifier=classifier, dic=self.dic_dev)
             classifier.change_dropout_ratio(0)
 
         n_sen = 0
@@ -529,7 +556,6 @@ class Trainer(object):
         shuffle = True if train else False
         for ids in batch_generator(n_ins, batch_size=self.args.batch_size, shuffle=shuffle):
             inputs = self.gen_inputs(data, ids)
-
             xs = inputs[0]
             golds = inputs[self.label_begin_index:]
             if train:
@@ -551,8 +577,17 @@ class Trainer(object):
                 # timer.reset()
 
                 i_max = min(i + self.args.batch_size, n_ins)
-                self.log('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
 
+                if self.args.optimizer == 'sgd' and self.args.sgd_cyclical_lr:
+                    lr_tmp = self.optimizer.lr
+                    lr = get_triangular_lr(
+                        self.n_iter * self.args.batch_size, self.args.clr_stepsize, 
+                        self.args.clr_min_lr, self.args.clr_max_lr)
+                    self.optimizer.lr = lr
+                    self.log('* batch %d-%d loss: %.4f lr: %.4f -> %.4f' % (
+                        (i+1), i_max, loss.data, lr_tmp, self.optimizer.lr))
+                else:
+                    self.log('* batch %d-%d loss: %.4f' % ((i+1), i_max, loss.data))
                 i = i_max
 
             n_sen += len(xs)
@@ -599,6 +634,16 @@ class Trainer(object):
 
         res = None if train else self.evaluator.report_results(n_sen, total_counts, total_loss, file=self.logger)
         return res
+
+
+def get_triangular_lr(n_ins, stepsize, min_lr, max_lr):
+    slope = (max_lr - min_lr) / stepsize
+    position = n_ins % (stepsize * 2)
+    if position <= stepsize:
+        lr = min_lr + slope * position
+    else:
+        lr = max_lr - slope * (position - stepsize)
+    return lr
 
 
 def get_chunk_trie_flag(hparams):
