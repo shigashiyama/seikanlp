@@ -519,6 +519,7 @@ class Trainer(object):
 
 
     def run_decode_mode(self):
+        self.update_model(classifier=self.classifier, dic=self.dic)
         use_pos = constants.POS_LABEL in self.dic.tables
         file = open(self.args.output_data, 'w') if self.args.output_data else sys.stdout
         self.decode(self.decode_data, use_pos=use_pos, file=file)

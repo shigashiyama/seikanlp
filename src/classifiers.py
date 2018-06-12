@@ -582,7 +582,7 @@ def init_classifier(task, hparams, dic):
             pretrained_chunk_embed_dim=pretrained_chunk_embed_dim,
             pretrained_embed_usage=pretrained_embed_usage,
             chunk_pooling_type=hparams['chunk_pooling_type'] if 'chunk_pooling_type' in hparams else '',
-            max_chunk_len=hparams['max_chunk_len'],
+            max_chunk_len=hparams['max_chunk_len'] if 'max_chunk_len' in hparams else 0,
             chunk_loss_ratio=hparams['chunk_loss_ratio'] if 'chunk_loss_ratio' in hparams else 0.0,
             biaffine_type=hparams['biaffine_type'] if 'biaffine_type' in hparams else '')
 

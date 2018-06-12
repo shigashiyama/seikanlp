@@ -16,6 +16,7 @@ import optimizers
 from trainers import trainer
 from trainers.trainer import Trainer
 
+import evaluators
 
 class TaggerTrainerBase(Trainer):
     def __init__(self, args, logger=sys.stderr):
@@ -802,14 +803,14 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
         self.log('Start chunk search for training data (max_len={})\n'.format(self.hparams['max_chunk_len']))
         data_io.add_chunk_sequences(
             self.train, self.dic, max_len=self.hparams['max_chunk_len'], evaluate=True,
-            use_attention=use_attention, use_concat=use_concat, xp=xp)
+            use_attention=use_attention, use_concat=use_concat)
 
         if self.dev:
             self.log('Start chunk search for development data (max_len={})\n'.format(
                 self.hparams['max_chunk_len']))
             data_io.add_chunk_sequences(
                 self.dev, self.dic_dev, max_len=self.hparams['max_chunk_len'], evaluate=True,
-                use_attention=use_attention, use_concat=use_concat, xp=xp)
+                use_attention=use_attention, use_concat=use_concat)
 
 
     def load_test_data(self):
@@ -825,7 +826,8 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
         self.log('Start chunk search for test data (max_len={})\n'.format(self.hparams['max_chunk_len']))
         data_io.add_chunk_sequences(
             self.test, self.dic, max_len=self.hparams['max_chunk_len'], evaluate=True,
-            use_attention=use_attention, use_concat=use_concat)
+            use_attention=True, use_concat=use_concat) # tmp
+            # use_attention=use_attention, use_concat=use_concat)
 
 
     def load_decode_data(self):
@@ -835,12 +837,14 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
         super().load_decode_data(
             refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks)
 
+        use_attention = 'w' in self.hparams['chunk_pooling_type']
+        use_concat = 'con' in self.hparams['chunk_pooling_type']
+
         self.log('Start chunk search for decode data (max_len={})\n'.format(self.hparams['max_chunk_len']))
         xp = cuda.cupy if self.args.gpu >= 0 else np
         data_io.add_chunk_sequences(
-            self.decode_data, self.dic, max_len=self.hparams['max_chunk_len'], 
-            min_value_mask=self.hparams['use_attention'], xp=xp)
-
+            self.decode_data, self.dic, max_len=self.hparams['max_chunk_len'], evaluate=False,
+            use_attention=use_attention, use_concat=use_concat)
 
     def setup_optimizer(self):
         super().setup_optimizer()
@@ -867,6 +871,20 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
     def gen_inputs(self, data, ids, evaluate=True, restrict_memory=False):
         xp = cuda.cupy if self.args.gpu >= 0 else np
 
+        index = ids[0]
+        id2token = self.dic.tables[constants.UNIGRAM].id2str
+        id2chunk = self.dic.tries[constants.CHUNK].id2chunk,
+        id2label = self.dic.tables[constants.SEG_LABEL].id2str
+
+        # for error analysis
+        # print(index)
+        # print('l', [str(i)+':'+id2label[int(e)] for i,e in enumerate(data.outputs[0][index])])
+        # print('u', [str(i)+':'+id2token[int(e)] for i,e in enumerate(data.inputs[0][index])])
+        # print('c')
+        # for i in range(len(data.inputs[0][index])):
+        #     print(' ', i, [str(k)+':'+id2chunk[0][data.inputs[5][index][k][i]] for k in range(10)])
+        # print('c', [str(i)+':'+id2chunk[int(e)] for i,e in enumerate(data.inputs[4][index])])
+
         us = [xp.asarray(data.inputs[0][j], dtype='i') for j in ids]
         bs = [xp.asarray(data.inputs[1][j], dtype='i') for j in ids] if data.inputs[1] else None
         ts = [xp.asarray(data.inputs[2][j], dtype='i') for j in ids] if data.inputs[2] else None
@@ -879,13 +897,14 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
         if use_concat:
             feat_size = sum([h for h in range(self.hparams['max_chunk_len']+1)])
             emb_dim = self.hparams['chunk_embed_dim']
-            ms = [data_io.convert_mask_matrix(
-                data.inputs[6][j], len(us[i]), len(cs[i]) if cs else 0, feat_size, emb_dim,
-                use_attention, use_concat, xp=xp) for i, j in enumerate(ids)]
         else:
-            # feat_size = 0
-            # emb_dim = 0
-            ms = [data.inputs[6][j] for j in ids]
+            feat_size = 0
+            emb_dim = 0
+            # ms = [data.inputs[6][j] for j in ids]
+        ms = [data_io.convert_mask_matrix(
+            data.inputs[6][j], len(us[i]), len(cs[i]) if cs else 0, feat_size, emb_dim,
+            use_attention, xp=xp) for i, j in enumerate(ids)]
+            # use_attention, use_concat, xp=xp) for i, j in enumerate(ids)]
 
         # print('u', us[0].shape, us[0])
         # print('c', cs[0].shape if cs is not None else None, cs[0] if cs is not None else None)
@@ -934,6 +953,143 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
                 print(cand, count, rate * 100)
             print('ave', ave)
             print()
+
+    # tmp
+    def run_eval_mode2(self):
+        results = {'total': Counts(), 
+                   'atn_cor' : Counts(),
+                   'atn_inc' : Counts(),
+                   'atn_inc_unk' : Counts()}
+
+        # xp = cuda.cupy if self.args.gpu >= 0 else np
+        classifier = self.classifier.copy()
+        self.update_model(classifier=classifier, dic=self.dic)
+        classifier.change_dropout_ratio(0)
+        classifier.predictor.set_dics(
+            self.dic.tables[constants.UNIGRAM].id2str,
+            self.dic.tries[constants.CHUNK].id2chunk,
+            self.dic.tables[constants.SEG_LABEL].id2str)
+        
+        data = self.test
+        n_ins = len(data.inputs[0])
+        n_sen = 0
+        total_counts = None
+                
+        for ids in trainer.batch_generator(n_ins, batch_size=self.args.batch_size, shuffle=False):
+            inputs = self.gen_inputs(data, ids)
+            xs = inputs[0]
+            n_sen += len(xs)
+            golds = inputs[self.label_begin_index:]
+            ncands = [get_num_candidates(data.inputs[6][j], len(xs[i])) for i, j in enumerate(ids)]
+
+            with chainer.no_backprop_mode():
+                gcs, pcs, gls, pls = classifier.predictor.do_analysis(*inputs)
+
+            counts = self.evaluator.calculate(*[xs], *golds, pls, pcs)
+            total_counts = evaluators.merge_counts(total_counts, counts)
+
+            if not gcs:
+                gcs = [None] * len(xs)
+            if not pcs:
+                pcs = [None] * len(xs)
+
+            for gc, pc, ncand, gl, pl in zip(gcs, pcs, ncands, gls, pls):
+                if gc is None:
+                    gc = [-1] * len(gl)
+                if pc is None:
+                    pc = [None] * len(gl)
+
+                # print('(sen)')
+                # print(gc)
+                # print(pc)
+                # print(ncand)
+                # print(gl)
+                # print(pl)
+
+                for gci, pci, nci, gli, pli in zip(gc, pc, ncand, gl, pl):
+                    if not nci in results:
+                        results[nci] = Counts()
+
+                    results[nci].increment(
+                        possible=gci >= 0,
+                        wcorrect=gci == pci,
+                        scorrect=gli == pli)
+
+                    results['total'].increment(
+                        possible=gci >= 0,
+                        wcorrect=gci == pci,
+                        scorrect=gli == pli)
+
+                    if pci is not None:
+                        if pci == gci:
+                            results['atn_cor'].increment(
+                                possible=True,
+                                wcorrect=True,
+                                scorrect=gli == pli)
+
+                        else:
+                            results['atn_inc'].increment(
+                                possible=gci >= 0,
+                                wcorrect=False,
+                                scorrect=gli == pli)
+
+                            if gci < 0:
+                                results['atn_inc_unk'].increment(
+                                    possible=False,
+                                    wcorrect=False,
+                                    scorrect=gli == pli)
+
+        print('Finished', n_sen)
+        print_results(results)
+
+        print('<results>')
+        self.evaluator.report_results(n_sen, total_counts, 0, file=sys.stderr)
+
+
+def get_num_candidates(mask, n_tokens):
+    pairs1 = mask[1]
+    ncand = [0] * n_tokens
+    for i, j in pairs1:
+        ncand[i] += 1
+    return ncand
+
+
+def print_results(results):
+    print('ncand\tall\tw_pos\tw_cor\ts_cor\tw_upper\tw_acc\ts_acc')
+    for ncand, counts in results.items():
+        # print(ncand, counts)
+        wacc = counts.wcorrect / counts.all * 100
+        wupper = counts.possible / counts.all * 100
+        sacc = counts.scorrect / counts.all * 100
+        print('%s\t%d\t%d\t%d\t%d\t%.2f\t%.2f\t%.2f' % (
+            str(ncand), counts.all, counts.possible, counts.wcorrect, counts.scorrect,
+            wupper, wacc, sacc))
+    if 1 in results:
+        print('lower(1): %.2f' % (results[1].possible / results[1].all * 100))
+        print('lower(total): %.2f' % (results[1].possible / results['total'].all * 100))
+    print()
+
+
+class Counts(object):
+    def __init__(self):
+        self.all = 0
+        self.possible = 0       # correct word exists in candidates
+        self.wcorrect = 0       # for word prediction
+        self.scorrect = 0       # for segmentation label
+
+
+    def __str__(self):
+        return '%d %d %d %d' % (self.all, self.possible, self.wcorrect, self.scorrect)
+
+
+    def increment(self, possible=True, wcorrect=True, scorrect=True):
+        self.all += 1 
+        if possible:
+            self.possible += 1
+        if wcorrect:
+            self.wcorrect += 1
+        if scorrect:
+            self.scorrect += 1
 
 
 class DualTaggerTrainer(TaggerTrainerBase):
@@ -1157,3 +1313,4 @@ class DualTaggerTrainer(TaggerTrainerBase):
                 print('S\t{}'.format(res1), file=file)
                 print('L\t{}'.format(res2), file=file)
                 print(file=file)
+

@@ -35,7 +35,9 @@ def load_decode_data(
         path, dic, task, data_format=constants.WL_FORMAT,
         use_pos=True, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False,
         subpos_depth=-1, lowercase=False, normalize_digits=False, max_chunk_len=0, 
-        refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set()):
+        # freq_words=set(), freq_bigrams=set(),
+        refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set(),
+        add_gold_chunk=False, add_unknown_pretrained_chunk=True):
 
     segmentation = common.is_segmentation_task(task)
     parsing = common.is_parsing_task(task)
@@ -49,15 +51,16 @@ def load_decode_data(
             use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie,
             subpos_depth=subpos_depth, lowercase=lowercase, normalize_digits=normalize_digits, 
             max_chunk_len=max_chunk_len, 
-            refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks)
+            refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,
+            add_gold_chunk=add_gold_chunk, add_unknown_pretrained_chunk=add_unknown_pretrained_chunk)
 
     elif data_format == constants.WL_FORMAT:
         data = load_decode_data_WL(
             path, dic, parsing=parsing,
             use_pos=use_pos, use_subtoken=use_subtoken, 
             subpos_depth=subpos_depth, lowercase=lowercase, normalize_digits=normalize_digits, 
-            refer_unigrams=refer_unigrams)
-        
+            refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,
+            add_gold_chunk=add_gold_chunk, add_unknown_pretrained_chunk=add_unknown_pretrained_chunk)        
     else:
         print('Invalid data format: {}'.format(data_format))
         sys.exit()
@@ -200,12 +203,12 @@ def parse_commandline_input(
     return RestorableData(inputs, outputs, orgdata=orgdata)
                 
 
-# TODO fix
 def load_decode_data_SL(
         path, dic, segmentation=False, parsing=False, attribute_annotation=False, 
         use_pos=False, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False,
         subpos_depth=-1, lowercase=False, normalize_digits=True, max_chunk_len=0,
-        refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set()):
+        refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set(),
+        add_gold_chunk=False, add_unknown_pretrained_chunk=True):
 
     attr_delim = constants.SL_ATTR_DELIM
 
@@ -237,6 +240,7 @@ def load_decode_data_SL(
         
     with open(path) as f:
         for line in f:
+            # line = re.sub(' +', ' ', line).strip('\t\n')
             line = re.sub(' +', ' ', line).strip(' \t\n')
             if len(line) < 1:
                 continue
@@ -255,7 +259,8 @@ def load_decode_data_SL(
                 continue
 
             if segmentation:    # raw text: seg or seg_tag
-                token_seqs.append([get_unigram_id(char) for char in line])
+                uni_seq = [get_unigram_id(char) for char in line]
+                token_seqs.append(uni_seq)
                 org_token_seqs.append([char for char in line])
 
                 if use_tokentype:
@@ -263,18 +268,18 @@ def load_decode_data_SL(
 
                 if use_bigram:
                     str_bigrams = create_all_char_ngrams(line, 2)
-                    str_bigrams.append('{}{}'.format(pstr[-1], constants.EOS))
+                    str_bigrams.append('{}{}'.format(line[-1], constants.EOS))
                     bi_seq = [get_bigram_id(sb, update=sb in refer_bigrams) for sb in str_bigrams]
                     bigram_seqs.append(bi_seq)
 
-                if use_chunk_trie:
-                    cids = token_seqs[-1]
-                    for n in range(1, max_chunk_len+1):
-                        cid_ngrams = create_all_char_ngrams(cids, n)
-                        str_ngrams = create_all_char_ngrams(line, n)
-                        for cn, sn in zip (cid_ngrams, str_ngrams):
-                            if sn in refer_chunks:
-                                get_chunk_id(cn, sn, True)
+                # if use_chunk_trie:
+                #     cids = token_seqs[-1]
+                #     for n in range(1, max_chunk_len+1):
+                #         cid_ngrams = create_all_char_ngrams(cids, n)
+                #         str_ngrams = create_all_char_ngrams(line, n)
+                #         for cn, sn in zip (cid_ngrams, str_ngrams):
+                #             if sn in refer_chunks:
+                #                 get_chunk_id(cn, sn, True)
 
 
             else:               # tokeniized text w/ or w/o pos: tag or (t)dep
@@ -310,6 +315,25 @@ def load_decode_data_SL(
                         for pword in pro_token_seq])
                     subtoken_seqs.append(subtoken_seq)
 
+            if segmentation:
+                if use_bigram:
+                    str_bigrams = create_all_char_ngrams(line, 2)
+                    str_bigrams.append('{}{}'.format(line[-1], constants.EOS))
+                    bi_seq = [
+                        get_bigram_id(sb, update=to_be_registered(sb, train, set(), refer_bigrams))
+                        for sb in str_bigrams]
+
+                if use_chunk_trie:
+                    for n in range(1, max_chunk_len+1):
+                        span_ngrams = create_all_char_ngram_indexes(uni_seq, n)
+                        cid_ngrams = [uni_seq[span[0]:span[1]] for span in span_ngrams]
+                        str_ngrams = [line[span[0]:span[1]] for span in span_ngrams]
+                        for span, cn, sn in zip (span_ngrams, cid_ngrams, str_ngrams):
+                            is_pretrained_chunk = not refer_chunks or sn in refer_chunks
+                            if add_unknown_pretrained_chunk and is_pretrained_chunk:
+                                ci = get_chunk_id(cn, sn, True)
+
+
             ins_cnt += 1
             if ins_cnt % 100000 == 0:
                 print('read', ins_cnt, 'sentences', file=sys.stderr)
@@ -334,7 +358,8 @@ def load_decode_data_SL(
 def load_decode_data_WL(
         path, dic, parsing=False, 
         use_pos=True, use_subtoken=False, subpos_depth=-1, lowercase=False, normalize_digits=True, 
-        refer_unigrams=set()):
+        refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set(),
+        add_gold_chunk=False, add_unknown_pretrained_chunk=True):
 
     ins_cnt = 0
 
@@ -413,6 +438,9 @@ def load_decode_data_WL(
                         use_pos = False
                         pos_seqs = pos_seq = pos_seq_ = []
                     continue
+
+                else:
+                    continue    
 
             array = line.split(attr_delim)
             word = array[word_clm]
@@ -507,10 +535,14 @@ def load_annotated_data_SL(
             if len(line) <= 1:
                 continue
 
-            elif line.startswith(constants.ATTR_DELIM_TXT):
-                attr_delim = line.split(constants.KEY_VALUE_DELIM)[1]
-                print('Read attribute delimiter:', attr_delim, file=sys.stderr)
-                continue
+            elif line[0] == constants.COMMENT_SYM:
+                if line.startswith(constants.ATTR_DELIM_TXT):
+                    attr_delim = line.split(constants.KEY_VALUE_DELIM)[1]
+                    print('Read attribute delimiter:', attr_delim, file=sys.stderr)
+                    continue
+
+                else:
+                    continue
             
             entries = line.split(constants.SL_TOKEN_DELIM)
             uni_seq = []
@@ -1486,172 +1518,6 @@ def get_subpos(pos, depth):
     return subpos
 
 
-def add_chunk_sequences(
-        data, dic, max_len=4, evaluate=True, use_attention=False, use_concat=False, xp=np):
-    if use_concat:
-        if use_attention:
-            add_chunk_sequences_wconcat(data, dic, max_len=max_len, evaluate=evaluate,
-                                        use_attention=True, use_concat=True)
-        else:
-            add_chunk_sequences_concat(data, dic, max_len=max_len, evaluate=evaluate)
-
-    else:
-        add_chunk_sequences_average(
-            data, dic, max_len=max_len, min_value_mask=use_attention,
-            evaluate=evaluate, restrict_memory=False, xp=xp)
-
-
-# deprecated
-def add_chunk_sequences_average(
-        data, dic, max_len=4, oracle=False, min_value_mask=True, evaluate=True, restrict_memory=False, xp=np):
-    print('add_chunk_sequences_average, attention=', min_value_mask)
-    if min_value_mask:          # for attention
-        mask_val = FLOAT_MIN
-        non_mask_val = 0.0
-    else:
-        mask_val = 0.0
-        non_mask_val = 1.0
-
-    token_seqs = data.inputs[0]
-    gold_label_seqs = data.outputs[0] if evaluate else None
-    gold_chunk_seqs = []
-    chunk_seqs = []
-    masks = []
-    trie = dic.tries[constants.CHUNK]
-
-    ins_cnt = 0
-    for sen_id, tseq in enumerate(token_seqs):
-        if ins_cnt > 0 and ins_cnt % 100000 == 0:
-            print('Processed', ins_cnt, 'sentences', file=sys.stderr)
-        ins_cnt += 1
-        lseq = gold_label_seqs[sen_id] if evaluate else None
-
-        n = len(tseq)
-        gchunk_seq = [-1] * n
-        spans_gold = get_segmentation_spans(lseq) if evaluate else None
-
-        spans_found = []
-        for i in range(n):
-            res = trie.common_prefix_search(tseq, i, i + max_len)
-            spans_found.extend(res)
-
-        m = len(spans_found)
-        chunk_seq = [None] * m
-
-        mask1 = [] if restrict_memory else xp.full((n, m), mask_val, dtype='f')
-        i_found = []
-        for j, span in enumerate(spans_found):
-            chunk_seq[j] = trie.get_chunk_id(tseq[span[0]:span[1]])
-            is_gold_span = evaluate and span in spans_gold
-            for i in range(span[0], span[1]):
-                if is_gold_span:
-                    gchunk_seq[i] = j
-                if not oracle or is_gold_span:
-                    if restrict_memory:
-                        mask1.append((i, j))
-                    else:
-                        mask1[i, j] = non_mask_val
-                        i_found.append(i)
-
-        if not restrict_memory and min_value_mask:
-            mask2 = xp.ones((n,m), dtype='f')
-            for i in range(n):
-                if not i in i_found:
-                    mask2[i] = xp.zeros((m,), dtype='f')
-        else:
-            mask2 = None
-        mask = (None, mask1, mask2)
-
-        #     mask = (mask1, mask2)
-        # else:
-        #     mask = mask1
-                
-        # print('x', ' '.join([str(i)+':'+dic.tables[constants.UNIGRAM].id2str[t] for i,t in enumerate(tseq)]))
-        # print('l', ' '.join([dic.tables[constants.SEG_LABEL].id2str[l] for l in lseq]))
-        # print('c', ' '.join([str(i)+':'+trie.id2chunk[c] for i,c in enumerate(chunk_seq)]))
-        # print('gc', gchunk_seq)
-        # print('gc', ' '.join([str(i)+':'+trie.id2chunk[chunk_seq[c]] if c else str(i)+':-1' for i,c in enumerate(gchunk_seq)]))
-        # print(mask1)
-        # print(mask2)
-
-        chunk_seqs.append(chunk_seq)
-        masks.append(mask)
-        if evaluate:
-            gold_chunk_seqs.append(gchunk_seq)
-
-    data.inputs.append(chunk_seqs)
-    data.inputs.append([])      # feat_seqs for concat
-    data.inputs.append(masks)
-    if evaluate:
-        data.outputs.append(gold_chunk_seqs)
-
-
-# deprecated
-def add_chunk_sequences_concat(
-        data, dic, max_len=4, evaluate=True):
-    print('add_chunk_sequences_concat')
-    feat_size = sum([h for h in range(max_len+1)])
-
-    token_seqs = data.inputs[0]
-    gold_label_seqs = data.outputs[0] if evaluate else None
-    gold_chunk_seqs = []
-    feat_seqs = []
-    masks = []
-    trie = dic.tries[constants.CHUNK]
-
-    ins_cnt = 0
-    for sen_id, tseq in enumerate(token_seqs):
-        if ins_cnt > 0 and ins_cnt % 100000 == 0:
-            print('Processed', ins_cnt, 'sentences', file=sys.stderr)
-        ins_cnt += 1
-
-        n = len(tseq)
-        gchunk_seq = [-1] * n
-        feats = [[0] * n for k in range(feat_size)]
-        mask = []
-
-        if evaluate:
-            lseq = gold_label_seqs[sen_id]
-            spans_gold = get_segmentation_spans(lseq)
-        else:
-            lseq = spans_gold = None
-
-        spans_found = []
-        for i in range(n):
-            res = trie.common_prefix_search(tseq, i, i + max_len)
-            spans_found.extend(res)
-        m = len(spans_found)
-
-        for span in (spans_found):
-            is_gold_span = evaluate and span in spans_gold
-            cid = trie.get_chunk_id(tseq[span[0]:span[1]])
-            clen = span[1] - span[0]
-
-            for i in range(span[0], span[1]):
-                k = sum([h for h in range(clen)]) + (i - span[0])
-                feats[k][i] = cid
-                mask.append((k,i))
-                if is_gold_span:
-                    gchunk_seq[i] = k
-
-        # print('x', ' '.join([str(i)+':'+dic.tables[constants.UNIGRAM].id2str[t] for i,t in enumerate(tseq)]))
-        # print('l', ' '.join([dic.tables[constants.SEG_LABEL].id2str[l] for l in lseq]))
-        # print('c', [str(i)+':'+str([trie.id2chunk[c] if c >= 0 else '-1' for c in raw]) for i,raw in enumerate(feats)])
-        # print('gc', gchunk_seq)
-        # print('mask', mask)
-
-        feat_seqs.append(feats)
-        masks.append(mask)
-        if evaluate:
-            gold_chunk_seqs.append(gchunk_seq)
-
-    data.inputs.append([])      # chunk_seqs for average
-    data.inputs.append(feat_seqs)
-    data.inputs.append(masks)
-    if evaluate:
-        data.outputs.append(gold_chunk_seqs)
-
-
 """
   ave (average) / wave (weighed average):
     chunk_seq:  [w_0, ..., w_{m-1}]
@@ -1676,7 +1542,7 @@ def add_chunk_sequences_concat(
     mask1:      the same as ave/wave
 
 """
-def add_chunk_sequences_wconcat(
+def add_chunk_sequences(
         data, dic, max_len=4, evaluate=True, use_attention=True, use_concat=True):
     feat_size = sum([h for h in range(max_len+1)])
 
@@ -1779,61 +1645,6 @@ def token_index2feat_index(ti, span):
 
 
 def convert_mask_matrix(
-        mask, n_tokens, n_chunks, feat_size, emb_dim, use_attention=False, use_concat=False, xp=np):
-    if use_concat:
-        if use_attention:
-            ret = convert_mask_matrix_wconcat(
-                mask, n_tokens, n_chunks, feat_size, emb_dim, use_attention=True, xp=xp)
-        else:
-            ret = convert_mask_matrix_concat(mask, n_tokens, feat_size, emb_dim, xp=xp)
-    else:
-        ret = convert_mask_matrix_average(mask, n_tokens, n_chunks, min_value_mask=use_attention, xp=xp)
-
-    return ret
-
-
-# deprecated
-def convert_mask_matrix_average(index_pairs, n_tokens, n_chunks, min_value_mask=True, xp=np):
-    if min_value_mask:          # for attention
-        mask_val = FLOAT_MIN
-        non_mask_val = 0.0
-    else:
-        mask_val = 0.0
-        non_mask_val = 1.0
-
-    shape = (n_tokens, n_chunks)
-    mask1 = xp.full(shape, mask_val, dtype='f')
-    for i, j in index_pairs:
-        mask1[i, j] = non_mask_val
-
-    if min_value_mask:
-        mask2 = xp.ones(shape, dtype='f') # zero vectors for characters w/o no candidate words
-        for i in range(n_tokens):
-            tmp = [k1 == i for k1,k2 in index_pairs]
-            if len(tmp) == 0 or max(tmp) == False: # not (i,*) in index_pair
-                mask2[i] = xp.zeros((n_chunks,), dtype='f')
-    else:
-        mask2 = None
-
-    mask = (None, mask1, mask2)
-
-    return mask
-
-
-# deprecated
-def convert_mask_matrix_concat(index_pairs, sen_len, feat_size, emb_dim, xp=np):
-    shape = (feat_size, sen_len, emb_dim)
-    ret = xp.zeros(shape, dtype='f')
-    
-    for k, i in index_pairs:
-        ret[k][i] = xp.ones((emb_dim,), dtype='f')
-        
-    # ret = F.concat(ret, axis=1)
-
-    return (ret, None, None)
-
-
-def convert_mask_matrix_wconcat(
         mask, n_tokens, n_chunks, feat_size, emb_dim, use_attention=True, xp=np):
     if use_attention:
         mask_val = FLOAT_MIN

@@ -156,9 +156,9 @@ def uniq(iterable):
   seen = set()
   return [i for i in iterable if not (i in seen or seen.add(i))]
 
-def calculate_metrics(correct, guessed, total):
+def calculate_metrics(correct, guessed, total, correct_tokens=0, total_tokens=0):
     tp, fp, fn = correct, guessed-correct, total-correct
-    a = 1.*correct / total
+    a = (1.*correct_tokens / total_tokens) if total_tokens > 0 else -1
     p = 0 if tp + fp == 0 else 1.*tp / (tp + fp)
     r = 0 if tp + fn == 0 else 1.*tp / (tp + fn)
     f = 0 if p + r == 0 else 2 * p * r / (p + r)

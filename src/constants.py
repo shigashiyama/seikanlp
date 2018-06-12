@@ -69,6 +69,7 @@ TYPE_SPACE       = '<SC>'
 TYPE_SYMBOL      = '<SY>'
 TYPE_ASCII_OTHER = '<AO>'
 
+BOS = '<B>'                     # unused
 EOS = '<E>'
 
 SEG_LABELS      = 'BIES'

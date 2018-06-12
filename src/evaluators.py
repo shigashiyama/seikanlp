@@ -361,7 +361,8 @@ class SegmenterEvaluator(object):
     def report_results(self, sen_counter, counts, loss, file=sys.stderr):
         ave_loss = loss / counts.token_counter
         met = conlleval.calculate_metrics(
-            counts.correct_chunk, counts.found_guessed, counts.found_correct)
+            counts.correct_chunk, counts.found_guessed, counts.found_correct,
+            counts.correct_tags, counts.token_counter)
         
         print('ave loss: %.5f'% ave_loss, file=file)
         print('sen, token, chunk, chunk_pred: {} {} {} {}'.format(
@@ -388,7 +389,8 @@ class HybridSegmenterEvaluator(object):
     def report_results(self, sen_counter, counts, loss, file=sys.stderr):
         ave_loss = loss / counts.l1.token_counter
         l1_met = conlleval.calculate_metrics(
-            counts.l1.correct_chunk, counts.l1.found_guessed, counts.l1.found_correct)
+            counts.l1.correct_chunk, counts.l1.found_guessed, counts.l1.found_correct,
+            counts.l1.correct_tags, counts.l1.token_counter)
         l2_acc = 1.*counts.l2.correct / counts.l2.total if counts.l2.total > 0 else 0
         
         print('ave loss: %.5f'% ave_loss, file=file)

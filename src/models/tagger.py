@@ -244,6 +244,11 @@ class RNNTaggerWithChunk(RNNTagger):
             file=sys.stderr):
         self.__init__chain__()
 
+        # tmp
+        self.id2token = None
+        self.id2chunk = None
+        self.id2label = None
+
         # TODO refactor with super class
         self.chunk_loss_ratio = chunk_loss_ratio
         self.use_attention = (chunk_pooling_type == 'wave' or chunk_pooling_type == 'wcon')
@@ -261,7 +266,7 @@ class RNNTaggerWithChunk(RNNTagger):
 
         with self.init_scope():
             print('### Parameters', file=file)
-            print('# Chunk loss ratio: {}'.format(self.chunk_loss_ratio))
+            print('# Chunk loss ratio: {}'.format(self.chunk_loss_ratio), file=file)
 
             # embedding layers
 
@@ -396,8 +401,8 @@ class RNNTaggerWithChunk(RNNTagger):
         else:
             vs = [None] * len(us)
 
-        # closs, pcs, hs = self.act_and_merge_features_old(rs, vs if self.use_concat else ws, ms, gcs)
-        closs, pcs, hs = self.act_and_merge_features(rs, ws, vs, ms, gcs) # r @ r$w -> h
+        # r @ r$w -> h
+        closs, pcs, hs = self.act_and_merge_features(rs, ws, vs, ms, gcs, calculate_loss=calculate_loss)
 
         if self.use_rnn2:
             hs = self.rnn2_output(hs)                # h -[RNN]-> h'
@@ -411,10 +416,41 @@ class RNNTaggerWithChunk(RNNTagger):
         return loss, pls, pcs
 
 
-    def decode(self, us, cs, ms, bs=None, ts=None, ss=None, fs=None):
+    def decode(
+            self, us, cs, ds, ms, bs=None, ts=None, ss=None, fs=None):
         with chainer.no_backprop_mode():
-            _, ps = self.__call__(us, cs, ms, bs, ts, ss, fs, calculate_loss=False)
+            _, ps, _ = self.__call__(us, cs, ds, ms, calculate_loss=False)
         return ps
+
+
+    def do_analysis(
+            self, us, cs, ds, ms, bs=None, ts=None, ss=None, fs=None, gls=None, gcs=None):
+        closs = None
+        pcs = None
+
+        xs = self.extract_token_features(us, bs, ts, ss, fs)          # token unigram etc. -[Embed]-> x
+        rs = self.rnn_output(xs)                                      # x -[RNN]-> r
+
+        if cs is not None:
+            ws = self.extract_chunk_features(cs) # chunk -[Embed]-> w (chunk sequence)
+        else:
+            ws = [None] * len(us)
+
+        if ds is not None:
+            vs = self.extract_chunk_features(ds) # chunk -[Embed]-> w (concatenated chunk matrix)
+        else:
+            vs = [None] * len(us)
+
+        _, pcs, hs = self.act_and_merge_features(rs, ws, vs, ms, gcs) # r @ r$w -> h
+
+        if self.use_rnn2:
+            hs = self.rnn2_output(hs)                # h -[RNN]-> h'
+        _, pls = self.predict(hs, ls=gls, calculate_loss=False)
+
+        # print('pl', pls[0])
+
+        # return gcs, pcs, ncands, gls, pls
+        return gcs, pcs, gls, pls
 
 
     def rnn2_output(self, xs):
@@ -423,6 +459,13 @@ class RNNTaggerWithChunk(RNNTagger):
         else:
             hy, hs = self.rnn2(None, xs)
         return hs
+
+
+    # tmp
+    def set_dics(self, id2token, id2chunk, id2label):
+        self.id2token = id2token
+        self.id2chunk = id2chunk
+        self.id2label = id2label
 
 
     def extract_token_features(self, us, bs, ts, ss, fs):
@@ -450,20 +493,22 @@ class RNNTaggerWithChunk(RNNTagger):
         return xs
 
 
-    def act_and_merge_features(self, xs, ws, vs, ms, gcs=None):
+    def act_and_merge_features(self, xs, ws, vs, ms, gcs=None, calculate_loss=True):
         hs = []
         pcs = []
+        # ncands = []
 
         xp = cuda.get_array_module(xs[0])
         closs = chainer.Variable(xp.array(0, dtype='f'))
 
+        if gcs is None:
+            gcs = [None] * len(xs)
         for x, w, v, gc, mask in zip(xs, ws, vs, gcs, ms):
             # ave   w, m1
             # wave  w, m1, m2
             # con   v, m0
             # wcon  w, v, m0, m1, m2
 
-            # print('x', x.shape)
             if w is None and v is None: # no words were found for devel/test data
                 a = xp.zeros((len(x), self.chunk_embed_out_dim), dtype='f')
                 pc = np.zeros(len(x), 'i')
@@ -473,6 +518,7 @@ class RNNTaggerWithChunk(RNNTagger):
             elif w is not None:
                 w = F.dropout(w, self.embed_dropout)
 
+            # print('x', x.shape)
             if self.use_attention or not self.use_concat:
                 if self.use_attention: # wave or wcon
                     # print('w', w.shape)
@@ -484,6 +530,7 @@ class RNNTaggerWithChunk(RNNTagger):
                     w_weight = F.softmax(w_scores)
                     w_weight = w_weight * mask[2] # raw of char w/o no candidate words become a 0 vector
                     # print('ww', w_weight.shape, w_weight)
+                    _mask = mask[1]
 
                 elif not self.use_concat: # ave
                     w_weight = self.normalize(mask[1], xp=xp)
@@ -548,7 +595,16 @@ class RNNTaggerWithChunk(RNNTagger):
                     pc = cuda.to_cpu(pc)
                 pcs.append(pc)
 
-                if self.chunk_loss_ratio > 0:
+                # ncand = [sum([1 if val >= 0 else 0 for val in raw]) for raw in _mask]
+                # print('pred', pc)
+                # print('gold', gc)
+                # print('ncand', ncand)
+                # print('weight', weight.shape, weight.data)
+                # print('weight')
+                # for i, e in enumerate(weight.data):
+                #     print(i, e)
+
+                if self.chunk_loss_ratio > 0 and calculate_loss:
                     scores = v_scores if self.use_concat else w_scores
                     closs += softmax_cross_entropy.softmax_cross_entropy(scores, gc)
 
