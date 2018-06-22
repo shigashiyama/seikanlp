@@ -198,52 +198,45 @@ class Dictionary(object):
 
 def init_dictionary(
         use_unigram=True, use_bigram=False, use_subtoken=False, use_tokentype=False, 
-        use_seg_label=False, use_pos_label=False, use_arc_label=False, use_attr_label=False,
-        use_chunk_trie=False, use_root=False): 
+        num_attrs=0, use_seg_label=False, use_arc_label=False, use_chunk_trie=False, use_root=False): 
 
-    UNK_SYMBOL = constants.UNK_SYMBOL
-    ROOT_SYMBOL = constants.ROOT_SYMBOL
-    
     dic = Dictionary()
 
     # create tables and tries
     if use_unigram:
         dic.create_table(constants.UNIGRAM)
-        dic.tables[constants.UNIGRAM].set_unk(UNK_SYMBOL)
+        dic.tables[constants.UNIGRAM].set_unk(constants.UNK_SYMBOL)
         if use_root:
-            dic.tables[constants.UNIGRAM].get_id(ROOT_SYMBOL, update=True)
+            dic.tables[constants.UNIGRAM].get_id(constants.ROOT_SYMBOL, update=True)
 
     if use_bigram:
         dic.create_table(constants.BIGRAM)
-        dic.tables[constants.BIGRAM].set_unk(UNK_SYMBOL)
+        dic.tables[constants.BIGRAM].set_unk(constants.UNK_SYMBOL)
 
     if use_subtoken:
         dic.create_table(constants.SUBTOKEN)
-        dic.tables[constants.SUBTOKEN].set_unk(UNK_SYMBOL)
+        dic.tables[constants.SUBTOKEN].set_unk(constants.UNK_SYMBOL)
         if use_root:
-            dic.tables[constants.SUBTOKEN].get_id(ROOT_SYMBOL, update=True)
+            dic.tables[constants.SUBTOKEN].get_id(constants.ROOT_SYMBOL, update=True)
 
     if use_tokentype:
         dic.create_table(constants.TOKEN_TYPE)
-        dic.tables[constants.TOKEN_TYPE].set_unk(UNK_SYMBOL)
+        dic.tables[constants.TOKEN_TYPE].set_unk(constants.UNK_SYMBOL)
+
+    for i in range(num_attrs):
+        dic.create_table(constants.ATTR_LABEL(i))
+        # dic.tables[constants.ATTR_LABEL(i)].set_unk(constants.UNK_SYMBOL)
+        if use_root:
+            dic.tables[constants.ATTR_LABEL(i)].get_id(constants.ROOT_SYMBOL, update=True)
 
     if use_seg_label:
         dic.create_table(constants.SEG_LABEL)
-        if not use_pos_label:   # tmp
-            for label in constants.SEG_LABELS:
-                dic.tables[constants.SEG_LABEL].get_id(label, update=True)
-
-    if use_pos_label:
-        dic.create_table(constants.POS_LABEL)
-        dic.tables[constants.POS_LABEL].set_unk(UNK_SYMBOL)
-        if use_root:
-            dic.tables[constants.POS_LABEL].get_id(ROOT_SYMBOL, update=True)
+        # if not use_pos_label:
+        #     for label in constants.SEG_LABELS:
+        #         dic.tables[constants.SEG_LABEL].get_id(label, update=True)
 
     if use_arc_label:
         dic.create_table(constants.ARC_LABEL)
-
-    if use_attr_label:
-        dic.create_table(constants.ATTR_LABEL)
 
     if use_chunk_trie:
         dic.create_trie(constants.CHUNK)

@@ -252,7 +252,7 @@ class RNNTaggerWithChunk(RNNTagger):
         # TODO refactor with super class
         self.chunk_loss_ratio = chunk_loss_ratio
         self.use_attention = (chunk_pooling_type == 'wave' or chunk_pooling_type == 'wcon')
-        self.use_concat = (chunk_pooling_type == 'con' or chunk_pooling_type == 'wcon')
+        self.use_concat = (chunk_pooling_type == 'con' or chunk_pooling_type == 'wcon') or chunk_pooling_type == 'concat' # tmp
         self.use_rnn2 = rnn_n_layers2 > 0 and rnn_n_units2 > 0
         chunk_embed_dim_merged = (
             chunk_embed_dim +
@@ -263,6 +263,7 @@ class RNNTaggerWithChunk(RNNTagger):
             self.chunk_embed_out_dim = chunk_embed_dim_merged * self.chunk_concat_num
         else:
             self.chunk_embed_out_dim = chunk_embed_dim_merged
+        print(self.use_concat, self.chunk_embed_out_dim)
 
         with self.init_scope():
             print('### Parameters', file=file)

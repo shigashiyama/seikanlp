@@ -23,8 +23,8 @@ class SelectiveArgumentParser(object):
         parser.add_argument('--execute_mode', '-x', help=
                             'Choose a mode from among \'train\', \'eval\', \'decode\' and \'interactive\'')
         parser.add_argument('--task', '-t', help=
-                            'Choose a task from among \'seg\', \'segtag\', \'tag\', \'dual_seg\', '
-                            + '\'dual_segtag\', \'dual_tag\', \'dep\', \'tdep\' and \'sematt\'')
+                            'Choose a task from among \'seg\', \'segtag\', \'tag\', '
+                            + '\'dep\', \'tdep\' and \'sematt\'')
         parser.add_argument('--quiet', '-q', action='store_true',
                             help='Do not output log file and serialized model file')
 
@@ -76,12 +76,12 @@ class SelectiveArgumentParser(object):
                             'npz/pkl file path of the trained model. \'xxx.hyp\' and \'xxx.s2i\' files'
                             + 'are also read simultaneously when you specify \'xxx_izzz.npz/pkl\' file')
 
-        parser.add_argument('--submodel_path', default='', help=
-                            'npz file path of the trained short unit model that is necessary '
-                            + 'when train new long unit model for dual_seg/dual_segtag/dual_tag task. '
-                            + '\'xxx.hyp\' and \'xxx.s2i\' files are also read simultaneously '
-                            + 'when you specify \'xxx_izzz.npz/pkl\' file.')
-        parser.add_argument('--submodel_usage', default='independent')
+        # parser.add_argument('--submodel_path', default='', help=
+        #                     'npz file path of the trained short unit model that is necessary '
+        #                     + 'when train new long unit model for dual_seg/dual_segtag/dual_tag task. '
+        #                     + '\'xxx.hyp\' and \'xxx.s2i\' files are also read simultaneously '
+        #                     + 'when you specify \'xxx_izzz.npz/pkl\' file.')
+        # parser.add_argument('--submodel_usage', default='independent')
         ### parser.add_argument('--dic_obj_path', help='')
         parser.add_argument('--input_data_path_prefix', '-p', dest='path_prefix', help=
                             'Path prefix of input data')
@@ -93,9 +93,6 @@ class SelectiveArgumentParser(object):
                             'File path succeeding \'input_data_path_prefix\' of test data')
         parser.add_argument('--decode_data', default='', help=
                             'File path of input text which succeeds \'input_data_path_prefix\'')
-        # parser.add_argument('--label_reference_data', default='',
-        #                     help='File path succeeding \'input_data_path_prefix\''
-        #                     + ' of data with the same format as training data to load pre-defined labels')
         parser.add_argument('--external_dic_path', help=
                             'File path of external word dictionary listing known words')
         parser.add_argument('--feature_template', default='', help=
@@ -119,14 +116,20 @@ class SelectiveArgumentParser(object):
                             + 'when output analysis results on decode/interactive mode (Default \'/\')')
 
         ### options for data pre/post-processing
-        parser.add_argument('--subpos_depth', type=int, default=-1, help=
-                            'Set positive integer (use POS up to i-th hierarcy), or '
-                            + '0 or negative value (use all sub-POS). '
-                            + 'POS hierarchy must be indicated by \'-\' like \'NOUN-GENERAL\'')
+        parser.add_argument('--attribute_column_indexes', default='', help='')
+        parser.add_argument('--attribute_depths', default='', help='')
+        parser.add_argument('--attribute_predictions', default='', help='')
+        # parser.add_argument('--subpos_depth', type=int, default=-1, help=
+        #                     'Set positive integer (use POS up to i-th hierarcy), or '
+        #                     + '0 or negative value (use all sub-POS). '
+        #                     + 'POS hierarchy must be indicated by \'-\' like \'NOUN-GENERAL\'')
         parser.add_argument('--lowercase_alphabets',  dest='lowercase', action='store_true', help=
                             'Lowercase alphabets in input text')
         parser.add_argument('--normalize_digits',  action='store_true', help=
                             'Normalize digits by the same symbol in input text')
+        parser.add_argument('--attribute_target_labelsets', default='', help=''
+                            'Sepecify labels to be considered'
+                            + 'by format \'label_1,label_2,...,label_N\'')
         parser.add_argument('--ignored_labels', default='', help=''
                             'Sepecify labels to be ignored on evaluation '
                             + 'by format \'label_1,label_2,...,label_N\'')
@@ -205,7 +208,7 @@ class SelectiveArgumentParser(object):
                             'Dropout ratio for MLP of parsing model (Default: 0.0)')
         parser.add_argument('--pred_layers_dropout', type=float, default=0.0, help=
                             'Dropout ratio for prediction layers of parsing model (Default: 0.0)')
-        parser.add_argument('--pos_embed_dim', type=int, default=100, help=
+        parser.add_argument('--attr0_embed_dim', type=int, default=100, help=
                             'The number of dimension of pos embedding of parsing model (Default: 100)')
         parser.add_argument('--mlp4arcrep_n_layers', type=int, default=1, help=
                             'The number of layers of MLP of parsing model for arc representation '
@@ -240,7 +243,6 @@ class SelectiveArgumentParser(object):
 
         # task dependent options
         if (common.is_single_st_task(args.task) or 
-            common.is_dual_st_task(args.task) or
             common.is_parsing_task(args.task)):
             self.add_gpu_options(parser, args)
 
@@ -361,7 +363,7 @@ class SelectiveArgumentParser(object):
 
     def add_input_data_format_option(self, parser, args):
         if args.execute_mode == 'train' or args.execute_mode == 'eval':
-            if common.is_single_st_task(args.task) or common.is_dual_st_task(args.task):
+            if common.is_single_st_task(args.task):
                 if args.input_data_format == 'sl' or args.input_data_format == 'wl':
                     parser.add_argument('--input_data_format', '-f', default=args.input_data_format)
 
@@ -388,7 +390,7 @@ class SelectiveArgumentParser(object):
             if common.is_segmentation_task(args.task):
                 pass
 
-            elif args.task == constants.TASK_TAG or args.task == constants.TASK_DUAL_TAG:
+            elif args.task == constants.TASK_TAG:
                 if args.input_data_format == 'sl' or args.input_data_format == 'wl':
                     parser.add_argument('--input_data_format', '-f', default=args.input_data_format)
 
@@ -494,31 +496,15 @@ class SelectiveArgumentParser(object):
 
     def add_task_dependent_options(self, parser, args):
         train = args.execute_mode == 'train'
-        if train:
-            # parser.add_argument('--dump_train_data', default=args.dump_train_data)
-            pass
-
-        if (common.is_tagging_task(args.task) or
-            common.is_parsing_task(args.task) or
-            common.is_attribute_annotation_task(args.task)):
-            if train:
-                parser.add_argument('--subpos_depth', type=int, default=args.subpos_depth)
-        else:
-            if train:
-                parser.add_argument('--subpos_depth', type=int, default=-1)
-
-        if common.is_attribute_annotation_task(args.task):
-            pass
-
-        elif common.is_dual_st_task(args.task):
-            parser.add_argument('--unigram_embed_model_path', default=args.unigram_embed_model_path)
-
-            if train:
-                parser.add_argument('--submodel_path', default=args.submodel_path)
-                parser.add_argument('--submodel_usage', default=args.submodel_usage)
-
-            parser.add_argument('--rnn_dropout', type=float, default=args.rnn_dropout)
-            parser.add_argument('--mlp_dropout', type=float, default=args.mlp_dropout)
+        parser.add_argument('--attribute_column_indexes', default=args.attribute_column_indexes)
+        parser.add_argument('--attribute_depths', default=args.attribute_depths)
+        parser.add_argument('--attribute_predictions', default=args.attribute_predictions)
+        parser.add_argument('--attribute_target_labelsets', default=args.attribute_target_labelsets)
+        if common.is_tagging_task(args.task):
+            if not args.attribute_column_indexes:
+                print('Error: attribute_column_indexes must be specified for task='
+                      + '{}'.format(args.task), file=sys.stderr)
+                sys.exit()
 
         else:
             parser.add_argument('--unigram_embed_model_path', default=args.unigram_embed_model_path)
@@ -615,7 +601,7 @@ class SelectiveArgumentParser(object):
                 
 
             if common.is_parsing_task(args.task):
-                parser.add_argument('--pos_embed_dim', type=int, default=args.pos_embed_dim)
+                parser.add_argument('--attr0_embed_dim', type=int, default=args.attr0_embed_dim)
                 parser.add_argument('--mlp4arcrep_n_layers', type=int,   default=args.mlp4arcrep_n_layers)
                 parser.add_argument('--mlp4arcrep_n_units', type=int,    default=args.mlp4arcrep_n_units)
                 parser.add_argument('--mlp4labelrep_n_layers', type=int, default=args.mlp4labelrep_n_layers)

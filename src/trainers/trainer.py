@@ -156,8 +156,10 @@ class Trainer(object):
             self.log('Num of chunks: {}'.format(len(self.dic.tries[constants.CHUNK])))
         if self.dic.has_table(constants.SEG_LABEL):
             self.log('Num of segmentation labels: {}'.format(len(self.dic.tables[constants.SEG_LABEL])))
-        if self.dic.has_table(constants.POS_LABEL):
-            self.log('Num of pos labels: {}'.format(len(self.dic.tables[constants.POS_LABEL])))
+        for i in range(3):      # tmp
+            if self.dic.has_table(constants.ATTR_LABEL(i)):
+                self.log('Num of {}-th attribute labels: {}'.format(
+                    len(self.dic.tables[constants.ATTR_LABEL(i)])))
         if self.dic.has_table(constants.ARC_LABEL):
             self.log('Num of arc labels: {}'.format(len(self.dic.tables[constants.ARC_LABEL])))
         if self.dic.has_table(constants.ATTR_LABEL):
@@ -212,7 +214,7 @@ class Trainer(object):
         self.log('')
 
 
-    def update_model(self):
+    def update_model(self, classifier=None, dic=None):
         # to be implemented in sub-class
         pass
 
@@ -236,17 +238,16 @@ class Trainer(object):
         args = self.args
         hparams = self.hparams
         prefix = args.path_prefix if args.path_prefix else ''
-            
-        # refer_path   = prefix + args.label_reference_data
         train_path   = prefix + args.train_data
         dev_path     = prefix + (args.devel_data if args.devel_data else '')
         input_data_format = args.input_data_format
 
         task = hparams['task']
-        use_pos = (
-            common.is_tagging_task(task) or 
-            (common.is_parsing_task(task) and 'pos_embed_dim' in hparams and hparams['pos_embed_dim'] > 0) or
-            common.is_attribute_annotation_task(task))
+        attr_indexes = common.get_attribute_values(hparams['attr_indexes'])
+        attr_depths = common.get_attribute_values(hparams['attr_depths'])
+        attr_target_labelsets = common.get_attribute_labelsets(
+            hparams['attr_target_labelsets'], len(attr_indexes))
+
         use_bigram = ('bigram_embed_dim' in hparams and hparams['bigram_embed_dim'] > 0)
         use_tokentype = ('tokentype_embed_dim' in hparams and hparams['tokentype_embed_dim'] > 0)        
         use_subtoken = ('subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0)
@@ -270,29 +271,18 @@ class Trainer(object):
         if args.train_data.endswith('pickle'):
             pass
 
-            # name, ext = os.path.splitext(train_path)
-            # train = data_io.load_pickled_data(name)
-            # self.log('Load dumpped data:'.format(train_path))
-            #TODO update dic when re-training using another training data
-
         else:
             train, self.dic = data_io.load_annotated_data(
-                train_path, task, input_data_format, train=True, use_pos=use_pos,
-                use_bigram=use_bigram, use_tokentype=use_tokentype, use_subtoken=use_subtoken, 
-                use_chunk_trie=use_chunk_trie, subpos_depth=subpos_depth, 
+                train_path, task, input_data_format, train=True, 
+                use_bigram=use_bigram, use_tokentype=use_tokentype, 
+                use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie,
+                attr_indexes=attr_indexes, attr_depths=attr_depths, attr_target_labelsets=attr_target_labelsets,
                 lowercase=lowercase, normalize_digits=normalize_digits, 
                 word_max_vocab_size=word_max_vocab_size, word_freq_threshold=word_freq_threshold, 
                 bigram_max_vocab_size=bigram_max_vocab_size, bigram_freq_threshold=bigram_freq_threshold, 
                 max_chunk_len=max_chunk_len, dic=self.dic, 
                 refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,
                 add_gold_chunk=add_gold_chunk, add_unknown_pretrained_chunk=False)
-        
-            # if self.args.dump_train_data:
-            #     name, ext = os.path.splitext(train_path)
-            #     if args.max_vocab_size > 0 or args.freq_threshold > 1:
-            #         name = '{}_{}k'.format(name, int(len(self.dic.tables[constants.UNIGRAM]) / 1000))
-            #     data_io.dump_pickled_data(name, train)
-            #     self.log('Dumpped training data: {}.pickle'.format(name))
 
         self.log('Load training data: {}'.format(train_path))
         self.log('Data length: {}'.format(len(train.inputs[0])))
@@ -311,12 +301,12 @@ class Trainer(object):
             self.extract_features(train)
 
         if args.devel_data:
-            # use_pos = constants.POS_LABEL in self.dic.tables
             self.dic_dev = copy.deepcopy(self.dic)
             dev, self.dic_dev = data_io.load_annotated_data(
-                dev_path, task, input_data_format, train=False, use_pos=use_pos, 
-                use_bigram=use_bigram, use_tokentype=use_tokentype, use_subtoken=use_subtoken, 
-                use_chunk_trie=use_chunk_trie, subpos_depth=subpos_depth, 
+                dev_path, task, input_data_format, train=False, 
+                use_bigram=use_bigram, use_tokentype=use_tokentype, 
+                use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie,
+                attr_indexes=attr_indexes, attr_depths=attr_depths, attr_target_labelsets=attr_target_labelsets,
                 lowercase=lowercase, normalize_digits=normalize_digits, max_chunk_len=max_chunk_len, 
                 dic=self.dic_dev,
                 refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,
@@ -356,7 +346,12 @@ class Trainer(object):
         input_data_format = args.input_data_format
 
         task = hparams['task']
-        use_pos = self.dic.has_table(constants.POS_LABEL)
+        
+        attr_indexes = common.get_attribute_values(hparams['attr_indexes'])
+        attr_depths = common.get_attribute_values(hparams['attr_depths'])
+        attr_target_labelsets = common.get_attribute_labelsets(
+            hparams['attr_target_labelsets'], len(attr_indexes))
+
         use_bigram = self.dic.has_table(constants.BIGRAM)
         use_tokentype = self.dic.has_table(constants.TOKEN_TYPE)
         use_subtoken = self.dic.has_table(constants.SUBTOKEN)
@@ -369,9 +364,10 @@ class Trainer(object):
         max_chunk_len = self.hparams['max_chunk_len'] if 'max_chunk_len' in hparams else 0
 
         test, self.dic = data_io.load_annotated_data(
-            test_path, task, input_data_format, train=False, use_pos=use_pos,
-            use_bigram=use_bigram, use_tokentype=use_tokentype, use_subtoken=use_subtoken, 
-            use_chunk_trie=use_chunk_trie, subpos_depth=subpos_depth, 
+            test_path, task, input_data_format, train=False,
+            use_bigram=use_bigram, use_tokentype=use_tokentype, 
+            use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie, 
+            attr_indexes=attr_indexes, attr_depths=attr_depths, attr_target_labelsets=attr_target_labelsets,
             lowercase=lowercase, normalize_digits=normalize_digits, max_chunk_len=max_chunk_len, 
             dic=self.dic,
             refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,

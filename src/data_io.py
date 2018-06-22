@@ -30,7 +30,6 @@ class RestorableData(Data):
         self.orgdata = orgdata
 
 
-
 def load_decode_data(
         path, dic, task, data_format=constants.WL_FORMAT,
         use_pos=True, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False,
@@ -41,12 +40,11 @@ def load_decode_data(
 
     segmentation = common.is_segmentation_task(task)
     parsing = common.is_parsing_task(task)
-    attribute_annotation = common.is_attribute_annotation_task(task)
     use_subtoken = use_subtoken and not segmentation
 
     if segmentation or data_format == constants.SL_FORMAT:
         data = load_decode_data_SL(
-            path, dic, segmentation=segmentation, parsing=parsing, attribute_annotation=attribute_annotation,
+            path, dic, segmentation=segmentation, parsing=parsing, 
             use_pos=use_pos, use_bigram=use_bigram, use_tokentype=use_tokentype,
             use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie,
             subpos_depth=subpos_depth, lowercase=lowercase, normalize_digits=normalize_digits, 
@@ -70,8 +68,9 @@ def load_decode_data(
 
 def load_annotated_data(
         path, task, data_format, train=True, 
-        use_pos=True, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False, 
-        subpos_depth=-1, lowercase=False, normalize_digits=False, 
+        use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False, 
+        attr_indexes=[], attr_depths=[], attr_target_labelsets=[],
+        lowercase=False, normalize_digits=False, 
         bigram_max_vocab_size=-1, bigram_freq_threshold=1, 
         word_max_vocab_size=-1, word_freq_threshold=1, 
         max_chunk_len=0, dic=None, refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set(),
@@ -82,7 +81,6 @@ def load_annotated_data(
     tagging = common.is_tagging_task(task)
     parsing = common.is_parsing_task(task)
     typed_parsing = common.is_typed_parsing_task(task)
-    attr_annotation = common.is_attribute_annotation_task(task)
     use_subtoken = use_subtoken and not segmentation
 
     freq_bigrams = set()
@@ -115,11 +113,10 @@ def load_annotated_data(
         data, dic = load_annotated_data_WL(
             path, train=train,
             segmentation=segmentation, tagging=tagging, parsing=parsing, typed_parsing=typed_parsing,
-            attribute_annotation=attr_annotation,
-            use_pos=use_pos, use_bigram=use_bigram, use_tokentype=use_tokentype,
+            use_bigram=use_bigram, use_tokentype=use_tokentype,
             use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie,
-            subpos_depth=subpos_depth, lowercase=lowercase, normalize_digits=normalize_digits,
-            max_chunk_len=max_chunk_len, 
+            attr_indexes=attr_indexes, attr_depths=attr_depths, attr_target_labelsets=attr_target_labelsets,
+            lowercase=lowercase, normalize_digits=normalize_digits, max_chunk_len=max_chunk_len, 
             dic=dic, freq_words=freq_words, freq_bigrams=freq_bigrams,
             refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,
             add_gold_chunk=add_gold_chunk, add_unknown_pretrained_chunk=add_unknown_pretrained_chunk)
@@ -127,14 +124,14 @@ def load_annotated_data(
     else:
         data, dic = load_annotated_data_SL(
             path, train=train, segmentation=segmentation, tagging=tagging, 
-            use_pos=use_pos, use_bigram=use_bigram, use_tokentype=use_tokentype,
+            use_bigram=use_bigram, use_tokentype=use_tokentype,
             use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie, 
-            subpos_depth=subpos_depth, lowercase=lowercase, normalize_digits=normalize_digits,
-            max_chunk_len=max_chunk_len, 
+            attr_indexes=attr_indexes, attr_depths=attr_depths, attr_target_labelsets=attr_target_labelsets,
+            lowercase=lowercase, normalize_digits=normalize_digits, max_chunk_len=max_chunk_len, 
             dic=dic, freq_words=freq_words, freq_bigrams=freq_bigrams,
             refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,
             add_gold_chunk=add_gold_chunk, add_unknown_pretrained_chunk=add_unknown_pretrained_chunk)
-        
+
     return data, dic
 
 
@@ -204,7 +201,7 @@ def parse_commandline_input(
                 
 
 def load_decode_data_SL(
-        path, dic, segmentation=False, parsing=False, attribute_annotation=False, 
+        path, dic, segmentation=False, parsing=False, 
         use_pos=False, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False,
         subpos_depth=-1, lowercase=False, normalize_digits=True, max_chunk_len=0,
         refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set(),
@@ -286,9 +283,8 @@ def load_decode_data_SL(
                 org_arr = line.split(constants.SL_TOKEN_DELIM)
 
                 org_token_seq = [word for word in org_arr]
-                if parsing or attribute_annotation:
-                    org_token_seq = [elem.split(attr_delim)[0] for elem in org_arr]
                 if parsing:
+                    org_token_seq = [elem.split(attr_delim)[0] for elem in org_arr]
                     org_token_seq.insert(0, root_token)
                 org_token_seqs.append(org_token_seq)
 
@@ -495,36 +491,40 @@ otherwise, the following format is expected for segmentation:
 """
 def load_annotated_data_SL(
         path, train=True, segmentation=True, tagging=False,
-        use_pos=True, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False, 
-        subpos_depth=-1, lowercase=False, normalize_digits=True, max_chunk_len=0, 
+        use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False, 
+        attr_indexes=[], attr_depths=[], attr_target_labelsets=[],
+        lowercase=False, normalize_digits=True, max_chunk_len=0, 
         dic=None, freq_words=set(), freq_bigrams=set(),
         refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set(),
         add_gold_chunk=False, add_unknown_pretrained_chunk=True):
-    use_pos = tagging 
+
+    num_attrs = len(attr_indexes)
     if not dic:
         dic = dictionary.init_dictionary(
-            use_unigram=True, use_bigram=use_bigram, use_subtoken=use_subtoken, use_tokentype=use_tokentype,
-            use_seg_label=segmentation, use_pos_label=use_pos, 
-            use_chunk_trie=use_chunk_trie, use_root=False)
+            use_unigram=True, use_bigram=use_bigram, use_subtoken=use_subtoken, 
+            use_tokentype=use_tokentype, num_attrs=num_attrs,
+            use_seg_label=segmentation, use_chunk_trie=use_chunk_trie, use_root=False)
 
     attr_delim = constants.SL_ATTR_DELIM
-
     ins_cnt = 0
-
-    token_seqs = []
-    bigram_seqs = []            # only available for segmentation
-    toktype_seqs = []           # only available for segmentation
-    subtoken_seqs = []
-    seg_seqs = []               # list of segmentation label sequences
-    pos_seqs = []               # list of POS label sequences
+    attr_dics = []
 
     get_unigram_id = dic.tables[constants.UNIGRAM].get_id
     get_bigram_id = dic.tables[constants.BIGRAM].get_id if use_bigram else None
     get_toktype_id = dic.tables[constants.TOKEN_TYPE].get_id if use_tokentype else None
     get_subtoken_id = dic.tables[constants.SUBTOKEN].get_id if use_subtoken else None
     get_seg_id = dic.tables[constants.SEG_LABEL].get_id if segmentation else None
-    get_pos_id = dic.tables[constants.POS_LABEL].get_id if use_pos else None
     get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id if use_chunk_trie else None
+    get_ith_attr_id = []
+    for i in range(num_attrs): 
+        get_ith_attr_id.append(dic.tables[constants.ATTR_LABEL(i)].get_id)
+
+    token_seqs = []
+    bigram_seqs = []            # only available for segmentation
+    toktype_seqs = []           # only available for segmentation
+    subtoken_seqs = []
+    seg_seqs = []               # list of segmentation label sequences
+    attr_seqs_list = [[] for i in range(num_attrs)]
 
     with open(path) as f:
         # ccounter = Counter()    # tmp
@@ -550,33 +550,43 @@ def load_annotated_data_SL(
             type_seq = []
             sub_seq = []
             seg_seq = []
-            pos_seq = []
+            attr_seq_list = [[] for i in range(num_attrs)]
             pstr = ''
 
             for entry in entries:
-                attrs = entry.split(attr_delim)
-                pword = preprocess_token(attrs[0], lowercase, normalize_digits, refer_unigrams)
+                array = entry.split(attr_delim)
+                pword = preprocess_token(array[0], lowercase, normalize_digits, refer_unigrams)
                 pstr += pword
 
                 if tagging:
-                    if len(attrs) < 2:
+                    if len(array) < 2:
                         continue
-                    pos = get_subpos(attrs[1], subpos_depth)
 
-                    if segmentation and train:
-                        for seg_lab in constants.SEG_LABELS:
-                            get_seg_id('{}-{}'.format(seg_lab, pos) , True)
+                    for i in range(num_attrs):
+                        attrs[i] = array[attr_dics[i][constants.ATTR_INDEX]-1]
+                        if attr_target_labelsets[i]:
+                            if not attrs[i] in attr_target_labelsets[i]:
+                                attrs[i] = '' # ignore
+
+                        if attr_depths[i] > 0:
+                            attrs[i] = get_subpos(attrs[i], attr_depths[i])
+
+                        if segmentation and train and i == 0: # tmp
+                            for seg_lab in constants.SEG_LABELS:
+                                get_seg_id('{}-{}'.format(seg_lab, attrs[i]), True)
+
                 else:
-                    pos = None    
+                    attrs = [None] * max(num_attrs, 1)
                        
                 wlen = len(pword)
 
                 if segmentation:
                     uni_seq.extend([get_unigram_id(pword[i], True) for i in range(wlen)])
 
+                    # tentative: attrs[0] indicates POS
                     seg_seq.extend(
                         [get_seg_id(
-                            get_label_BIES(i, wlen-1, cate=pos), update=train) for i in range(wlen)])
+                            get_label_BIES(i, wlen-1, cate=attrs[0]), update=train) for i in range(wlen)])
 
                     if use_tokentype:
                         type_seq.extend(
@@ -585,7 +595,6 @@ def load_annotated_data_SL(
                 else:
                     update_token = to_be_registered(pword, train, freq_words, refer_unigrams)
                     uni_seq.append(get_unigram_id(pword, update=update_token))
-                    pos_seq.append(get_pos_id(pos, update=train))
 
                     if use_subtoken:
                         # TODO fix a case that token contains <NUM> and does not equal to <NUM>
@@ -594,6 +603,14 @@ def load_annotated_data_SL(
                         else:
                             sub_seq.append(
                                 [get_subtoken_id(pword[i], update_token) for i in range(wlen)])
+
+                    for i in range(num_attrs):
+                        attr = attrs[i]
+                        if attr_dics[i][constants.ATTR_CHUNKING] == True:
+                            tmp = attr
+                        else:
+                            tmp = get_ith_attr_id[i](attr, update=train)
+                        attr_seq_list[i].append(tmp)
 
             if segmentation:
                 if use_bigram:
@@ -632,8 +649,11 @@ def load_annotated_data_SL(
                 subtoken_seqs.append(sub_seq)
             if seg_seq:
                 seg_seqs.append(seg_seq)
-            if pos_seq:
-                pos_seqs.append(pos_seq)
+            for i, attr_seq in enumerate(attr_seq_list):
+                if attr_dics[i][constants.ATTR_CHUNKING]:
+                    attr_seq = [get_ith_attr_id[i](attr, update=train) for attr in 
+                                get_labelseq_BIOES(attr_seq)]
+                attr_seqs_list[i].append(attr_seq)
 
             if ins_cnt % 100000 == 0:
                 print('Read', ins_cnt, 'sentences', file=sys.stderr)
@@ -646,8 +666,8 @@ def load_annotated_data_SL(
     outputs = []
     if seg_seqs:
         outputs.append(seg_seqs)
-    if pos_seqs:
-        outputs.append(pos_seqs)
+    for attr_seqs in attr_seqs_list:
+        outputs.append(attr_seqs)
 
     # tmp
     # cave = 0
@@ -661,110 +681,159 @@ def load_annotated_data_SL(
     return Data(inputs, outputs), dic
 
 
-# TODO fix
-"""
-Read data with WL (one word in a line) format.
-If tagging == True, the following format is expected for joint segmentation and POS tagging:
-  word1 \t pos1 \t otther attributes ...
-  word2 \t pos2 \t otther attributes ...
-  ...
-
-otherwise, the following format is expected for segmentation:
-  word1 \t otther attributes ...
-  word2 \t otther attributes ...
-  ...
-"""
 def load_annotated_data_WL(
-        path, train=True, 
-        segmentation=True, tagging=False, parsing=False, typed_parsing=False, attribute_annotation=False, 
-        use_pos=True, use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False, 
-        subpos_depth=-1, lowercase=False, normalize_digits=True, max_chunk_len=0, 
+        path, train=True, segmentation=True, tagging=False, parsing=False, typed_parsing=False, 
+        use_bigram=False, use_tokentype=False, use_subtoken=False, use_chunk_trie=False, 
+        attr_indexes=[], attr_depths=[], attr_target_labelsets=[],
+        lowercase=False, normalize_digits=True, max_chunk_len=0, 
         dic=None, freq_words=set(), freq_bigrams=set(),
         refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set(),
         add_gold_chunk=False, add_unknown_pretrained_chunk=True):
+
+    num_attrs = len(attr_indexes)
     if not dic:
         dic = dictionary.init_dictionary(
-            use_unigram=True, use_bigram=use_bigram, use_subtoken=use_subtoken, use_tokentype=use_tokentype,
-            use_seg_label=segmentation, use_pos_label=use_pos, use_arc_label=typed_parsing, 
-            use_attr_label=attribute_annotation, use_chunk_trie=use_chunk_trie, use_root=parsing)
+            use_unigram=True, use_bigram=use_bigram, use_subtoken=use_subtoken, 
+            use_tokentype=use_tokentype, num_attrs=num_attrs,
+            use_seg_label=segmentation, use_arc_label=typed_parsing, 
+            use_chunk_trie=use_chunk_trie, use_root=parsing)
 
     attr_delim = constants.WL_ATTR_DELIM
+    ins_cnt = 0
     word_clm = 0
-    pos_clm = 1
     head_clm = 2
     arc_clm = 3
-    attr_clm = 3
-
-    ins_cnt = 0
+    attr_dics = []
 
     token_seqs = []
     bigram_seqs = []            # only available for segmentation
     toktype_seqs = []           # only available for segmentation
     subtoken_seqs = []
     seg_seqs = []               # list of segmentation label sequences
-    pos_seqs = []               # list of POS label sequences
     head_seqs = []              # list of head id sequences
     arc_seqs = []               # list of arc label sequences
-    attr_seqs = []              # list of attribute label sequences
+    attr_seqs_list = [[] for i in range(num_attrs)]
+    # attr_seqs_list = [None] * num_attrs
+    # for i in range(num_attrs):
+    #     attr_seqs_list[i] = []
     
     get_unigram_id = dic.tables[constants.UNIGRAM].get_id
     get_bigram_id = dic.tables[constants.BIGRAM].get_id if use_bigram else None
     get_toktype_id = dic.tables[constants.TOKEN_TYPE].get_id if use_tokentype else None
     get_subtoken_id = dic.tables[constants.SUBTOKEN].get_id if use_subtoken else None
     get_seg_id = dic.tables[constants.SEG_LABEL].get_id if segmentation else None
-    get_pos_id = dic.tables[constants.POS_LABEL].get_id if use_pos else None
     get_arc_id = dic.tables[constants.ARC_LABEL].get_id if typed_parsing else None
-    get_attr_id = dic.tables[constants.ATTR_LABEL].get_id if attribute_annotation else None
     get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id if use_chunk_trie else None
+    get_ith_attr_id = []
+    for i in range(num_attrs): 
+        get_ith_attr_id.append(dic.tables[constants.ATTR_LABEL(i)].get_id)
 
     uni_seq_ = [get_unigram_id(constants.ROOT_SYMBOL)] if parsing else []
     bi_seq_ = []                # not used for parsing
     type_seq_ = []              # not used for parsing
     sub_seq_ = [[get_subtoken_id(constants.ROOT_SYMBOL)]] if parsing and use_subtoken else []
     seg_seq_ = []
-    pos_seq_ = [get_pos_id(constants.ROOT_SYMBOL)] if parsing and use_pos else []
     head_seq_ = [constants.NO_PARENTS_ID] if parsing else []
     arc_seq_ = [constants.NO_PARENTS_ID] if typed_parsing else []
-    attr_seq_ = []              # not used for parsing
+    def init_attr_seq_list(num_attrs, get_ith_attr_id, parsing):
+        if parsing:
+            return [[get_ith_attr_id[i](constants.ROOT_SYMBOL)] for i in range(num_attrs)]
+        else:
+            return [[] for i in range(num_attrs)]
 
     with open(path) as f:
-        # tcounter = Counter()    # tmp
-        # n_tokens = 0            # tmp
-        # ccounter = Counter()    # tmp
-        # n_chunks = 0            # tmp
         uni_seq = uni_seq_.copy()
         bi_seq = bi_seq_.copy()
         type_seq = type_seq_.copy()
         sub_seq = sub_seq_.copy()
         seg_seq = seg_seq_.copy()
-        pos_seq = pos_seq_.copy() 
         head_seq = head_seq_.copy() 
         arc_seq = arc_seq_.copy() 
-        attr_seq = attr_seq_.copy()
+        attr_seq_list = init_attr_seq_list(num_attrs, get_ith_attr_id, parsing)
         pstr = ''
 
         for line in f:
-            line = re.sub(' +', ' ', line).strip(' \t\n')
+            line = re.sub(' +', ' ', line).strip('\n')
+            tmp = line.strip('\t')
+            if not tmp:
+                line = tmp
+            
+            if len(line) > 0 and line[0] == constants.COMMENT_SYM:
+                if line.startswith(constants.ATTR_DELIM_TXT):
+                    attr_delim = line.split(constants.KEY_VALUE_DELIM)[1]
+                    print('Read attribute delimiter: \'{}\''.format(attr_delim), file=sys.stderr)
 
-            if len(line) < 1:
+                elif line.startswith(constants.WORD_CLM_TXT):
+                    word_clm = int(line.split('=')[1]) - 1
+                    print('Read word column id:', word_clm+1, file=sys.stderr)
+
+                elif line.startswith(constants.HEAD_CLM_TXT):
+                    head_clm = int(line.split('=')[1]) - 1
+                    print('Read head label column id:', head_clm+1, file=sys.stderr)
+
+                elif line.startswith(constants.ARC_CLM_TXT) and typed_parsing:
+                    arc_clm = int(line.split('=')[1]) - 1
+                    print('Read arc label column id:', arc_clm+1, file=sys.stderr)
+
+                elif line.startswith(constants.ATTR_CLM_TXT):
+                    # e.g., '#ATTR_COLUMN:index=X,chunking=X'
+                    array = line.split(constants.KEY_VALUE_DELIM)[1].split(constants.ATTR_INFO_DELIM)
+                    info = {}
+                    ignore_flag = True
+
+                    for kv in array:
+                        pair = kv.split(constants.ATTR_INFO_DELIM2)
+                        key = pair[0]
+                        val = pair[1]
+
+                        if key == constants.ATTR_INDEX:
+                            if int(val) in attr_indexes:
+                                info[key] = int(val)
+                                ignore_flag = False
+                            else:
+                                break
+
+                        elif key == constants.ATTR_CHUNKING:
+                            info[key] = val.lower() == 't'
+                            if info[key]:
+                                get_ith_attr_id[len(attr_dics)](constants.O, update=train)
+
+                    if not ignore_flag:
+                        if not constants.ATTR_CHUNKING in info:
+                            info[constants.ATTR_CHUNKING] = False
+                        index = attr_indexes.index(info[constants.ATTR_INDEX])
+                        attr_dics.insert(index, info)
+                        print('Read attribute label info:', info, file=sys.stderr)
+                    
+                continue
+
+            elif len(line) < 1:
                 if len(uni_seq) - (1 if parsing else 0) > 0:
                     if segmentation:
                         if use_bigram:
                             str_bigrams = create_all_char_ngrams(pstr, 2)
                             str_bigrams.append('{}{}'.format(pstr[-1], constants.EOS))
                             bi_seq = [
-                                get_bigram_id(sb, update=to_be_registered(sb, train, freq_bigrams, refer_bigrams))
+                                get_bigram_id(
+                                    sb, update=to_be_registered(sb, train, freq_bigrams, refer_bigrams))
                                 for sb in str_bigrams]
 
                         if use_chunk_trie:
+                            spans_gold = get_segmentation_spans(seg_seq)
                             for n in range(1, max_chunk_len+1):
-                                cid_ngrams = create_all_char_ngrams(uni_seq, n)
-                                str_ngrams = create_all_char_ngrams(pstr, n)
-                                for cn, sn in zip (cid_ngrams, str_ngrams):
-                                    if (sn in refer_chunks and
-                                        to_be_registered(sn, train, freq_words, refer_chunks)):
-                                        # to_be_registered(sn, train, freq_words, set())):
-                                        get_chunk_id(cn, sn, True)
+                                span_ngrams = create_all_char_ngram_indexes(uni_seq, n)
+                                cid_ngrams = [uni_seq[span[0]:span[1]] for span in span_ngrams]
+                                str_ngrams = [pstr[span[0]:span[1]] for span in span_ngrams]
+                                for span, cn, sn in zip (span_ngrams, cid_ngrams, str_ngrams):
+                                    is_pretrained_chunk = not refer_chunks or sn in refer_chunks
+                                    if train:
+                                        is_gold_chunk = add_gold_chunk and span in spans_gold
+                                        pass_freq_filter = not freq_words or sn in freq_words
+                                        if pass_freq_filter and (is_gold_chunk or is_pretrained_chunk):
+                                            ci = get_chunk_id(cn, sn, True)
+                                    else:
+                                        if add_unknown_pretrained_chunk and is_pretrained_chunk:
+                                            ci = get_chunk_id(cn, sn, True)
 
                     if uni_seq:
                         token_seqs.append(uni_seq)
@@ -781,18 +850,24 @@ def load_annotated_data_WL(
                     if seg_seq:
                         seg_seqs.append(seg_seq)
                         seg_seq = seg_seq_.copy()
-                    if pos_seq:
-                        pos_seqs.append(pos_seq)
-                        pos_seq = pos_seq_.copy()
                     if head_seq:
                         head_seqs.append(head_seq)
                         head_seq = head_seq_.copy()
                     if arc_seq:
                         arc_seqs.append(arc_seq)
                         arc_seq = arc_seq_.copy()
-                    if attr_seq:
-                        attr_seqs.append(attr_seq)
-                        attr_seq = attr_seq_.copy()
+                    for i, attr_seq in enumerate(attr_seq_list):
+                        if attr_dics[i][constants.ATTR_CHUNKING]:
+                            if train:
+                                for attr in attr_seq:
+                                    if attr:
+                                        [get_ith_attr_id[i]('{}-{}'.format(seg_lab, attr), True)
+                                         for seg_lab in constants.SEG_LABELS]
+
+                            attr_seq = [get_ith_attr_id[i](attr, update=train) for attr in 
+                                        get_labelseq_BIOES(attr_seq)]
+                        attr_seqs_list[i].append(attr_seq)
+                        attr_seq_list = init_attr_seq_list(num_attrs, get_ith_attr_id, parsing)
                     pstr = ''
 
                     ins_cnt += 1
@@ -801,68 +876,34 @@ def load_annotated_data_WL(
 
                 continue
 
-            elif line[0] == constants.COMMENT_SYM:
-
-                if line.startswith(constants.ATTR_DELIM_TXT):
-                    attr_delim = line.split(constants.KEY_VALUE_DELIM)[1]
-                    print('Read attribute delimiter: \'{}\''.format(attr_delim), file=sys.stderr)
-
-                elif line.startswith(constants.WORD_CLM_TXT):
-                    word_clm = int(line.split('=')[1]) - 1
-                    print('Read word column id:', word_clm+1, file=sys.stderr)
-
-                elif line.startswith(constants.POS_CLM_TXT):
-                    pos_clm = int(line.split('=')[1]) - 1
-                    print('Read 1st label column id:', pos_clm+1, file=sys.stderr)
-
-                    if pos_clm < 0:
-                        use_pos = False
-                        pos_seqs = pos_seq = pos_seq_ = []
-                        if dic.has_table(constants.POS_LABEL):
-                            del dic.tables[constants.POS_LABEL]
-                        if tagging: 
-                            print('POS label is mandatory for POS tagging', file=sys.stderr)
-                            sys.exit()
-
-                elif line.startswith(constants.HEAD_CLM_TXT):
-                    head_clm = int(line.split('=')[1]) - 1
-                    print('Read 2nd label column id:', head_clm+1, file=sys.stderr)
-
-                elif line.startswith(constants.ARC_CLM_TXT):
-                    arc_clm = int(line.split('=')[1]) - 1
-                    print('Read 3rd label column id:', arc_clm+1, file=sys.stderr)
-
-                elif line.startswith(constants.ATTR_CLM_TXT):
-                    attr_clm = int(line.split('=')[1]) - 1
-                    print('Read 4th label column id:', attr_clm+1, file=sys.stderr)
-
-                continue
-
             array = line.split(attr_delim)
             pword = preprocess_token(array[word_clm], lowercase, normalize_digits, refer_unigrams)
             pstr += pword
-
-            if use_pos:
-                pos = get_subpos(array[pos_clm], subpos_depth)
-                if segmentation and train:
-                    for seg_lab in constants.SEG_LABELS:
-                        get_seg_id('{}-{}'.format(seg_lab, pos) , True)
-            else:
-                pos = None
-
             wlen = len(pword)
+
+            attrs = [None] * max(num_attrs, 1)
+            # attrs = [None] * num_attrs
+
+            for i in range(num_attrs):
+                attrs[i] = array[attr_dics[i][constants.ATTR_INDEX]-1]
+                if attr_target_labelsets[i]:
+                    if not attrs[i] in attr_target_labelsets[i]:
+                        attrs[i] = '' # ignore
+
+                if attr_depths[i] > 0:
+                    attrs[i] = get_subpos(attrs[i], attr_depths[i])
+
+                if segmentation and train and i == 0: # tmp
+                    for seg_lab in constants.SEG_LABELS:
+                        get_seg_id('{}-{}'.format(seg_lab, attrs[i]), True)
+
             if segmentation:
-                # if not (pword.startswith('ｈｔｔｐ') or '＠' in pword):
-                    # ccounter[wlen] += 1    # tmp
-                    # n_chunks += 1          # tmp
-                    # tcounter[wlen] += wlen # tmp
-                    # n_tokens += wlen       # tmp
-                
                 uni_seq.extend([get_unigram_id(pword[i], True) for i in range(wlen)])
 
+                # tentative: attrs[0] indicates POS
                 seg_seq.extend(
                     [get_seg_id(
-                        get_label_BIES(i, wlen-1, cate=pos), update=train) for i in range(wlen)])
+                        get_label_BIES(i, wlen-1, cate=attrs[0]), update=train) for i in range(wlen)])
 
                 if use_tokentype:
                     type_seq.extend(
@@ -879,25 +920,23 @@ def load_annotated_data_WL(
                     else:
                         sub_seq.append([get_subtoken_id(pword[i], update_token) for i in range(len(pword))])
 
-            if use_pos:
-                pos_seq.append(get_pos_id(pos, update=train))
+                for i in range(num_attrs):
+                    attr = attrs[i]
+                    if attr_dics[i][constants.ATTR_CHUNKING] == True:
+                        tmp = attr
+                    else:
+                        tmp = get_ith_attr_id[i](attr, update=train)
+                    attr_seq_list[i].append(tmp)
 
-            if parsing:
-                head = int(array[head_clm])
-                if head < 0:
-                    head = 0
-                head_seq.append(head)
+                if parsing:
+                    head = int(array[head_clm])
+                    if head < 0:
+                        head = 0
+                    head_seq.append(head)
 
-            if typed_parsing:
-                arc = array[arc_clm]
-                arc_seq.append(get_arc_id(arc, update=train))
-                
-            if attribute_annotation:
-                if len(array) > attr_clm:
-                    attr = array[attr_clm]
-                else:
-                    attr = constants.NONE_SYMBOL
-                attr_seq.append(get_attr_id(attr, update=train))
+                if typed_parsing:
+                    arc = array[arc_clm]
+                    arc_seq.append(get_arc_id(arc, update=train))
 
         n_non_words = 1 if parsing else 0
         if len(uni_seq) - n_non_words > 0:
@@ -908,17 +947,24 @@ def load_annotated_data_WL(
                     bi_seq = [
                         get_bigram_id(sb, update=to_be_registered(sb, train, freq_bigrams, refer_bigrams))
                         for sb in str_bigrams]
-                                      
 
                 if use_chunk_trie:
-                    for n in range(1, max_chunk_len+1):
-                        cid_ngrams = create_all_char_ngrams(uni_seq, n)
-                        str_ngrams = create_all_char_ngrams(pstr, n)
-                        for cn, sn in zip (cid_ngrams, str_ngrams):
-                            if (sn in refer_chunks and
-                                to_be_registered(sn, train, freq_words, refer_chunks)):
-                                # to_be_registered(sn, train, freq_words, set())):
-                                get_chunk_id(cn, sn, True)
+                    if use_chunk_trie:
+                        spans_gold = get_segmentation_spans(seg_seq)
+                        for n in range(1, max_chunk_len+1):
+                            span_ngrams = create_all_char_ngram_indexes(uni_seq, n)
+                            cid_ngrams = [uni_seq[span[0]:span[1]] for span in span_ngrams]
+                            str_ngrams = [pstr[span[0]:span[1]] for span in span_ngrams]
+                            for span, cn, sn in zip (span_ngrams, cid_ngrams, str_ngrams):
+                                is_pretrained_chunk = not refer_chunks or sn in refer_chunks
+                                if train:
+                                    is_gold_chunk = add_gold_chunk and span in spans_gold
+                                    pass_freq_filter = not freq_words or sn in freq_words
+                                    if pass_freq_filter and (is_gold_chunk or is_pretrained_chunk):
+                                        ci = get_chunk_id(cn, sn, True)
+                                else:
+                                    if add_unknown_pretrained_chunk and is_pretrained_chunk:
+                                        ci = get_chunk_id(cn, sn, True)
 
             token_seqs.append(uni_seq)
             if bi_seq:
@@ -929,14 +975,11 @@ def load_annotated_data_WL(
                 subtoken_seqs.append(sub_seq)
             if seg_seq:
                 seg_seqs.append(seg_seq)
-            if pos_seq:
-                pos_seqs.append(pos_seq)
-            if head_seq:
-                head_seqs.append(head_seq)
-            if arc_seq:
-                arc_seqs.append(arc_seq)
-            if attr_seq:
-                attr_seqs.append(attr_seq)
+            for i, attr_seq in enumerate(attr_seq_list):
+                if attr_dics[i][constants.ATTR_CHUNKING]:
+                    attr_seq = [get_ith_attr_id[i](attr, update=train) for attr in 
+                                get_labelseq_BIOES(attr_seq)]
+                attr_seqs_list[i].append(attr_seq)
 
     inputs = [token_seqs]
     inputs.append(bigram_seqs if bigram_seqs else None)
@@ -946,25 +989,14 @@ def load_annotated_data_WL(
     outputs = []
     if seg_seqs:
         outputs.append(seg_seqs)
-    if pos_seqs:
-        outputs.append(pos_seqs)
-    elif parsing or attribute_annotation:
+    for attr_seqs in attr_seqs_list:
+        outputs.append(attr_seqs)
+    if not attr_seqs_list and parsing:
         outputs.append(None)
     if head_seqs:
         outputs.append(head_seqs)
     if arc_seqs:
         outputs.append(arc_seqs)
-    if attr_seqs:
-        outputs.append(attr_seqs)
-
-    # tmp
-    # cave = 0
-    # for leng in ccounter.keys():
-    #     ccount = ccounter[leng]
-    #     crate = ccount / n_chunks
-    #     cave += leng * crate
-    #     print('len {}\t{}\t{}'.format(leng, ccount, crate*100))
-    # print('ave {}'.format(cave))
 
     return Data(inputs, outputs), dic
 
@@ -1495,6 +1527,30 @@ def get_label_BIES(index, last, cate=None):
     return '{}{}'.format(prefix, suffix)
 
 
+def get_labelseq_BIOES(seq):
+    N = len(seq)
+    ret = [constants.O] * N
+    for i, elem in enumerate(seq):
+        if not elem:
+            continue
+
+        prev = seq[i-1] if (i > 0 and seq[i-1]) else None
+        next = seq[i+1] if (i < N-1 and seq[i+1]) else None
+
+        if prev != elem:
+            if elem == next:
+                ret[i] = '{}-{}'.format(constants.B, elem)
+            else:
+                ret[i] = '{}-{}'.format(constants.S, elem)
+        else:
+            if elem == next:
+                ret[i] = '{}-{}'.format(constants.I, elem)
+            else:
+                ret[i] = '{}-{}'.format(constants.E, elem)
+
+    return ret
+
+
 def get_segmentation_spans(label_seq):
     spans = []
     first = -1
@@ -1608,13 +1664,14 @@ def add_chunk_sequences(
 
         # print('x', ' '.join([str(i)+':'+dic.tables[constants.UNIGRAM].id2str[t] for i,t in enumerate(tseq)]))
         # print('l', ' '.join([dic.tables[constants.SEG_LABEL].id2str[l] for l in lseq]))
-        # print('c', ' '.join([str(i)+':'+trie.id2chunk[c] for i,c in enumerate(chunk_seq)]))
+        # if chunk_seq:
+        #     print('c', ' '.join([str(i)+':'+trie.id2chunk[c] for i,c in enumerate(chunk_seq)]))
         # print('f', [str(i)+':'+str([trie.id2chunk[c] if c >= 0 else '-1' for c in raw]) for i,raw in enumerate(feats)])
         # print('gc', gchunk_seq)
         # print('mask0', mask0)
         # print('mask1', mask1)
         # for i in range(n):
-        #     print(i, char_index2feat_indexs(i, n, max_len))
+        #     print(i, token_index2feat_index(i, n, max_len))
         # print()
 
         if chunk_seq:

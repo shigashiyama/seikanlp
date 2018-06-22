@@ -10,7 +10,7 @@ from chainer import cuda
 import common
 import constants
 import arguments
-from trainers import tagger_trainer, parser_trainer, attribute_annotator_trainer
+from trainers import tagger_trainer, parser_trainer
 
 
 def run():
@@ -36,12 +36,8 @@ def run():
             trainer = tagger_trainer.HybridSegmenterTrainer(args)
         else:
             trainer = tagger_trainer.TaggerTrainer(args)
-    elif common.is_dual_st_task(args.task):
-        trainer = tagger_trainer.DualTaggerTrainer(args)
     elif common.is_parsing_task(args.task):
         trainer = parser_trainer.ParserTrainer(args)
-    elif common.is_attribute_annotation_task(args.task):
-        trainer = attribute_annotator_trainer.AttributeAnnotatorTrainer(args)
 
     ################################
     # Prepare GPU
@@ -59,12 +55,9 @@ def run():
     ################################
     # Load classifier model
 
-    if (args.model_path or 
-        'submodel_path' in args and args.submodel_path):
+    if args.model_path:
         trainer.load_model()
     else:
-        # if args.dic_obj_path:
-        #     trainer.load_dic(args.dic_obj_path)
         trainer.init_hyperparameters()
 
     ################################

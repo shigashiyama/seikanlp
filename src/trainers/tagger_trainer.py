@@ -49,9 +49,12 @@ class TaggerTrainerBase(Trainer):
         if self.dic.has_table(constants.SEG_LABEL):
             id2seg = {v:k for k,v in self.dic.tables[constants.SEG_LABEL].str2id.items()}
             self.log('# seg labels: {}\n'.format(id2seg))
-        if self.dic.has_table(constants.POS_LABEL):
-            id2pos = {v:k for k,v in self.dic.tables[constants.POS_LABEL].str2id.items()}
-            self.log('# pos labels: {}\n'.format(id2pos))
+
+        attr_indexes = common.get_attribute_values(self.hparams['attr_indexes'])
+        for i in range(len(attr_indexes)):
+            if self.dic.has_table(constants.ATTR_LABEL(i)):
+                id2attr = {v:k for k,v in self.dic.tables[constants.ATTR_LABEL(i)].str2id.items()}
+                self.log('# {}-th attribute labels: {}\n'.format(i, id2attr))
         
         self.report('[INFO] vocab: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
         self.report('[INFO] data length: train={} devel={}'.format(
@@ -96,7 +99,10 @@ class TaggerTrainerBase(Trainer):
         lowercase = self.hparams['lowercase'] if 'lowercase' in self.hparams else False
         normalize_digits = self.hparams['normalize_digits'] if 'normalize_digits' else False
         use_subtoken = ('subtoken_embed_dim' in self.hparams and self.hparams['subtoken_embed_dim'] > 0)
-        subpos_depth = self.hparams['subpos_depth'] if 'subpos_depth' in self.hparams else -1
+        if 'attr_depths' in self.hparams:
+            attr_depths = common.get_attribute_values(self.hparams['attr_depths'])
+        else:
+            attr_depths = [-1]
 
         print('Please input text or type \'q\' to quit this mode:')
         while True:
@@ -109,7 +115,7 @@ class TaggerTrainerBase(Trainer):
             rdata = data_io.parse_commandline_input(
                 line, self.dic, self.task, use_pos=use_pos,
                 lowercase=lowercase, normalize_digits=normalize_digits,
-                use_subtoken=use_subtoken, subpos_depth=subpos_depth)
+                use_subtoken=use_subtoken, subpos_depth=attr_depths[0])
 
             if self.hparams['feature_template']:
                 rdata.featvecs = self.feat_extractor.extract_features(ws[0], self.dic.tries[constants.CHUNK])
@@ -260,15 +266,18 @@ class TaggerTrainer(TaggerTrainerBase):
             'mlp_dropout' : self.args.mlp_dropout,
             'feature_template' : self.args.feature_template,
             'task' : self.args.task,
-            'subpos_depth' : self.args.subpos_depth,
+            'attr_indexes' : self.args.attribute_column_indexes,
+            'attr_depths' : self.args.attribute_depths,
+            'attr_predictions' : self.args.attribute_predictions,
+            'attr_target_labelsets' : self.args.attribute_target_labelsets,
             'lowercase' : self.args.lowercase,
             'normalize_digits' : self.args.normalize_digits,
             'token_freq_threshold' : self.args.token_freq_threshold,
             'token_max_vocab_size' : self.args.token_max_vocab_size,
             'bigram_freq_threshold' : self.args.bigram_freq_threshold,
             'bigram_max_vocab_size' : self.args.bigram_max_vocab_size,
-            'chunk_freq_threshold' : self.args.chunk_freq_threshold,
-            'chunk_max_vocab_size' : self.args.chunk_max_vocab_size,
+            # 'chunk_freq_threshold' : self.args.chunk_freq_threshold,
+            # 'chunk_max_vocab_size' : self.args.chunk_max_vocab_size,
         }
 
         self.log('Init hyperparameters')
@@ -303,7 +312,6 @@ class TaggerTrainer(TaggerTrainerBase):
                     key == 'rnn_n_units' or
                     key == 'mlp_n_layers'or
                     key == 'mlp_n_units' or
-                    key == 'subpos_depth' or
                     key == 'token_freq_threshold' or
                     key == 'token_max_vocab_size' or
                     key == 'bigram_freq_threshold' or
@@ -327,6 +335,14 @@ class TaggerTrainer(TaggerTrainerBase):
                     val = (val.lower() == 'true')
 
                 hparams[key] = val
+
+        # tmp
+        if not 'attr_indexes' in hparams:
+            hparams['attr_indexes'] = ''
+        if not 'attr_depths' in hparams:
+            hparams['attr_depths'] = ''
+        if not 'attr_target_labelsets' in hparams:
+            hparams['attr_target_labelsets'] = ''
 
         self.hparams = hparams
         self.task = self.hparams['task']
@@ -399,12 +415,12 @@ class TaggerTrainer(TaggerTrainerBase):
 
 
     def setup_evaluator(self):
-        if self.task == constants.TASK_TAG and self.args.ignored_labels:
+        if self.task == constants.TASK_TAG and self.args.ignored_labels: # TODO fix
             tmp = self.args.ignored_labels
             self.args.ignored_labels = set()
 
             for label in tmp.split(','):
-                label_id = self.dic.tables[constants.POS_LABEL].get_id(label)
+                label_id = self.dic.tables[constants.ATTR_LABEL(0)].get_id(label)
                 if label_id >= 0:
                     self.args.ignored_labels.add(label_id)
 
@@ -413,7 +429,9 @@ class TaggerTrainer(TaggerTrainerBase):
         else:
             self.args.ignored_labels = set()
 
-        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignored_labels)
+        attr_predictions = common.get_attribute_boolvalues(self.args.attribute_predictions)
+        self.evaluator = classifiers.init_evaluator(
+            self.task, self.dic, attr_predictions, self.args.ignored_labels)
         self.evaluator.calculator.id2token = self.dic.tables[constants.UNIGRAM].id2str # tmp
 
 
@@ -642,7 +660,10 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
             'mlp_dropout' : self.args.mlp_dropout,
             'feature_template' : self.args.feature_template,
             'task' : self.args.task,
-            'subpos_depth' : self.args.subpos_depth,
+            'attr_indexes' : self.args.attribute_column_indexes,
+            'attr_depths' : self.args.attribute_depths,
+            'attr_predictions' : self.args.attribute_predictions,
+            'attr_target_labelsets' : self.args.attribute_target_labelsets,
             'lowercase' : self.args.lowercase,
             'normalize_digits' : self.args.normalize_digits,
             'token_freq_threshold' : self.args.token_freq_threshold,
@@ -660,32 +681,6 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
             self.log('# {}'.format(message))
             self.report('[INFO] arg: {}'.format(message))
         self.log('')
-
-
-    # def init_additional_hyperparameters(self):
-    #     if self.chunk_embed_model:
-    #         pretrained_chunk_embed_dim = self.chunk_embed_model.wv.syn0[0].shape[0]
-    #     else:
-    #         pretrained_chunk_embed_dim = 0
-
-    #     add_hparams = {
-    #         'task' : self.args.task,
-    #         'pretrained_chunk_embed_dim' : pretrained_chunk_embed_dim,
-    #         'pretrained_embed_usage' : self.args.pretrained_embed_usage,
-    #         'chunk_loss_ratio' : self.args.chunk_loss_ratio,
-    #         'use_attention' : self.args.use_attention,
-    #         'use_gold_chunk' : self.args.use_gold_chunk,
-    #         'use_unknown_pretrained_chunk' : self.args.use_unknown_pretrained_chunk,
-    #         'max_chunk_len' : self.args.max_chunk_len,
-    #         'chunk_embed_dim' : self.args.chunk_embed_dim,
-    #         'rnn_n_layers2' : self.args.rnn_n_layers2,
-    #         'rnn_n_units2' : self.args.rnn_n_units2,
-    #         'biaffine_dropout' : self.args.biaffine_dropout,
-    #         'chunk_vector_dropout' : self.args.chunk_vector_dropout,
-    #         'chunk_vector_element_dropout' : self.args.chunk_vector_element_dropout,
-    #     }
-
-    #     return add_hparams
 
 
     def load_hyperparameters(self, hparams_path):
@@ -716,7 +711,6 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
                     key == 'rnn_n_units2' or
                     key == 'mlp_n_layers'or
                     key == 'mlp_n_units' or
-                    key == 'subpos_depth' or
                     key == 'token_freq_threshold' or
                     key == 'token_max_vocab_size' or
                     key == 'bigram_freq_threshold' or
@@ -747,6 +741,14 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
                     val = (val.lower() == 'true')
 
                 hparams[key] = val
+
+        # tmp
+        if not 'attr_indexes' in hparams:
+            hparams['attr_indexes'] = ''
+        if not 'attr_depths' in hparams:
+            hparams['attr_depths'] = ''
+        if not 'attr_target_labelsets' in hparams:
+            hparams['attr_target_labelsets'] = ''
 
         self.hparams = hparams
         self.task = constants.TASK_HSEG
@@ -826,8 +828,8 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
         self.log('Start chunk search for test data (max_len={})\n'.format(self.hparams['max_chunk_len']))
         data_io.add_chunk_sequences(
             self.test, self.dic, max_len=self.hparams['max_chunk_len'], evaluate=True,
-            use_attention=True, use_concat=use_concat) # tmp
-            # use_attention=use_attention, use_concat=use_concat)
+            # use_attention=True, use_concat=use_concat) # tmp - 20180622 comment out
+            use_attention=use_attention, use_concat=use_concat)
 
 
     def load_decode_data(self):
@@ -846,11 +848,11 @@ class HybridSegmenterTrainer(TaggerTrainerBase):
             self.decode_data, self.dic, max_len=self.hparams['max_chunk_len'], evaluate=False,
             use_attention=use_attention, use_concat=use_concat)
 
+
     def setup_optimizer(self):
         super().setup_optimizer()
 
         delparams = []
-
         if self.unigram_embed_model and self.hparams['fix_pretrained_embed']:
             delparams.append('pretrained_unigram_embed/W')
         if self.bigram_embed_model and self.hparams['fix_pretrained_embed']:
@@ -1092,225 +1094,225 @@ class Counts(object):
             self.scorrect += 1
 
 
-class DualTaggerTrainer(TaggerTrainerBase):
-    def __init__(self, args, logger=sys.stderr):
-        super().__init__(args, logger)
-        self.su_tagger = None
-        self.label_begin_index = 2
+# class DualTaggerTrainer(TaggerTrainerBase):
+#     def __init__(self, args, logger=sys.stderr):
+#         super().__init__(args, logger)
+#         self.su_tagger = None
+#         self.label_begin_index = 2
 
 
-    def load_hyperparameters(self, hparams_path):
-        hparams = {}
-        with open(hparams_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith('#'):
-                    continue
+#     def load_hyperparameters(self, hparams_path):
+#         hparams = {}
+#         with open(hparams_path, 'r') as f:
+#             for line in f:
+#                 line = line.strip()
+#                 if line.startswith('#'):
+#                     continue
 
-                kv = line.split('=')
-                key = kv[0]
-                val = kv[1]
+#                 kv = line.split('=')
+#                 key = kv[0]
+#                 val = kv[1]
 
-                if (key == 'pretrained_unigram_embed_dim' or
-                    key == 'unigram_embed_dim' or
-                    key == 'subtoken_embed_dim' or
-                    key == 'additional_feat_dim' or
-                    key == 'rnn_n_layers' or
-                    key == 'rnn_n_units' or
-                    key == 'mlp_n_layers'or
-                    key == 'mlp_n_units' or
-                    key == 'subpos_depth' or
-                    key == 'freq_threshold' or
-                    key == 'max_vocab_size'
-                ):
-                    val = int(val)
+#                 if (key == 'pretrained_unigram_embed_dim' or
+#                     key == 'unigram_embed_dim' or
+#                     key == 'subtoken_embed_dim' or
+#                     key == 'additional_feat_dim' or
+#                     key == 'rnn_n_layers' or
+#                     key == 'rnn_n_units' or
+#                     key == 'mlp_n_layers'or
+#                     key == 'mlp_n_units' or
+#                     key == 'subpos_depth' or
+#                     key == 'freq_threshold' or
+#                     key == 'max_vocab_size'
+#                 ):
+#                     val = int(val)
 
-                elif (key == 'rnn_dropout' or
-                      key == 'mlp_dropout'
-                ):
-                    val = float(val)
+#                 elif (key == 'rnn_dropout' or
+#                       key == 'mlp_dropout'
+#                 ):
+#                     val = float(val)
 
-                elif (key == 'rnn_bidirection' or
-                      key == 'lowercase' or
-                      key == 'normalize_digits' or
-                      key == 'fix_pretrained_embed'
-                ):
-                    val = (val.lower() == 'true')
+#                 elif (key == 'rnn_bidirection' or
+#                       key == 'lowercase' or
+#                       key == 'normalize_digits' or
+#                       key == 'fix_pretrained_embed'
+#                 ):
+#                     val = (val.lower() == 'true')
 
-                hparams[key] = val
+#                 hparams[key] = val
 
-        self.hparams = hparams
+#         self.hparams = hparams
 
-        self.task = self.hparams['task']
+#         self.task = self.hparams['task']
         
 
-    def init_hyperparameters(self):
-        self.log('Initialize hyperparameters for full model\n')
+#     def init_hyperparameters(self):
+#         self.log('Initialize hyperparameters for full model\n')
 
-        # keep most of loaded params from sub model and update some params from args
-        self.log('### arguments')
-        for k, v in self.args.__dict__.items():
-            if ('dropout' in k or
-                k == 'ignore_unknown_pretrained_chunk' or
-                k == 'submodel_usage'):
-                self.hparams[k] = v
-                message = '{}={}'.format(k, v)            
+#         # keep most of loaded params from sub model and update some params from args
+#         self.log('### arguments')
+#         for k, v in self.args.__dict__.items():
+#             if ('dropout' in k or
+#                 k == 'ignore_unknown_pretrained_chunk' or
+#                 k == 'submodel_usage'):
+#                 self.hparams[k] = v
+#                 message = '{}={}'.format(k, v)            
 
-            elif k in self.hparams and v != self.hparams[k]:
-                message = '{}={} (input option value {} was discarded)'.format(k, self.hparams[k], v)
+#             elif k in self.hparams and v != self.hparams[k]:
+#                 message = '{}={} (input option value {} was discarded)'.format(k, self.hparams[k], v)
 
-            else:
-                message = '{}={}'.format(k, v)
+#             else:
+#                 message = '{}={}'.format(k, v)
 
-            self.log('# {}'.format(message))
-            self.report('[INFO] arg: {}'.format(message))
-        self.log('')
-
-
-    def init_model(self):
-        self.log('Initialize model from hyperparameters\n')
-        self.classifier = classifiers.init_classifier(self.task, self.hparams, self.dic)
+#             self.log('# {}'.format(message))
+#             self.report('[INFO] arg: {}'.format(message))
+#         self.log('')
 
 
-    def load_model(self):
-        if self.args.model_path:
-            super().load_model()
-            if 'rnn_dropout' in self.hparams:
-                self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
-            if 'hidden_mlp_dropout' in self.hparams:
-                self.classifier.change_hidden_mlp_dropout_ratio(self.hparams['hidden_mlp_dropout'])
-
-        elif self.args.submodel_path:
-            self.load_submodel()
-            self.init_hyperparameters()
-
-        else:
-            print('Error: model_path or sub_model_path must be specified for {}'.format(self.task))
-            sys.exit()
+#     def init_model(self):
+#         self.log('Initialize model from hyperparameters\n')
+#         self.classifier = classifiers.init_classifier(self.task, self.hparams, self.dic)
 
 
-    def load_submodel(self):
-        model_path = self.args.submodel_path
-        array = model_path.split('_e')
-        dic_path = '{}.s2i'.format(array[0])
-        hparam_path = '{}.hyp'.format(array[0])
-        param_path = model_path
+#     def load_model(self):
+#         if self.args.model_path:
+#             super().load_model()
+#             if 'rnn_dropout' in self.hparams:
+#                 self.classifier.change_rnn_dropout_ratio(self.hparams['rnn_dropout'])
+#             if 'hidden_mlp_dropout' in self.hparams:
+#                 self.classifier.change_hidden_mlp_dropout_ratio(self.hparams['hidden_mlp_dropout'])
 
-        # dictionary
-        self.load_dic(dic_path)
+#         elif self.args.submodel_path:
+#             self.load_submodel()
+#             self.init_hyperparameters()
 
-        # hyper parameters
-        self.load_hyperparameters(hparam_path)
-        self.log('Load hyperparameters from short unit model: {}\n'.format(hparam_path))
-        for k, v in self.args.__dict__.items():
-            if 'dropout' in k:
-                self.hparams[k] = 0.0
-            elif k == 'task':
-                task = 'dual_{}'.format(self.hparams[k])
-                self.task = self.hparams[k] = task
-
-        # sub model
-        hparams_sub = self.hparams.copy()
-        self.log('Initialize short unit model from hyperparameters\n')
-        task_tmp = self.task.split('dual_')[1]
-        classifier_tmp = classifiers.init_classifier(
-            task_tmp, hparams_sub, self.dic)
-        chainer.serializers.load_npz(model_path, classifier_tmp)
-        self.su_tagger = classifier_tmp.predictor
-        self.log('Load short unit model parameters: {}\n'.format(model_path))
+#         else:
+#             print('Error: model_path or sub_model_path must be specified for {}'.format(self.task))
+#             sys.exit()
 
 
-    def update_model(self):
-        if (self.args.execute_mode == 'train' or
-            self.args.execute_mode == 'eval' or
-            self.args.execute_mode == 'decode'):
+#     def load_submodel(self):
+#         model_path = self.args.submodel_path
+#         array = model_path.split('_e')
+#         dic_path = '{}.s2i'.format(array[0])
+#         hparam_path = '{}.hyp'.format(array[0])
+#         param_path = model_path
 
-            super().update_model()
-            if self.su_tagger is not None:
-                self.classifier.integrate_submodel(self.su_tagger)
+#         # dictionary
+#         self.load_dic(dic_path)
 
+#         # hyper parameters
+#         self.load_hyperparameters(hparam_path)
+#         self.log('Load hyperparameters from short unit model: {}\n'.format(hparam_path))
+#         for k, v in self.args.__dict__.items():
+#             if 'dropout' in k:
+#                 self.hparams[k] = 0.0
+#             elif k == 'task':
+#                 task = 'dual_{}'.format(self.hparams[k])
+#                 self.task = self.hparams[k] = task
 
-    def setup_optimizer(self):
-        super().setup_optimizer()
-
-        delparams = []
-        delparams.append('su_tagger')
-        self.log('Fix parameters: su_tagger/*')
-        self.optimizer.add_hook(optimizers.DeleteGradient(delparams))
-
-
-    def setup_evaluator(self):
-        if self.task == constants.TASK_DUAL_TAG and self.args.ignored_labels:
-            tmp = self.args.ignored_labels
-            self.args.ignored_labels = set()
-
-            for label in tmp.split(','):
-                label_id = self.dic.tables[constants.POS_LABEL].get_id(label)
-                if label_id >= 0:
-                    self.args.ignored_labels.add(label_id)
-
-            self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignored_labels))
-
-        else:
-            self.args.ignored_labels = set()
-
-        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignored_labels)
+#         # sub model
+#         hparams_sub = self.hparams.copy()
+#         self.log('Initialize short unit model from hyperparameters\n')
+#         task_tmp = self.task.split('dual_')[1]
+#         classifier_tmp = classifiers.init_classifier(
+#             task_tmp, hparams_sub, self.dic)
+#         chainer.serializers.load_npz(model_path, classifier_tmp)
+#         self.su_tagger = classifier_tmp.predictor
+#         self.log('Load short unit model parameters: {}\n'.format(model_path))
 
 
-    def decode_batch(self, *inputs, orgseqs, file=sys.stdout):
-        su_sym = 'S\t' if self.args.output_data_format == constants.WL_FORMAT else ''
-        lu_sym = 'L\t' if self.args.output_data_format == constants.WL_FORMAT else ''
+#     def update_model(self):
+#         if (self.args.execute_mode == 'train' or
+#             self.args.execute_mode == 'eval' or
+#             self.args.execute_mode == 'decode'):
 
-        ys_short, ys_long = self.classifier.decode(*inputs)
+#             super().update_model()
+#             if self.su_tagger is not None:
+#                 self.classifier.integrate_submodel(self.su_tagger)
 
-        id2token = self.dic.tables[constants.UNIGRAM].id2str
-        id2label = self.dic.tables[constants.SEG_LABEL if 'seg' in self.task else constants.POS_LABEL].id2str
 
-        for x_str, sy, ly in zip(orgseqs, ys_short, ys_long):
-            sy_str = [id2label[int(yi)] for yi in sy]
-            ly_str = [id2label[int(yi)] for yi in ly]
+#     def setup_optimizer(self):
+#         super().setup_optimizer()
 
-            if self.task == constants.TASK_DUAL_TAG:
-                res1 = ['{}{}{}'.format(xi_str, self.args.output_attr_delim, yi_str) 
-                        for xi_str, yi_str in zip(x_str, sy_str)]
-                res1 = ' '.join(res1)
-                res2 = ['{}{}{}'.format(xi_str, self.args.output_attr_delim, yi_str) 
-                        for xi_str, yi_str in zip(x_str, ly_str)]
-                res2 = ' '.join(res2)
+#         delparams = []
+#         delparams.append('su_tagger')
+#         self.log('Fix parameters: su_tagger/*')
+#         self.optimizer.add_hook(optimizers.DeleteGradient(delparams))
 
-            elif self.task == constants.TASK_DUAL_SEG:
-                res1 = [xi_str + self.args.output_token_delim + su_sym
-                         if yi_str.startswith('E') or yi_str.startswith('S') else xi_str
-                        for xi_str, yi_str in zip(x_str, ly_str)]
-                res1 = ''.join(res1).rstrip('S\t\n')
-                res2 = [xi_str + self.args.output_token_delim + lu_sym
-                        if yi_str.startswith('E') or yi_str.startswith('S') else xi_str
-                        for xi_str, yi_str in zip(x_str, sy_str)]
-                res2 = ''.join(res2).rstrip('L\t\n')
 
-            elif self.task == constants.TASK_DUAL_SEGTAG:
-                res1 = ['{}{}'.format(
-                    xi_str, 
-                    (self.args.output_attr_delim+yi_str[2:]+self.args.output_token_delim) 
-                    if (yi_str.startswith('E-') or yi_str.startswith('S-')) else ''
-                ) for xi_str, yi_str in zip(x_str, sy_str)]
-                res1 = ''.join(res1).rstrip()
-                res2 = ['{}{}'.format(
-                    xi_str, 
-                    (self.args.output_attr_delim+yi_str[2:]+self.args.output_token_delim) 
-                    if (yi_str.startswith('E-') or yi_str.startswith('S-')) else ''
-                ) for xi_str, yi_str in zip(x_str, ly_str)]
-                res2 = ''.join(res2).rstrip()
+#     def setup_evaluator(self):
+#         if self.task == constants.TASK_DUAL_TAG and self.args.ignored_labels:
+#             tmp = self.args.ignored_labels
+#             self.args.ignored_labels = set()
 
-            else:
-                print('Error: Invalid decode type', file=self.logger)
-                sys.exit()
+#             for label in tmp.split(','):
+#                 label_id = self.dic.tables[constants.POS_LABEL].get_id(label)
+#                 if label_id >= 0:
+#                     self.args.ignored_labels.add(label_id)
 
-            if self.args.output_data_format == 'sl':
-                print('S:{}'.format(res1), file=file)
-                print('L:{}'.format(res2), file=file)
-            else:
-                print('S\t{}'.format(res1), file=file)
-                print('L\t{}'.format(res2), file=file)
-                print(file=file)
+#             self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignored_labels))
+
+#         else:
+#             self.args.ignored_labels = set()
+
+#         self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignored_labels)
+
+
+#     def decode_batch(self, *inputs, orgseqs, file=sys.stdout):
+#         su_sym = 'S\t' if self.args.output_data_format == constants.WL_FORMAT else ''
+#         lu_sym = 'L\t' if self.args.output_data_format == constants.WL_FORMAT else ''
+
+#         ys_short, ys_long = self.classifier.decode(*inputs)
+
+#         id2token = self.dic.tables[constants.UNIGRAM].id2str
+#         id2label = self.dic.tables[constants.SEG_LABEL if 'seg' in self.task else constants.POS_LABEL].id2str
+
+#         for x_str, sy, ly in zip(orgseqs, ys_short, ys_long):
+#             sy_str = [id2label[int(yi)] for yi in sy]
+#             ly_str = [id2label[int(yi)] for yi in ly]
+
+#             if self.task == constants.TASK_DUAL_TAG:
+#                 res1 = ['{}{}{}'.format(xi_str, self.args.output_attr_delim, yi_str) 
+#                         for xi_str, yi_str in zip(x_str, sy_str)]
+#                 res1 = ' '.join(res1)
+#                 res2 = ['{}{}{}'.format(xi_str, self.args.output_attr_delim, yi_str) 
+#                         for xi_str, yi_str in zip(x_str, ly_str)]
+#                 res2 = ' '.join(res2)
+
+#             elif self.task == constants.TASK_DUAL_SEG:
+#                 res1 = [xi_str + self.args.output_token_delim + su_sym
+#                          if yi_str.startswith('E') or yi_str.startswith('S') else xi_str
+#                         for xi_str, yi_str in zip(x_str, ly_str)]
+#                 res1 = ''.join(res1).rstrip('S\t\n')
+#                 res2 = [xi_str + self.args.output_token_delim + lu_sym
+#                         if yi_str.startswith('E') or yi_str.startswith('S') else xi_str
+#                         for xi_str, yi_str in zip(x_str, sy_str)]
+#                 res2 = ''.join(res2).rstrip('L\t\n')
+
+#             elif self.task == constants.TASK_DUAL_SEGTAG:
+#                 res1 = ['{}{}'.format(
+#                     xi_str, 
+#                     (self.args.output_attr_delim+yi_str[2:]+self.args.output_token_delim) 
+#                     if (yi_str.startswith('E-') or yi_str.startswith('S-')) else ''
+#                 ) for xi_str, yi_str in zip(x_str, sy_str)]
+#                 res1 = ''.join(res1).rstrip()
+#                 res2 = ['{}{}'.format(
+#                     xi_str, 
+#                     (self.args.output_attr_delim+yi_str[2:]+self.args.output_token_delim) 
+#                     if (yi_str.startswith('E-') or yi_str.startswith('S-')) else ''
+#                 ) for xi_str, yi_str in zip(x_str, ly_str)]
+#                 res2 = ''.join(res2).rstrip()
+
+#             else:
+#                 print('Error: Invalid decode type', file=self.logger)
+#                 sys.exit()
+
+#             if self.args.output_data_format == 'sl':
+#                 print('S:{}'.format(res1), file=file)
+#                 print('L:{}'.format(res2), file=file)
+#             else:
+#                 print('S\t{}'.format(res1), file=file)
+#                 print('L\t{}'.format(res2), file=file)
+#                 print(file=file)
 

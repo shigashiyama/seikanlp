@@ -44,17 +44,19 @@ class ParserTrainer(Trainer):
             self.classifier.change_pred_layers_dropout_ratio(self.hparams['pred_layers_dropout'])
             
 
-    def update_model(self):
-        id2uni = self.dic.tables[constants.UNIGRAM].id2str
-        model = self.classifier.predictor
+    def update_model(self, classifier=None, dic=None):
+        if not classifier:
+            classifier = self.classifier
+        if not dic:
+            dic = self.dic
 
         if (self.args.execute_mode == 'train' or
             self.args.execute_mode == 'eval' or
             self.args.execute_mode == 'decode'):
 
-            self.classifier.grow_embedding_layers(
-                self.dic, self.unigram_embed_model, train=(self.args.execute_mode=='train'))
-            self.classifier.grow_inference_layers(self.dic)
+            classifier.grow_embedding_layers(
+                dic, self.unigram_embed_model, train=(self.args.execute_mode=='train'))
+            classifier.grow_inference_layers(dic)
 
 
     def init_hyperparameters(self):
@@ -69,13 +71,11 @@ class ParserTrainer(Trainer):
             'fix_pretrained_embed' : self.args.fix_pretrained_embed,
             'unigram_embed_dim' : self.args.unigram_embed_dim,
             'subtoken_embed_dim' : self.args.subtoken_embed_dim,
-            'pos_embed_dim' : self.args.pos_embed_dim,
+            'attr0_embed_dim' : self.args.attr0_embed_dim,
             'rnn_unit_type' : self.args.rnn_unit_type,
             'rnn_bidirection' : self.args.rnn_bidirection,
             'rnn_n_layers' : self.args.rnn_n_layers,
             'rnn_n_units' : self.args.rnn_n_units,
-            # 'mlp4pospred_n_layers' : self.args.mlp4pospred_n_layers,
-            # 'mlp4pospred_n_units' : self.args.mlp4pospred_n_units,
             'mlp4arcrep_n_layers' : self.args.mlp4arcrep_n_layers,
             'mlp4arcrep_n_units' : self.args.mlp4arcrep_n_units,
             'mlp4labelrep_n_layers' : self.args.mlp4labelrep_n_layers,
@@ -86,7 +86,10 @@ class ParserTrainer(Trainer):
             'hidden_mlp_dropout' : self.args.hidden_mlp_dropout,
             'pred_layers_dropout' : self.args.pred_layers_dropout,
             'task' : self.args.task,
-            'subpos_depth' : self.args.subpos_depth,
+            'attr_indexes' : self.args.attribute_column_indexes,
+            'attr_depths' : self.args.attribute_depths,
+            'attr_predictions' : self.args.attribute_predictions,
+            'attr_target_labelsets' : self.args.attribute_target_labelsets,
             'lowercase' : self.args.lowercase,
             'normalize_digits' : self.args.normalize_digits,
             'token_freq_threshold' : self.args.token_freq_threshold,
@@ -118,18 +121,15 @@ class ParserTrainer(Trainer):
                     key == 'unigram_embed_dim' or
                     key == 'subtoken_embed_dim' or
                     key == 'pretrained_unigram_embed_dim' or
-                    key == 'pos_embed_dim' or
+                    key == 'attr0_embed_dim' or
                     key == 'rnn_n_layers' or
                     key == 'rnn_n_units' or
-                    # key == 'mlp4pospred_n_layers' or
-                    # key == 'mlp4pospred_n_units' or
                     key == 'mlp4arcrep_n_layers' or
                     key == 'mlp4arcrep_n_units' or
                     key == 'mlp4labelrep_n_layers' or
                     key == 'mlp4labelrep_n_units' or
                     key == 'mlp4labelpred_n_layers' or
                     key == 'mlp4labelpred_n_units' or
-                    key == 'subpos_depth' or
                     key == 'token_freq_threshold' or
                     key == 'token_max_vocab_size'
                 ):
@@ -169,18 +169,18 @@ class ParserTrainer(Trainer):
 
 
     def load_data_for_training(self):
-        refer_tokens = self.unigram_embed_model.wv if self.unigram_embed_model else set()
-        super().load_data_for_training(refer_tokens=refer_tokens)
+        refer_unigrams = self.unigram_embed_model.wv if self.unigram_embed_model else set()
+        super().load_data_for_training(refer_unigrams=refer_unigrams)
 
 
     def load_test_data(self):
-        refer_tokens = self.unigram_embed_model.wv if self.unigram_embed_model else set()
-        super().load_test_data(refer_tokens=refer_tokens)
+        refer_unigrams = self.unigram_embed_model.wv if self.unigram_embed_model else set()
+        super().load_test_data(refer_unigrams=refer_unigrams)
 
 
     def load_decode_data(self):
-        refer_tokens = self.unigram_embed_model.wv if self.unigram_embed_model else set()
-        super().load_decode_data(refer_tokens=refer_tokens)
+        refer_unigrams = self.unigram_embed_model.wv if self.unigram_embed_model else set()
+        super().load_decode_data(refer_unigrams=refer_unigrams)
 
 
     def show_training_data(self):
@@ -200,9 +200,11 @@ class ParserTrainer(Trainer):
         if self.dic.has_table(constants.SEG_LABEL):
             id2seg = {v:k for k,v in self.dic.tables[constants.SEG_LABEL].str2id.items()}
             self.log('# seg labels: {}\n'.format(id2seg))
-        if self.dic.has_table(constants.POS_LABEL):
-            id2pos = {v:k for k,v in self.dic.tables[constants.POS_LABEL].str2id.items()}
-            self.log('# pos labels: {}\n'.format(id2pos))
+        attr_indexes = common.get_attribute_values(self.hparams['attr_indexes'])
+        for i in range(len(attr_indexes)):
+            if self.dic.has_table(constants.ATTR_LABEL(i)):
+                id2attr = {v:k for k,v in self.dic.tables[constants.ATTR_LABEL(i)].str2id.items()}
+                self.log('# {}-th attribute labels: {}\n'.format(i, id2attr))
         if self.dic.has_table(constants.ARC_LABEL):
             id2arc = {v:k for k,v in self.dic.tables[constants.ARC_LABEL].str2id.items()}
             self.log('# arc labels: {}\n'.format(id2arc))
@@ -238,7 +240,7 @@ class ParserTrainer(Trainer):
         else:
             self.args.ignored_labels = set()
 
-        self.evaluator = classifiers.init_evaluator(self.task, self.dic, self.args.ignored_labels)
+        self.evaluator = classifiers.init_evaluator(self.task, self.dic, ignored_labels=self.args.ignored_labels)
 
 
     def gen_inputs(self, data, ids, evaluate=True):
@@ -325,11 +327,14 @@ class ParserTrainer(Trainer):
 
 
     def run_interactive_mode(self):
-        use_pos = constants.POS_LABEL in self.dic.tables
+        use_pos = constants.ATTR_LABEL(0) in self.dic.tables
         lowercase = self.hparams['lowercase'] if 'lowercase' in self.hparams else False
         normalize_digits = self.hparams['normalize_digits'] if 'normalize_digits' else False
         use_subtoken = ('subtoken_embed_dim' in self.hparams and self.hparams['subtoken_embed_dim'] > 0)
-        subpos_depth = self.hparams['subpos_depth'] if 'subpos_depth' in self.hparams else -1
+        if 'attr_depths' in self.hparams:
+            attr_depths = common.get_attribute_values(self.hparams['attr_depths'])
+        else:
+            attr_depths = [-1]
 
         print('Please input text or type \'q\' to quit this mode:')
         while True:
@@ -342,7 +347,7 @@ class ParserTrainer(Trainer):
             rdata = data_io.parse_commandline_input(
                 line, self.dic, self.task, use_pos=use_pos and '/' in line,
                 lowercase=lowercase, normalize_digits=normalize_digits,
-                use_subtoken=use_subtoken, subpos_depth=subpos_depth)
+                use_subtoken=use_subtoken, subpos_depth=attr_depths[0])
 
             ws, cs, ps = self.gen_inputs(rdata, [0], evaluate=False)
             orgseqs = rdata.orgdata[0]

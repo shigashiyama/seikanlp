@@ -348,7 +348,7 @@ class FMeasureAndAccuracyCalculator(object):
             i += 1
 
 
-class SegmenterEvaluator(object):
+class FMeasureEvaluator(object):
     def __init__(self, id2label):
         self.calculator = FMeasureCalculator(id2label)
 
@@ -407,7 +407,7 @@ class HybridSegmenterEvaluator(object):
         return res
 
 
-class JointSegmenterEvaluator(object):
+class DoubleFMeasureEvaluator(object):
     def __init__(self, id2label):
         self.calculator = DoubleFMeasureCalculator(id2label)
 
