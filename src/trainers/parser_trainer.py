@@ -5,7 +5,7 @@ from chainer import cuda
 import common
 import util
 import constants
-import data_io
+from data import data_loader, parsing_data_loader
 import classifiers
 import optimizers
 from trainers import trainer
@@ -70,7 +70,7 @@ class ParserTrainer(Trainer):
             'pretrained_embed_usage' : self.args.pretrained_embed_usage,
             'fix_pretrained_embed' : self.args.fix_pretrained_embed,
             'unigram_embed_dim' : self.args.unigram_embed_dim,
-            'subtoken_embed_dim' : self.args.subtoken_embed_dim,
+            # 'subtoken_embed_dim' : self.args.subtoken_embed_dim,
             'attr0_embed_dim' : self.args.attr0_embed_dim,
             'rnn_unit_type' : self.args.rnn_unit_type,
             'rnn_bidirection' : self.args.rnn_bidirection,
@@ -86,11 +86,7 @@ class ParserTrainer(Trainer):
             'hidden_mlp_dropout' : self.args.hidden_mlp_dropout,
             'pred_layers_dropout' : self.args.pred_layers_dropout,
             'task' : self.args.task,
-            'attr_indexes' : self.args.attribute_column_indexes,
-            'attr_depths' : self.args.attribute_depths,
-            'attr_predictions' : self.args.attribute_predictions,
-            'attr_target_labelsets' : self.args.attribute_target_labelsets,
-            'lowercase' : self.args.lowercase,
+            'lowercasing' : self.args.lowercasing,
             'normalize_digits' : self.args.normalize_digits,
             'token_freq_threshold' : self.args.token_freq_threshold,
             'token_max_vocab_size' : self.args.token_max_vocab_size,
@@ -119,7 +115,7 @@ class ParserTrainer(Trainer):
 
                 if (key == 'pretrained_unigram_embed_dim' or
                     key == 'unigram_embed_dim' or
-                    key == 'subtoken_embed_dim' or
+                    # key == 'subtoken_embed_dim' or
                     key == 'pretrained_unigram_embed_dim' or
                     key == 'attr0_embed_dim' or
                     key == 'rnn_n_layers' or
@@ -142,7 +138,7 @@ class ParserTrainer(Trainer):
                     val = float(val)
 
                 elif (key == 'rnn_bidirection' or
-                      key == 'lowercase' or
+                      key == 'lowercasing' or
                       key == 'normalize_digits' or
                       key == 'fix_pretrained_embed'
                 ):
@@ -152,7 +148,7 @@ class ParserTrainer(Trainer):
 
         self.hparams = hparams
         self.task = self.hparams['task']
-
+        
         if (self.args.execute_mode != 'interactive' and 
             self.hparams['pretrained_unigram_embed_dim'] > 0 and not self.unigram_embed_model):
             self.log('Error: unigram embedding model is necessary.')
@@ -168,19 +164,26 @@ class ParserTrainer(Trainer):
                 sys.exit()
 
 
-    def load_data_for_training(self):
-        refer_unigrams = self.unigram_embed_model.wv if self.unigram_embed_model else set()
-        super().load_data_for_training(refer_unigrams=refer_unigrams)
-
-
-    def load_test_data(self):
-        refer_unigrams = self.unigram_embed_model.wv if self.unigram_embed_model else set()
-        super().load_test_data(refer_unigrams=refer_unigrams)
-
-
-    def load_decode_data(self):
-        refer_unigrams = self.unigram_embed_model.wv if self.unigram_embed_model else set()
-        super().load_decode_data(refer_unigrams=refer_unigrams)
+    def setup_data_loader(self):
+        attr_indexes=common.get_attribute_values(self.args.attr_indexes)
+        self.data_loader = parsing_data_loader.ParsingDataLoader(
+            token_index=self.args.token_index,
+            head_index=self.args.head_index,
+            arc_index=self.args.arc_index,
+            attr_indexes=attr_indexes,
+            attr_depths=common.get_attribute_values(self.args.attr_depths, len(attr_indexes)),
+            attr_chunking_flags=common.get_attribute_boolvalues(
+                self.args.attr_chunking_flags, len(attr_indexes)),
+            attr_target_labelsets=common.get_attribute_labelsets(
+                self.args.attr_target_labelsets, len(attr_indexes)),
+            attr_delim=self.args.attr_delim,
+            use_arc_label=(self.task == constants.TASK_TDEP),
+            lowercasing=self.hparams['lowercasing'],
+            normalize_digits=self.hparams['normalize_digits'],
+            token_freq_threshold=self.hparams['token_freq_threshold'],
+            token_max_vocab_size=self.hparams['token_max_vocab_size'],
+            unigram_vocab=(self.unigram_embed_model.wv if self.unigram_embed_model else set()),
+        )
 
 
     def show_training_data(self):
@@ -194,13 +197,10 @@ class ParserTrainer(Trainer):
         t2i_tmp = list(self.dic.tables[constants.UNIGRAM].str2id.items())
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
 
-        if self.dic.has_table(constants.SUBTOKEN):
-            st2i_tmp = list(self.dic.tables[constants.SUBTOKEN].str2id.items())
-            self.log('# subtoken2id: {} ... {}\n'.format(st2i_tmp[:10], st2i_tmp[len(st2i_tmp)-10:]))
         if self.dic.has_table(constants.SEG_LABEL):
             id2seg = {v:k for k,v in self.dic.tables[constants.SEG_LABEL].str2id.items()}
             self.log('# seg labels: {}\n'.format(id2seg))
-        attr_indexes = common.get_attribute_values(self.hparams['attr_indexes'])
+        attr_indexes=common.get_attribute_values(self.args.attr_indexes)
         for i in range(len(attr_indexes)):
             if self.dic.has_table(constants.ATTR_LABEL(i)):
                 id2attr = {v:k for k,v in self.dic.tables[constants.ATTR_LABEL(i)].str2id.items()}
@@ -259,100 +259,83 @@ class ParserTrainer(Trainer):
             else:
                 return us, ss, ps, ths
         else:
-            return ws, cs, ps
+            return us, ss, ps
 
 
-    def decode(self, rdata, use_pos=False, file=sys.stdout):
+    def decode(self, rdata, file=sys.stdout):
         n_ins = len(rdata.inputs[0])
-        orgseqs = rdata.orgdata[0]
-        orgposs = rdata.orgdata[1] if use_pos and len(rdata.orgdata) > 1 else None
+        org_tokens = rdata.orgdata[0]
+        org_attrs = rdata.orgdata[1] if len(rdata.orgdata) > 1 else None
 
         timer = util.Timer()
         timer.start()
         for ids in trainer.batch_generator(n_ins, batch_size=self.args.batch_size, shuffle=False):
-            ws, cs, ps  = self.gen_inputs(rdata, ids, evaluate=False)
-            ows = [orgseqs[j] for j in ids]
-            ops = [orgposs[j] for j in ids] if orgposs else None
-            self.decode_batch(ws, cs, ps, ows, ops, file=file)
+            inputs = self.gen_inputs(rdata, ids, evaluate=False)
+            ot = [org_tokens[j] for j in ids]
+            oa = [org_attrs[j] for j in ids] if org_attrs else None
+            self.decode_batch(*inputs, org_tokens=ot, org_attrs=oa, file=file)
         timer.stop()
 
         print('Parsed %d sentences. Elapsed time: %.4f sec (total) / %.4f sec (per sentence)' % (
             n_ins, timer.elapsed, timer.elapsed/n_ins), file=sys.stderr)
 
 
-    def decode_batch(self, ws, cs, ps, orgseqs, orgposs, file=sys.stdout):
-        use_pos = ps is not None
-        label_prediction = common.is_typed_parsing_task(self.task)
-        
-        n_ins = len(ws)
-        ret = self.classifier.decode(ws, cs, ps, label_prediction)
-
+    def decode_batch(self, *inputs, org_tokens, org_attrs, file=sys.stdout):
+        label_prediction = self.task == constants.TASK_TDEP
+        ret = self.classifier.decode(*inputs, label_prediction=label_prediction)
         hs = ret[0]
         if label_prediction:
             ls = ret[1]
             id2label = self.dic.tables[constants.ARC_LABEL].id2str
         else:
-            ls = [None] * len(ws)
-        if not use_pos:
-            ps = [None] * len(ws)
-            orgposs = [None] * len(ws)
+            ls = [None] * len(org_tokens)
+        if not org_attrs:
+            org_attrs = [None] * len(org_tokens)
 
-        for x_str, p_str, h, l in zip(orgseqs, orgposs, hs, ls):
+        for x_str, p_str, h, l in zip(org_tokens, org_attrs, hs, ls):
             x_str = x_str[1:]
             p_str = p_str[1:] if p_str else None
             h = h[1:]
+
             if label_prediction:
                 l = l[1:]
                 l_str = [id2label[int(li)] for li in l] 
 
             if label_prediction:
-                if use_pos:
-                    res = ['{}\t{}\t{}\t{}'.format(
-                        xi_str, pi_str, hi, li_str) for xi_str, pi_str, hi, li_str in zip(
-                            x_str, p_str, h, l_str)]
+                if p_str:
+                    res = ['{}\t{}\t{}\t{}\t{}'.format(
+                        i+1, xi_str, pi_str, hi, li_str) for i, (xi_str, pi_str, hi, li_str) in enumerate(zip(
+                            x_str, p_str, h, l_str))]
                         
                 else:
-                    res = ['{}\t{}\t{}'.format(
-                        xi_str, hi, li_str) for xi_str, hi, li_str in zip(x_str, h, l_str)]
+                    res = ['{}\t{}\t{}\t{}'.format(
+                        i+1, xi_str, hi, li_str) for i, (xi_str, hi, li_str) in enumerate(zip(x_str, h, l_str))]
             else:
-                if use_pos:
-                    res = ['{}\t{}\t{}'.format(
-                        xi_str, pi_str, hi) for xi_str, pi_str, hi in zip(x_str, p_str, h)]
+                if p_str:
+                    res = ['{}\t{}\t{}\t{}'.format(
+                        i+1, xi_str, pi_str, hi) for i, (xi_str, pi_str, hi) in enumerate(zip(x_str, p_str, h))]
                 else:
-                    res = ['{}\t{}'.format(
-                        xi_str, hi) for xi_str, hi in zip(x_str, h)]
-            res = '\n'.join(res).rstrip()
+                    res = ['{}\t{}\t{}'.format(
+                        i+1, xi_str, hi) for i, (xi_str, hi) in enumerate(zip(x_str, h))]
 
+            res = '\n'.join(res).rstrip()
             print(res+'\n', file=file)
 
 
     def run_interactive_mode(self):
-        use_pos = constants.ATTR_LABEL(0) in self.dic.tables
-        lowercase = self.hparams['lowercase'] if 'lowercase' in self.hparams else False
-        normalize_digits = self.hparams['normalize_digits'] if 'normalize_digits' else False
-        use_subtoken = ('subtoken_embed_dim' in self.hparams and self.hparams['subtoken_embed_dim'] > 0)
-        if 'attr_depths' in self.hparams:
-            attr_depths = common.get_attribute_values(self.hparams['attr_depths'])
-        else:
-            attr_depths = [-1]
-
         print('Please input text or type \'q\' to quit this mode:')
         while True:
-            line = sys.stdin.readline().rstrip()
+            line = sys.stdin.readline().rstrip(' \t\n')
             if len(line) == 0:
                 continue
             elif line == 'q':
                 break
 
-            rdata = data_io.parse_commandline_input(
-                line, self.dic, self.task, use_pos=use_pos and '/' in line,
-                lowercase=lowercase, normalize_digits=normalize_digits,
-                use_subtoken=use_subtoken, subpos_depth=attr_depths[0])
+            rdata = self.data_loader.parse_commandline_input(line, self.dic)
+            inputs = self.gen_inputs(rdata, [0], evaluate=False)
+            ot = rdata.orgdata[0]
+            oa = rdata.orgdata[1] if len(rdata.orgdata) > 1 else None
 
-            ws, cs, ps = self.gen_inputs(rdata, [0], evaluate=False)
-            orgseqs = rdata.orgdata[0]
-            orgposs = rdata.orgdata[1] if len(rdata.orgdata) > 1 else None
-
-            self.decode_batch(ws, cs, ps, orgseqs, orgposs)
+            self.decode_batch(*inputs, org_tokens=ot, org_attrs=oa)
             if not self.args.output_empty_line:
                 print(file=sys.stdout)

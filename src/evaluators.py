@@ -257,6 +257,10 @@ class FMeasureCalculator(object):
             if i == len(x):
                 raise StopIteration
             x_str = str(x[i])
+            # if x_str == '＄':   # TMP: ignore special token for BCCWJ
+            #     i += 1
+            #     continue
+
             t_str = self.id2label[int(t[i])] if int(t[i]) > -1 else 'NONE'
             y_str = self.id2label[int(y[i])] if int(y[i]) > -1 else 'NONE'
 
@@ -287,6 +291,10 @@ class DoubleFMeasureCalculator(object):
             if i == len(x):
                 raise StopIteration
             x_str = str(x[i])
+            # if x_str == '＄':   # TMP: ignore special token for BCCWJ
+            #     i += 1
+            #     continue
+
             t_str = self.id2label[int(t[i])] if int(t[i]) > -1 else 'NONE'
             y_str = self.id2label[int(y[i])] 
             tseg_str = t_str.split('-')[0]
@@ -301,7 +309,12 @@ class DoubleFMeasureCalculator(object):
         while True:
             if i == len(x):
                 raise StopIteration
+
             x_str = str(x[i])
+            # if x_str == '＄':   # TMP: ignore special token for BCCWJ
+            #     i += 1
+            #     continue
+
             t_str = self.id2label[int(t[i])] if int(t[i]) > -1 else 'NONE' 
             y_str = self.id2label[int(y[i])] 
 
@@ -385,7 +398,6 @@ class HybridSegmenterEvaluator(object):
         counts = self.calculator(*inputs)
         return counts
 
-
     def report_results(self, sen_counter, counts, loss, file=sys.stderr):
         ave_loss = loss / counts.l1.token_counter
         l1_met = conlleval.calculate_metrics(
@@ -420,9 +432,11 @@ class DoubleFMeasureEvaluator(object):
     def report_results(self, sen_counter, counts, loss, file=sys.stderr):
         ave_loss = loss / counts.l1.token_counter
         met1 = conlleval.calculate_metrics(
-            counts.l1.correct_chunk, counts.l1.found_guessed, counts.l1.found_correct)
+            counts.l1.correct_chunk, counts.l1.found_guessed, counts.l1.found_correct,
+            counts.l1.correct_tags, counts.l1.token_counter)
         met2 = conlleval.calculate_metrics(
-            counts.l2.correct_chunk, counts.l2.found_guessed, counts.l2.found_correct)
+            counts.l2.correct_chunk, counts.l2.found_guessed, counts.l2.found_correct,
+            counts.l2.correct_tags, counts.l2.token_counter)
         
         print('ave loss: %.5f'% ave_loss, file=file)
         print('sen, token, chunk, chunk_pred: {} {} {} {}'.format(
@@ -439,6 +453,19 @@ class DoubleFMeasureEvaluator(object):
             (100.*met1.acc), (100.*met1.prec), (100.*met1.rec), (100.*met1.fscore), 
             (100.*met2.acc), (100.*met2.prec), (100.*met2.rec), (100.*met2.fscore), ave_loss)
         return res
+
+
+class HybridTaggerEvaluator(DoubleFMeasureEvaluator): # tmp
+    def __init__(self, id2label):
+        super().__init__(id2label)
+
+
+    def calculate(self, *inputs):
+        xs = inputs[0]
+        ts = inputs[1]
+        ys = inputs[3]
+        counts = self.calculator(xs, ts, ys)
+        return counts
 
 
 class AccuracyEvaluator(object):

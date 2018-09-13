@@ -12,7 +12,6 @@ import numpy as np
 
 import common
 import constants
-import data_io
 import classifiers
 import evaluators
 import features
@@ -79,6 +78,7 @@ class Trainer(object):
         self.hparams = None
         self.dic = None
         self.dic_dev = None
+        self.data_loader = None
         self.classifier = None
         self.evaluator = None
         self.feat_extractor = None
@@ -159,11 +159,9 @@ class Trainer(object):
         for i in range(3):      # tmp
             if self.dic.has_table(constants.ATTR_LABEL(i)):
                 self.log('Num of {}-th attribute labels: {}'.format(
-                    len(self.dic.tables[constants.ATTR_LABEL(i)])))
+                    i, len(self.dic.tables[constants.ATTR_LABEL(i)])))
         if self.dic.has_table(constants.ARC_LABEL):
             self.log('Num of arc labels: {}'.format(len(self.dic.tables[constants.ARC_LABEL])))
-        if self.dic.has_table(constants.ATTR_LABEL):
-            self.log('Num of semantic attribute labels: {}'.format(len(self.dic.tables[constants.ATTR_LABEL])))
         self.log('')
 
 
@@ -229,206 +227,76 @@ class Trainer(object):
         pass
 
 
+    def load_training_and_development_data(self):
+        self.load_data('train')
+        if self.args.devel_data:
+            self.load_data('devel')
+        self.show_training_data()
+
+
+    def load_test_data(self):
+        self.load_data('test')
+        self.dic.create_id2strs()
+
+
+    def load_decode_data(self):
+        self.load_data('decode')
+        self.dic.create_id2strs()
+
+
+    def load_data(self, data_type):
+        self.setup_data_loader()
+        if data_type == 'train':
+            data_path = self.args.path_prefix + self.args.train_data
+            data, self.dic = self.data_loader.load_gold_data(
+                data_path, self.args.input_data_format, dic=self.dic, train=True)
+            self.dic.create_id2strs()
+            self.train = data
+
+        elif data_type == 'devel':
+            data_path = self.args.path_prefix + self.args.devel_data
+            self.dic_dev = copy.deepcopy(self.dic)
+            data, self.dic_dev = self.data_loader.load_gold_data(
+                data_path, self.args.input_data_format, dic=self.dic_dev, train=False)
+            self.dic_dev.create_id2strs()
+            self.dev = data
+
+        elif data_type == 'test':
+            data_path = self.args.path_prefix + self.args.test_data
+            data, self.dic = self.data_loader.load_gold_data(
+                data_path, self.args.input_data_format, dic=self.dic, train=False)
+            self.dic.create_id2strs()
+            self.test = data
+
+        elif data_type == 'decode':
+            data_path = self.args.path_prefix + self.args.decode_data
+            data = self.data_loader.load_decode_data(
+                data_path, self.args.input_data_format, dic=self.dic)
+            self.dic.create_id2strs()
+            self.decode_data = data
+        
+        else:
+            print('Error: incorect data type: {}'.format(), file=sys.stderr)
+            sys.exit()
+
+        self.log('Load {} data: {}'.format(data_type, data_path))
+        self.show_data_info(data_type)
+        
+
+    def show_data_info(self, data_type):
+        # to be implemented in sub-class
+        pass
+
+
     def show_training_data(self):
         # to be implemented in sub-class
         pass
 
 
-    def load_data_for_training(self, refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set()):
-        args = self.args
-        hparams = self.hparams
-        prefix = args.path_prefix if args.path_prefix else ''
-        train_path   = prefix + args.train_data
-        dev_path     = prefix + (args.devel_data if args.devel_data else '')
-        input_data_format = args.input_data_format
+    def setup_data_loader(self):
+        # to be implemented in sub-class
+        pass
 
-        task = hparams['task']
-        attr_indexes = common.get_attribute_values(hparams['attr_indexes'])
-        attr_depths = common.get_attribute_values(hparams['attr_depths'])
-        attr_target_labelsets = common.get_attribute_labelsets(
-            hparams['attr_target_labelsets'], len(attr_indexes))
-
-        use_bigram = ('bigram_embed_dim' in hparams and hparams['bigram_embed_dim'] > 0)
-        use_tokentype = ('tokentype_embed_dim' in hparams and hparams['tokentype_embed_dim'] > 0)        
-        use_subtoken = ('subtoken_embed_dim' in hparams and hparams['subtoken_embed_dim'] > 0)
-        use_chunk_trie = get_chunk_trie_flag(hparams)
-        add_gold_chunk = 'use_gold_chunk' in hparams and hparams['use_gold_chunk']
-        add_unknown_pretrained_chunk = (
-            'use_unknown_pretrained_chunk' in hparams and hparams['use_unknown_pretrained_chunk'])
-        subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
-        lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
-        normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
-        max_chunk_len = self.hparams['max_chunk_len'] if 'max_chunk_len' in hparams else 0
-        bigram_max_vocab_size = hparams['bigram_max_vocab_size'] if 'bigram_max_vocab_size' in hparams else -1
-        bigram_freq_threshold = hparams['bigram_freq_threshold'] if 'bigram_freq_threshold' in hparams else 1
-        if common.is_segmentation_task(task):
-            word_max_vocab_size = hparams['chunk_max_vocab_size'] if 'chunk_max_vocab_size' in hparams else -1
-            word_freq_threshold = hparams['chunk_freq_threshold'] if 'chunk_freq_threshold' in hparams else 1
-        else:
-            word_freq_threshold = hparams['token_freq_threshold'] if 'token_freq_threshold' in hparams else 1
-            word_max_vocab_size = hparams['token_max_vocab_size'] if 'token_max_vocab_size' in hparams else -1
-
-        if args.train_data.endswith('pickle'):
-            pass
-
-        else:
-            train, self.dic = data_io.load_annotated_data(
-                train_path, task, input_data_format, train=True, 
-                use_bigram=use_bigram, use_tokentype=use_tokentype, 
-                use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie,
-                attr_indexes=attr_indexes, attr_depths=attr_depths, attr_target_labelsets=attr_target_labelsets,
-                lowercase=lowercase, normalize_digits=normalize_digits, 
-                word_max_vocab_size=word_max_vocab_size, word_freq_threshold=word_freq_threshold, 
-                bigram_max_vocab_size=bigram_max_vocab_size, bigram_freq_threshold=bigram_freq_threshold, 
-                max_chunk_len=max_chunk_len, dic=self.dic, 
-                refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,
-                add_gold_chunk=add_gold_chunk, add_unknown_pretrained_chunk=False)
-
-        self.log('Load training data: {}'.format(train_path))
-        self.log('Data length: {}'.format(len(train.inputs[0])))
-        self.log('Num of tokens: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
-        if self.dic.has_table(constants.BIGRAM):
-            self.log('Num of bigrams: {}'.format(len(self.dic.tables[constants.BIGRAM])))
-        if self.dic.has_table(constants.TOKEN_TYPE):
-            self.log('Num of tokentypes: {}'.format(len(self.dic.tables[constants.TOKEN_TYPE])))
-        if self.dic.has_table(constants.SUBTOKEN):
-            self.log('Num of subtokens: {}'.format(len(self.dic.tables[constants.SUBTOKEN])))
-        if self.dic.has_trie(constants.CHUNK):
-            self.log('Num of chunks: {}'.format(len(self.dic.tries[constants.CHUNK])))
-        self.log()
-        if 'feature_template' in self.hparams and self.hparams['feature_template']:
-            self.log('Start feature extraction for training data\n')
-            self.extract_features(train)
-
-        if args.devel_data:
-            self.dic_dev = copy.deepcopy(self.dic)
-            dev, self.dic_dev = data_io.load_annotated_data(
-                dev_path, task, input_data_format, train=False, 
-                use_bigram=use_bigram, use_tokentype=use_tokentype, 
-                use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie,
-                attr_indexes=attr_indexes, attr_depths=attr_depths, attr_target_labelsets=attr_target_labelsets,
-                lowercase=lowercase, normalize_digits=normalize_digits, max_chunk_len=max_chunk_len, 
-                dic=self.dic_dev,
-                refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,
-                add_gold_chunk=False, add_unknown_pretrained_chunk=add_unknown_pretrained_chunk)
-
-            self.log('Load development data: {}'.format(dev_path))
-            self.log('Data length: {}'.format(len(dev.inputs[0])))
-            self.log('Num of tokens: {}'.format(len(self.dic_dev.tables[constants.UNIGRAM])))
-            if self.dic_dev.has_table(constants.BIGRAM):
-                self.log('Num of bigrams: {}'.format(len(self.dic_dev.tables[constants.BIGRAM])))
-            if self.dic_dev.has_table(constants.TOKEN_TYPE):
-                self.log('Num of tokentypes: {}'.format(len(self.dic_dev.tables[constants.TOKEN_TYPE])))
-            if self.dic_dev.has_table(constants.SUBTOKEN):
-                self.log('Num of subtokens: {}'.format(len(self.dic_dev.tables[constants.SUBTOKEN])))
-            if self.dic_dev.has_trie(constants.CHUNK):
-                self.log('Num of chunks: {}'.format(len(self.dic_dev.tries[constants.CHUNK])))
-            self.log()
-            if 'feature_template' in self.hparams and self.hparams['feature_template']:
-                self.log('Start feature extraction for development data\n')
-                self.extract_features(dev)
-
-        else:
-            dev = None
-        
-        self.train = train
-        self.dev = dev
-        self.dic.create_id2strs()
-        if self.dic_dev:
-            self.dic_dev.create_id2strs()
-        self.show_training_data()
-
-
-    def load_test_data(self, refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set()):
-        args = self.args
-        hparams = self.hparams
-        test_path = (args.path_prefix if args.path_prefix else '') + args.test_data
-        input_data_format = args.input_data_format
-
-        task = hparams['task']
-        
-        attr_indexes = common.get_attribute_values(hparams['attr_indexes'])
-        attr_depths = common.get_attribute_values(hparams['attr_depths'])
-        attr_target_labelsets = common.get_attribute_labelsets(
-            hparams['attr_target_labelsets'], len(attr_indexes))
-
-        use_bigram = self.dic.has_table(constants.BIGRAM)
-        use_tokentype = self.dic.has_table(constants.TOKEN_TYPE)
-        use_subtoken = self.dic.has_table(constants.SUBTOKEN)
-        use_chunk_trie = self.dic.has_trie(constants.CHUNK) #get_chunk_trie_flag(hparams)
-        add_unknown_pretrained_chunk = (
-            'use_unknown_pretrained_chunk' in hparams and hparams['use_unknown_pretrained_chunk'])
-        subpos_depth = hparams['subpos_depth'] if 'subpos_depth' in hparams else -1
-        lowercase = hparams['lowercase'] if 'lowercase' in hparams else False
-        normalize_digits = hparams['normalize_digits'] if 'normalize_digits' else False
-        max_chunk_len = self.hparams['max_chunk_len'] if 'max_chunk_len' in hparams else 0
-
-        test, self.dic = data_io.load_annotated_data(
-            test_path, task, input_data_format, train=False,
-            use_bigram=use_bigram, use_tokentype=use_tokentype, 
-            use_subtoken=use_subtoken, use_chunk_trie=use_chunk_trie, 
-            attr_indexes=attr_indexes, attr_depths=attr_depths, attr_target_labelsets=attr_target_labelsets,
-            lowercase=lowercase, normalize_digits=normalize_digits, max_chunk_len=max_chunk_len, 
-            dic=self.dic,
-            refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks,
-            add_gold_chunk=False, add_unknown_pretrained_chunk=add_unknown_pretrained_chunk)
-
-        self.log('Load test data: {}'.format(test_path))
-        self.log('Data length: {}'.format(len(test.inputs[0])))
-        self.log('Num of tokens: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
-        if self.dic.has_table(constants.BIGRAM):
-            self.log('Num of bigrams: {}'.format(len(self.dic.tables[constants.BIGRAM])))
-        if self.dic.has_table(constants.TOKEN_TYPE):
-            self.log('Num of tokentypes: {}'.format(len(self.dic.tables[constants.TOKEN_TYPE])))
-        if self.dic.has_table(constants.SUBTOKEN):
-            self.log('Num of subtokens: {}'.format(len(self.dic.tables[constants.SUBTOKEN])))
-        if self.dic.has_trie(constants.CHUNK):
-            self.log('Num of chunks: {}'.format(len(self.dic.tries[constants.CHUNK])))
-        self.log()
-
-        if 'feature_template' in self.hparams and self.hparams['feature_template']:
-            self.log('Start feature extraction for test data\n')
-            self.extract_features(test)
-
-        self.test = test
-        self.dic.create_id2strs()
-
-
-    def load_decode_data(self, refer_unigrams=set(), refer_bigrams=set(), refer_chunks=set()):
-        text_path = (self.args.path_prefix if self.args.path_prefix else '') + self.args.decode_data
-        if 'input_data_format' in self.args:
-            data_format = self.args.input_data_format
-        else:
-            data_format = constants.SL_FORMAT
-
-        use_pos = constants.POS_LABEL in self.dic.tables
-        use_bigram = self.dic.has_table(constants.BIGRAM)
-        use_tokentype = self.dic.has_table(constants.TOKEN_TYPE)
-        use_subtoken = self.dic.has_table(constants.SUBTOKEN)
-        use_chunk_trie = self.dic.has_trie(constants.CHUNK) #get_chunk_trie_flag(hparams)
-        subpos_depth = self.hparams['subpos_depth'] if 'subpos_depth' in self.hparams else -1
-        lowercase = self.hparams['lowercase'] if 'lowercase' in self.hparams else False
-        normalize_digits = self.hparams['normalize_digits'] if 'normalize_digits' else False
-        max_chunk_len = self.hparams['max_chunk_len'] if 'max_chunk_len' in self.hparams else 0
-
-        rdata = data_io.load_decode_data(
-            text_path, self.dic, self.task, data_format=data_format,
-            use_pos=use_pos, use_bigram=use_bigram, use_tokentype=use_tokentype,
-            use_chunk_trie=use_chunk_trie, use_subtoken=use_subtoken, 
-            subpos_depth=subpos_depth, lowercase=lowercase, normalize_digits=normalize_digits, 
-            max_chunk_len=max_chunk_len,
-            refer_unigrams=refer_unigrams, refer_bigrams=refer_bigrams, refer_chunks=refer_chunks)
-
-        self.log('Load decode data: {}'.format(text_path))
-        self.log('Data length: {}'.format(len(rdata.inputs[0])))
-
-        if 'feature_template' in self.hparams and self.hparams['feature_template']:
-            self.log('Start feature extraction for decode data\n')
-            self.extract_features(rdata)
-
-        self.decode_data = rdata
-        self.dic.create_id2strs()
-        
 
     def extract_features(self, data):
         featvecs = self.feat_extractor.extract_features(data.inputs[0], self.dic.tries[constants.CHUNK])
@@ -516,10 +384,8 @@ class Trainer(object):
 
     def run_decode_mode(self):
         self.update_model(classifier=self.classifier, dic=self.dic)
-        use_pos = constants.POS_LABEL in self.dic.tables
-        file = open(self.args.output_data, 'w') if self.args.output_data else sys.stdout
-        self.decode(self.decode_data, use_pos=use_pos, file=file)
-
+        self.decode(self.decode_data, 
+                    file=open(self.args.output_data, 'w') if self.args.output_data else sys.stdout)
         if self.args.output_data:
             file.close()
 
@@ -529,6 +395,11 @@ class Trainer(object):
         pass
 
     
+    def decode(self, rdata, file=sys.stdout):
+        # to be implemented in sub-class
+        pass
+
+
     def gen_inputs(self, data, ids):
         # to be implemented in sub-class
         return None
@@ -550,6 +421,7 @@ class Trainer(object):
 
         i = 0
         n_ins = len(data.inputs[0])
+        # shuffle = False         # tmp
         shuffle = True if train else False
         for ids in batch_generator(n_ins, batch_size=self.args.batch_size, shuffle=shuffle):
             inputs = self.gen_inputs(data, ids)

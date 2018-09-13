@@ -6,9 +6,9 @@ __version__ = 'v0.0.3'
 ### task
 
 TASK_SEG = 'seg'
-TASK_HSEG = 'hseg'
-TASK_TAG = 'tag'
 TASK_SEGTAG = 'segtag'
+TASK_DUAL_SEG = 'dseg'
+TASK_TAG = 'tag'
 TASK_DEP = 'dep'
 TASK_TDEP = 'tdep'
 
@@ -20,26 +20,18 @@ MODEL_DIR = 'models/main'
 
 ### for data io
 
+NUM_FOR_REPORTING = 100000
+
 SL_TOKEN_DELIM   = ' '
 SL_ATTR_DELIM    = '_'
 WL_TOKEN_DELIM   = '\n'
 WL_ATTR_DELIM    = '\t'
 KEY_VALUE_DELIM  = '='
-POS_SEPARATOR    = '-'
+SUBATTR_SEPARATOR    = '-'
 COMMENT_SYM      = '#'
 ATTR_INFO_DELIM  = ','
 ATTR_INFO_DELIM2 = ':'
 ATTR_INFO_DELIM3 = '_'
-ATTR_DELIM_TXT   = '#ATTRIBUTE_DELIMITER'
-WORD_CLM_TXT     = '#WORD_COLUMN'
-HEAD_CLM_TXT     = '#HEAD_COLUMN'
-ARC_CLM_TXT      = '#ARC_COLUMN'
-ATTR_CLM_TXT     = '#ATTR_COLUMN'
-
-ATTR_INDEX    = 'index'
-ATTR_CHUNKING = 'chunking'
-#ATTR_NONNEG   = 'non-negative'
-#ATTR_DEPTH    = 'depth'
 
 SL_FORMAT = 'sl'
 WL_FORMAT = 'wl'
