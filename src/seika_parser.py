@@ -1,7 +1,6 @@
 import sys
 
 import common
-import constants
 import arguments
 
 from seikanlp import SeikaNLP

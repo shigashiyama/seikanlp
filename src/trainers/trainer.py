@@ -12,7 +12,7 @@ import numpy as np
 
 import common
 import constants
-import classifiers
+import classifiers_tmp
 import evaluators
 import features
 
@@ -133,12 +133,17 @@ class Trainer(object):
 
     def init_model(self):
         self.log('Initialize model from hyperparameters\n')
-        self.classifier = classifiers.init_classifier(self.task, self.hparams, self.dic)
+        self.setup_classifier()
 
 
     def reinit_model(self):
         self.log('Re-initialize model from hyperparameters\n')
-        self.classifier = classifiers.init_classifier(self.task, self.hparams, self.dic)
+        self.setup_classifier()
+
+
+    def setup_classifier(self):
+        # to be implemented in sub-class
+        pass
 
 
     def load_dic(self, dic_path):

@@ -6,15 +6,16 @@ import numpy as np
 import chainer
 from chainer import cuda
 
+import classifiers.hybrid_sequence_tagger
 import common
 import constants
 from data import segmentation_data_loader, tagging_data_loader
-import classifiers
+import evaluators
+import models.tagger
+import models.util
 import optimizers
 from trainers import trainer
 from trainers.tagger_trainer import TaggerTrainerBase
-import models.tagger # tmp
-import evaluators
 
 
 # character word hybrid segmenter/tagger
@@ -237,8 +238,8 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
                 hparams[key] = val
 
         # tmp
-        if not 'tagging_scheme'in hparams:
-            hparams['tagging_scheme'] = 'BIES'
+        # if not 'tagging_scheme'in hparams:
+        #     hparams['tagging_scheme'] = 'BIES'
 
         self.hparams = hparams
         self.task = hparams['task']
@@ -356,10 +357,113 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
             self.optimizer.add_hook(optimizers.DeleteGradient(delparams))
 
 
+    def setup_classifier(self):
+        dic = self.dic
+        hparams = self.hparams
+
+        n_vocab = len(dic.tables['unigram'])
+        unigram_embed_dim = hparams['unigram_embed_dim']
+        chunk_embed_dim = hparams['chunk_embed_dim']
+        n_chunks = len(dic.tries[constants.CHUNK])
+     
+        if 'bigram_embed_dim' in hparams and hparams['bigram_embed_dim'] > 0:
+            bigram_embed_dim = hparams['bigram_embed_dim']
+            n_bigrams = len(dic.tables[constants.BIGRAM])
+        else:
+            bigram_embed_dim = n_bigrams = 0
+     
+        if 'tokentype_embed_dim' in hparams and hparams['tokentype_embed_dim'] > 0:
+            tokentype_embed_dim = hparams['tokentype_embed_dim']
+            n_tokentypes = len(dic.tables[constants.TOKEN_TYPE])
+        else:
+            tokentype_embed_dim = n_tokentypes = 0
+     
+        subtoken_embed_dim = n_subtokens = 0
+     
+        if 'pretrained_unigram_embed_dim' in hparams and hparams['pretrained_unigram_embed_dim'] > 0:
+            pretrained_unigram_embed_dim = hparams['pretrained_unigram_embed_dim']
+        else:
+            pretrained_unigram_embed_dim = 0
+     
+        if 'pretrained_bigram_embed_dim' in hparams and hparams['pretrained_bigram_embed_dim'] > 0:
+            pretrained_bigram_embed_dim = hparams['pretrained_bigram_embed_dim']
+        else:
+            pretrained_bigram_embed_dim = 0
+     
+        if 'pretrained_chunk_embed_dim' in hparams and hparams['pretrained_chunk_embed_dim'] > 0:
+            pretrained_chunk_embed_dim = hparams['pretrained_chunk_embed_dim']
+        else:
+            pretrained_chunk_embed_dim = 0
+     
+        if 'pretrained_embed_usage' in hparams:
+            pretrained_embed_usage = models.util.ModelUsage.get_instance(hparams['pretrained_embed_usage'])
+        else:
+            pretrained_embed_usage = models.util.ModelUsage.NONE
+     
+        n_label = len(dic.tables[constants.SEG_LABEL])
+        n_labels = [n_label]
+        attr1_embed_dim = n_attr1 = 0
+
+        if (pretrained_embed_usage == models.util.ModelUsage.ADD or
+            pretrained_embed_usage == models.util.ModelUsage.INIT):
+            if pretrained_unigram_embed_dim > 0 and pretrained_unigram_embed_dim != unigram_embed_dim:
+                print('Error: pre-trained and random initialized unigram embedding vectors '
+                      + 'must be the same dimension for {} operation'.format(hparams['pretrained_embed_usage'])
+                      + ': d1={}, d2={}'.format(pretrained_unigram_embed_dim, unigram_embed_dim),
+                      file=sys.stderr)
+                sys.exit()
+     
+            if pretrained_bigram_embed_dim > 0 and pretrained_bigram_embed_dim != bigram_embed_dim:
+                print('Error: pre-trained and random initialized bigram embedding vectors '
+                      + 'must be the same dimension for {} operation'.format(hparams['pretrained_embed_usage'])
+                      + ': d1={}, d2={}'.format(pretrained_bigram_embed_dim, bigram_embed_dim),
+                      file=sys.stderr)
+                sys.exit()
+     
+            if pretrained_chunk_embed_dim > 0 and pretrained_chunk_embed_dim != chunk_embed_dim:
+                print('Error: pre-trained and random initialized chunk embedding vectors '
+                      + 'must be the same dimension for {} operation'.format(hparams['pretrained_embed_usage'])
+                      + ': d1={}, d2={}'.format(pretrained_chunk_embed_dim, chunk_embed_dim),
+                      file=sys.stderr)
+                sys.exit()
+        
+        predictor = models.tagger.construct_RNNTagger(
+            n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
+            n_attr1, attr1_embed_dim, n_chunks, chunk_embed_dim, 
+            hparams['rnn_unit_type'], hparams['rnn_bidirection'], 
+            hparams['rnn_n_layers'], hparams['rnn_n_units'], 
+            hparams['rnn_n_layers2'] if 'rnn_n_layers2' in hparams else 0,
+            hparams['rnn_n_units2'] if 'rnn_n_units2' in hparams else 0,
+            hparams['mlp_n_layers'], hparams['mlp_n_units'], n_labels[0], 
+            use_crf=hparams['inference_layer'] == 'crf',
+            feat_dim=hparams['additional_feat_dim'], mlp_n_additional_units=0,
+            rnn_dropout=hparams['rnn_dropout'],
+            biaffine_dropout=hparams['biaffine_dropout'] if 'biaffine_dropout' in hparams else 0.0,
+            embed_dropout=hparams['embed_dropout'] if 'embed_dropout' in hparams else 0.0,
+            mlp_dropout=hparams['mlp_dropout'],
+            chunk_vector_dropout=hparams['chunk_vector_dropout'] if 'chunk_vector_dropout' in hparams else 0.0,
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
+            pretrained_bigram_embed_dim=pretrained_bigram_embed_dim,
+            pretrained_chunk_embed_dim=pretrained_chunk_embed_dim,
+            pretrained_embed_usage=pretrained_embed_usage,
+            chunk_pooling_type=hparams['chunk_pooling_type'] if 'chunk_pooling_type' in hparams else '',
+            max_chunk_len=hparams['max_chunk_len'] if 'max_chunk_len' in hparams else 0,
+            chunk_loss_ratio=hparams['chunk_loss_ratio'] if 'chunk_loss_ratio' in hparams else 0.0,
+            biaffine_type=hparams['biaffine_type'] if 'biaffine_type' in hparams else '')
+
+        self.classifier = classifiers.hybrid_sequence_tagger.HybridSequenceTagger(predictor, task=self.task)
+
+
     def setup_evaluator(self):
         # TODO ignored_labels
-        self.evaluator = classifiers.init_evaluator(
-            self.task, self.dic, self.hparams['tagging_unit'], self.args.ignored_labels)
+        evaluator = None
+        if self.task == constants.TASK_SEG:
+            evaluator = evaluators.HybridSegmenterEvaluator(self.dic.tables[constants.SEG_LABEL].id2str)
+
+        elif self.task == constants.TASK_SEGTAG:
+            evaluator = evaluators.HybridTaggerEvaluator(self.dic.tables[constants.SEG_LABEL].id2str)
+
+        self.evaluator = evaluator
 
 
     def gen_inputs(self, data, ids, evaluate=True, restrict_memory=False):

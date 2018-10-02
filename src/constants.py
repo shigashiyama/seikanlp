@@ -7,10 +7,13 @@ __version__ = 'v0.0.3'
 
 TASK_SEG = 'seg'
 TASK_SEGTAG = 'segtag'
-TASK_DUAL_SEG = 'dseg'
 TASK_TAG = 'tag'
 TASK_DEP = 'dep'
 TASK_TDEP = 'tdep'
+
+TASK_MD_SEG = 'mdseg'
+TASK_MD_SEGTAG = 'mdtag'
+TASK_MD_TAG = 'mdtag'
 
 ### for analyzer
 
@@ -22,6 +25,7 @@ MODEL_DIR = 'models/main'
 
 NUM_FOR_REPORTING = 100000
 
+SL_COLUMN_DELIM = '\t'
 SL_TOKEN_DELIM   = ' '
 SL_ATTR_DELIM    = '_'
 WL_TOKEN_DELIM   = '\n'
@@ -52,6 +56,7 @@ TOKEN_TYPE = 'token_type'
 SEG_LABEL  = 'seg_label' 
 ARC_LABEL  = 'arc_label'
 ATTR_LABEL = 'attr{}_label'.format
+DOMAIN     = 'domain'
 
 TYPE_HIRA        = '<HR>'
 TYPE_KATA        = '<KT>'

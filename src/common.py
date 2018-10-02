@@ -1,6 +1,10 @@
 import constants
 
 
+def is_segmentation_task(task):
+    return is_single_segmentation_task(task) #or is_dual_segmentation_task(task)
+
+
 def is_single_segmentation_task(task):
     if (task == constants.TASK_SEG or task == constants.TASK_SEGTAG):
         return True
@@ -8,15 +12,12 @@ def is_single_segmentation_task(task):
         return False
 
 
-def is_dual_segmentation_task(task):
-    if task == constants.TASK_DUAL_SEG:
-        return True
-    else:
-        return False
+# def is_dual_segmentation_task(task):
+#     if task == constants.TASK_DUAL_SEG:
+#         return True
+#     else:
+#         return False
 
-
-def is_segmentation_task(task):
-    return is_single_segmentation_task(task) or is_dual_segmentation_task(task)
 
 def is_tagging_task(task):
     if (task == constants.TASK_TAG or task == constants.TASK_SEGTAG):
@@ -34,7 +35,7 @@ def is_typed_parsing_task(task):
 
 
 def is_sequence_labeling_task(task):
-    return is_segmentation_task(task) or is_tagging_task(task) or is_dual_segmentation_task(task)
+    return is_segmentation_task(task) or is_tagging_task(task) #or is_dual_segmentation_task(task)
 
 
 def get_attribute_values(attr_vals_str, num=0):

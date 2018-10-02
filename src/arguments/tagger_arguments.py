@@ -165,7 +165,7 @@ class TaggerArgumentLoader(ArgumentLoader):
             parser.add_argument('--rnn_bidirection', action='store_true', default=args.rnn_bidirection)
             parser.add_argument('--rnn_n_layers', type=int, default=args.rnn_n_layers)
             parser.add_argument('--rnn_n_units', type=int, default=args.rnn_n_units)
-            # specific options for segmentation/tagging parsing
+            # specific options for segmentation/tagging
             parser.add_argument('--tagging_scheme', default=args.tagging_scheme)
             parser.add_argument('--bigram_freq_threshold', type=int, default=args.bigram_freq_threshold)
             parser.add_argument('--bigram_max_vocab_size', type=int, default=args.bigram_max_vocab_size)

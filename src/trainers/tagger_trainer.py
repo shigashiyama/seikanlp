@@ -7,16 +7,17 @@ import numpy as np
 import chainer
 from chainer import cuda
 
+import classifiers.sequence_tagger
 import common
-import util
 import constants
 from data import data_loader, segmentation_data_loader, tagging_data_loader
-import classifiers
+import evaluators
+import models.tagger
+import models.util
 import optimizers
 from trainers import trainer
 from trainers.trainer import Trainer
-import evaluators
-
+import util
 
 class TaggerTrainerBase(Trainer):
     def __init__(self, args, logger=sys.stderr):
@@ -373,10 +374,10 @@ class TaggerTrainer(TaggerTrainerBase):
                 hparams[key] = val
 
         # tmp
-        if not 'attr1_embed_dim' in hparams:
-            hparams['attr1_embed_dim'] = 0
-        if not 'tagging_scheme'in hparams:
-            hparams['tagging_scheme'] = 'BIOES'
+        # if not 'attr1_embed_dim' in hparams:
+        #     hparams['attr1_embed_dim'] = 0
+        # if not 'tagging_scheme'in hparams:
+        #     hparams['tagging_scheme'] = 'BIOES'
 
         self.hparams = hparams
         self.task = self.hparams['task']
@@ -409,7 +410,7 @@ class TaggerTrainer(TaggerTrainerBase):
         # scheme = hparams['tagging_scheme']
         attr_indexes=common.get_attribute_values(self.args.attr_indexes)
 
-        if common.is_segmentation_task(self.task):
+        if self.task == constants.TASK_SEG:
             self.data_loader = segmentation_data_loader.SegmentationDataLoader(
                 token_index=self.args.token_index,
                 attr_indexes=attr_indexes,
@@ -460,6 +461,96 @@ class TaggerTrainer(TaggerTrainerBase):
             self.optimizer.add_hook(optimizers.DeleteGradient(delparams))
 
 
+    def setup_classifier(self):
+        dic = self.dic
+        hparams = self.hparams
+
+        n_vocab = len(dic.tables['unigram'])
+        unigram_embed_dim = hparams['unigram_embed_dim']
+        
+        if 'bigram_embed_dim' in hparams and hparams['bigram_embed_dim'] > 0:
+            bigram_embed_dim = hparams['bigram_embed_dim']
+            n_bigrams = len(dic.tables[constants.BIGRAM])
+        else:
+            bigram_embed_dim = n_bigrams = 0
+
+        if 'tokentype_embed_dim' in hparams and hparams['tokentype_embed_dim'] > 0:
+            tokentype_embed_dim = hparams['tokentype_embed_dim']
+            n_tokentypes = len(dic.tables[constants.TOKEN_TYPE])
+        else:
+            tokentype_embed_dim = n_tokentypes = 0
+
+        subtoken_embed_dim = n_subtokens = 0
+
+        if 'pretrained_unigram_embed_dim' in hparams and hparams['pretrained_unigram_embed_dim'] > 0:
+            pretrained_unigram_embed_dim = hparams['pretrained_unigram_embed_dim']
+        else:
+            pretrained_unigram_embed_dim = 0
+
+        if 'pretrained_bigram_embed_dim' in hparams and hparams['pretrained_bigram_embed_dim'] > 0:
+            pretrained_bigram_embed_dim = hparams['pretrained_bigram_embed_dim']
+        else:
+            pretrained_bigram_embed_dim = 0
+
+        if 'pretrained_embed_usage' in hparams:
+            pretrained_embed_usage = models.util.ModelUsage.get_instance(hparams['pretrained_embed_usage'])
+        else:
+            pretrained_embed_usage = models.util.ModelUsage.NONE
+
+        if common.is_segmentation_task(self.task):
+            n_label = len(dic.tables[constants.SEG_LABEL])
+            n_labels = [n_label]
+            attr1_embed_dim = n_attr1 = 0
+
+        else:
+            n_labels = []
+            for i in range(3): # tmp
+                if constants.ATTR_LABEL(i) in dic.tables:
+                    n_label = len(dic.tables[constants.ATTR_LABEL(i)])
+                    n_labels.append(n_label)
+                
+            if 'attr1_embed_dim' in hparams and hparams['attr1_embed_dim'] > 0:
+                attr1_embed_dim = hparams['attr1_embed_dim']
+                n_attr1 = n_labels[1] if len(n_labels) > 1 else 0
+            else:
+                attr1_embed_dim = n_attr1 = 0
+
+        if (pretrained_embed_usage == models.util.ModelUsage.ADD or
+            pretrained_embed_usage == models.util.ModelUsage.INIT):
+            if pretrained_unigram_embed_dim > 0 and pretrained_unigram_embed_dim != unigram_embed_dim:
+                print('Error: pre-trained and random initialized unigram embedding vectors '
+                      + 'must be the same dimension for {} operation'.format(hparams['pretrained_embed_usage'])
+                      + ': d1={}, d2={}'.format(pretrained_unigram_embed_dim, unigram_embed_dim),
+                      file=sys.stderr)
+                sys.exit()
+
+            if pretrained_bigram_embed_dim > 0 and pretrained_bigram_embed_dim != bigram_embed_dim:
+                print('Error: pre-trained and random initialized bigram embedding vectors '
+                      + 'must be the same dimension for {} operation'.format(hparams['pretrained_embed_usage'])
+                      + ': d1={}, d2={}'.format(pretrained_bigram_embed_dim, bigram_embed_dim),
+                      file=sys.stderr)
+                sys.exit()
+
+        predictor = models.tagger.construct_RNNTagger(
+            n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
+            n_attr1, attr1_embed_dim, 0, 0,
+            hparams['rnn_unit_type'], hparams['rnn_bidirection'], 
+            hparams['rnn_n_layers'], hparams['rnn_n_units'], 
+            hparams['rnn_n_layers2'] if 'rnn_n_layers2' in hparams else 0,
+            hparams['rnn_n_units2'] if 'rnn_n_units2' in hparams else 0,
+            hparams['mlp_n_layers'], hparams['mlp_n_units'], n_labels[0], 
+            use_crf=hparams['inference_layer'] == 'crf',
+            feat_dim=hparams['additional_feat_dim'], mlp_n_additional_units=0,
+            rnn_dropout=hparams['rnn_dropout'],
+            embed_dropout=hparams['embed_dropout'] if 'embed_dropout' in hparams else 0.0,
+            mlp_dropout=hparams['mlp_dropout'],
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
+            pretrained_bigram_embed_dim=pretrained_bigram_embed_dim,
+            pretrained_embed_usage=pretrained_embed_usage)
+
+        self.classifier = classifiers.sequence_tagger.SequenceTagger(predictor, task=self.task)
+
+
     def setup_evaluator(self):
         if self.task == constants.TASK_TAG and self.args.ignored_labels: # TODO fix
             tmp = self.args.ignored_labels
@@ -475,8 +566,20 @@ class TaggerTrainer(TaggerTrainerBase):
         else:
             self.args.ignored_labels = set()
 
-        self.evaluator = classifiers.init_evaluator(
-            self.task, self.dic, self.args.ignored_labels)
+        # TODO reflect ignored_labels
+        evaluator = None
+        if self.task == constants.TASK_SEG:
+            evaluator = evaluators.FMeasureEvaluator(self.dic.tables[constants.SEG_LABEL].id2str)
+
+        elif self.task == constants.TASK_SEGTAG:
+            evaluator = evaluators.DoubleFMeasureEvaluator(self.dic.tables[constants.SEG_LABEL].id2str)
+
+        elif self.task == constants.TASK_TAG:
+            if common.use_fmeasure(self.dic.tables[constants.ATTR_LABEL(0)].str2id):
+                evaluator = evaluators.FMeasureEvaluator(self.dic.tables[constants.ATTR_LABEL(0)].id2str)
+            else:
+                evaluator = evaluators.AccuracyEvaluator(self.dic.tables[constants.ATTR_LABEL(0)].id2str)
+        self.evaluator = evaluator
         self.evaluator.calculator.id2token = self.dic.tables[constants.UNIGRAM].id2str # tmp
 
 

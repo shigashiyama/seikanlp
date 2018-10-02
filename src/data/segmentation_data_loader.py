@@ -147,9 +147,6 @@ class SegmentationDataLoader(DataLoader):
         get_toktype_id = dic.tables[constants.TOKEN_TYPE].get_id if self.use_tokentype else None
         get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id if self.use_chunk_trie else None
         get_seg_id = dic.tables[constants.SEG_LABEL].get_id
-        get_ith_attr_id = []
-        for i in range(num_attrs):
-            get_ith_attr_id.append(dic.tables[constants.ATTR_LABEL(i)].get_id)
         
         token_seqs = []
         bigram_seqs = []
@@ -264,7 +261,6 @@ class SegmentationDataLoader(DataLoader):
     """
     def load_gold_data_SL(self, path, dic=None, train=True):
         attr_delim = self.attr_delim if self.attr_delim else constants.SL_ATTR_DELIM
-        attr_dics = []
         num_attrs = len(self.attr_indexes)
 
         if not dic:
@@ -279,9 +275,6 @@ class SegmentationDataLoader(DataLoader):
         get_toktype_id = dic.tables[constants.TOKEN_TYPE].get_id if self.use_tokentype else None
         get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id if self.use_chunk_trie else None
         get_seg_id = dic.tables[constants.SEG_LABEL].get_id
-        get_ith_attr_id = []
-        for i in range(num_attrs):
-            get_ith_attr_id.append(dic.tables[constants.ATTR_LABEL(i)].get_id)
 
         token_seqs = []
         bigram_seqs = []
@@ -303,13 +296,11 @@ class SegmentationDataLoader(DataLoader):
                 bi_seq = []
                 type_seq = []
                 seg_seq = []
-                sen = ''
      
                 for entry in entries:
                     array = entry.split(attr_delim)
                     attr = ''
                     token = array[0]
-                    sen += token
                     tlen = len(token)
      
                     # only first attribute (usually POS) is used
@@ -360,7 +351,6 @@ class SegmentationDataLoader(DataLoader):
 
 
     def load_decode_data_SL(self, path, dic):
-        attr_dics = []
         num_attrs = len(self.attr_indexes)
 
         get_unigram_id = dic.tables[constants.UNIGRAM].get_id
@@ -387,7 +377,6 @@ class SegmentationDataLoader(DataLoader):
                 elif line[0] == constants.COMMENT_SYM:
                     continue
 
-                sen = line
                 org_token_seqs.append([char for char in line])
                 uni_seq = [get_unigram_id(char) for char in line]
                 token_seqs.append(uni_seq)
@@ -492,8 +481,8 @@ def init_dictionary(
         dic.tables[constants.TOKEN_TYPE].set_unk(constants.UNK_SYMBOL)
 
     # attributes
-    for i in range(num_attrs):
-        dic.create_table(constants.ATTR_LABEL(i))
+    # for i in range(num_attrs):
+    #     dic.create_table(constants.ATTR_LABEL(i))
         # dic.tables[constants.ATTR_LABEL(i)].set_unk(constants.UNK_SYMBOL)
 
     # chunk

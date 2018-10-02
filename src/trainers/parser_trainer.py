@@ -2,14 +2,17 @@ import sys
 
 from chainer import cuda
 
+import classifiers.dependency_parser
 import common
-import util
 import constants
 from data import data_loader, parsing_data_loader
-import classifiers
+import evaluators
+import models.parser
+import models.util
 import optimizers
 from trainers import trainer
 from trainers.trainer import Trainer
+import util
 
 
 class ParserTrainer(Trainer):
@@ -17,8 +20,40 @@ class ParserTrainer(Trainer):
         super().__init__(args, logger)
         self.unigram_embed_model = None
         self.label_begin_index = 3
-        # elif args.task == 'tag_dep' or args.task == 'tag_tdep':
-        #     self.label_begin_index = 2
+
+
+    def show_data_info(self, data_type):
+        dic = self.dic_dev if data_type == 'devel' else self.dic
+        self.log('### {} dic'.format(data_type))
+        self.log('Num of tokens: {}'.format(len(dic.tables[constants.UNIGRAM])))
+        
+
+    def show_training_data(self):
+        train = self.train
+        dev = self.dev
+        self.log('### Loaded data')
+        self.log('# train: {} ... {}\n'.format(train.inputs[0][0], train.inputs[0][-1]))
+        self.log('# train_gold_head: {} ... {}\n'.format(train.outputs[1][0], train.outputs[1][-1]))
+        if self.dic.has_table(constants.ARC_LABEL):
+            self.log('# train_gold_label: {} ... {}\n'.format(train.outputs[2][0], train.outputs[2][-1]))
+        t2i_tmp = list(self.dic.tables[constants.UNIGRAM].str2id.items())
+        self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
+
+        if self.dic.has_table(constants.SEG_LABEL):
+            id2seg = {v:k for k,v in self.dic.tables[constants.SEG_LABEL].str2id.items()}
+            self.log('# seg labels: {}\n'.format(id2seg))
+        attr_indexes=common.get_attribute_values(self.args.attr_indexes)
+        for i in range(len(attr_indexes)):
+            if self.dic.has_table(constants.ATTR_LABEL(i)):
+                id2attr = {v:k for k,v in self.dic.tables[constants.ATTR_LABEL(i)].str2id.items()}
+                self.log('# {}-th attribute labels: {}\n'.format(i, id2attr))
+        if self.dic.has_table(constants.ARC_LABEL):
+            id2arc = {v:k for k,v in self.dic.tables[constants.ARC_LABEL].str2id.items()}
+            self.log('# arc labels: {}\n'.format(id2arc))
+        
+        self.report('[INFO] vocab: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
+        self.report('[INFO] data length: train={} devel={}'.format(
+            len(train.inputs[0]), len(dev.inputs[0]) if dev else 0))
 
 
     def load_external_embedding_models(self):
@@ -186,34 +221,6 @@ class ParserTrainer(Trainer):
         )
 
 
-    def show_training_data(self):
-        train = self.train
-        dev = self.dev
-        self.log('### Loaded data')
-        self.log('# train: {} ... {}\n'.format(train.inputs[0][0], train.inputs[0][-1]))
-        self.log('# train_gold_head: {} ... {}\n'.format(train.outputs[1][0], train.outputs[1][-1]))
-        if self.dic.has_table(constants.ARC_LABEL):
-            self.log('# train_gold_label: {} ... {}\n'.format(train.outputs[2][0], train.outputs[2][-1]))
-        t2i_tmp = list(self.dic.tables[constants.UNIGRAM].str2id.items())
-        self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
-
-        if self.dic.has_table(constants.SEG_LABEL):
-            id2seg = {v:k for k,v in self.dic.tables[constants.SEG_LABEL].str2id.items()}
-            self.log('# seg labels: {}\n'.format(id2seg))
-        attr_indexes=common.get_attribute_values(self.args.attr_indexes)
-        for i in range(len(attr_indexes)):
-            if self.dic.has_table(constants.ATTR_LABEL(i)):
-                id2attr = {v:k for k,v in self.dic.tables[constants.ATTR_LABEL(i)].str2id.items()}
-                self.log('# {}-th attribute labels: {}\n'.format(i, id2attr))
-        if self.dic.has_table(constants.ARC_LABEL):
-            id2arc = {v:k for k,v in self.dic.tables[constants.ARC_LABEL].str2id.items()}
-            self.log('# arc labels: {}\n'.format(id2arc))
-        
-        self.report('[INFO] vocab: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
-        self.report('[INFO] data length: train={} devel={}'.format(
-            len(train.inputs[0]), len(dev.inputs[0]) if dev else 0))
-
-
     def setup_optimizer(self):
         super().setup_optimizer()
 
@@ -223,6 +230,57 @@ class ParserTrainer(Trainer):
             self.log('Fix parameters: pretrained_unigram_embed/W')
         if delparams:
             self.optimizer.add_hook(optimizers.DeleteGradient(delparams))
+
+
+    def setup_classifier(self):
+        dic = self.dic
+        hparams = self.hparams
+
+        n_vocab = len(dic.tables['unigram'])
+        unigram_embed_dim = hparams['unigram_embed_dim']
+        subtoken_embed_dim = n_subtokens = 0
+
+        if 'pretrained_unigram_embed_dim' in hparams and hparams['pretrained_unigram_embed_dim'] > 0:
+            pretrained_unigram_embed_dim = hparams['pretrained_unigram_embed_dim']
+        else:
+            pretrained_unigram_embed_dim = 0
+
+        if 'pretrained_embed_usage' in hparams:
+            pretrained_embed_usage = models.util.ModelUsage.get_instance(hparams['pretrained_embed_usage'])
+        else:
+            pretrained_embed_usage = models.util.ModelUsage.NONE
+
+        n_attr0 = len(dic.tables[constants.ATTR_LABEL(0)]) if (
+            hparams['attr0_embed_dim'] > 0 and constants.ATTR_LABEL(0) in dic.tables) else 0
+        n_labels = len(dic.tables[constants.ARC_LABEL]) if common.is_typed_parsing_task(self.task) else 0
+        attr0_embed_dim = hparams['attr0_embed_dim'] if n_attr0 > 0 else 0
+
+        if (pretrained_embed_usage == models.util.ModelUsage.ADD or
+            pretrained_embed_usage == models.util.ModelUsage.INIT):
+            if pretrained_unigram_embed_dim > 0 and pretrained_unigram_embed_dim != unigram_embed_dim:
+                print('Error: pre-trained and random initialized unigram embedding vectors '
+                      + 'must be the same dimension for {} operation'.format(hparams['pretrained_embed_usage'])
+                      + ': d1={}, d2={}'.format(pretrained_unigram_embed_dim, unigram_embed_dim),
+                      file=sys.stderr)
+                sys.exit()
+
+        predictor = models.parser.RNNBiaffineParser(
+            n_vocab, unigram_embed_dim, n_attr0, attr0_embed_dim,
+            n_subtokens, subtoken_embed_dim, 
+            hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_n_layers'], 
+            hparams['rnn_n_units'], 
+            hparams['mlp4arcrep_n_layers'], hparams['mlp4arcrep_n_units'],
+            hparams['mlp4labelrep_n_layers'], hparams['mlp4labelrep_n_units'],
+            mlp4labelpred_n_layers=hparams['mlp4labelpred_n_layers'], 
+            mlp4labelpred_n_units=hparams['mlp4labelpred_n_units'],
+            n_labels=n_labels, rnn_dropout=hparams['rnn_dropout'], 
+            hidden_mlp_dropout=hparams['hidden_mlp_dropout'], 
+            pred_layers_dropout=hparams['pred_layers_dropout'],
+            pretrained_unigram_embed_dim=pretrained_unigram_embed_dim,
+            pretrained_embed_usage=pretrained_embed_usage)
+
+        self.classifier = classifiers.dependency_parser.DependencyParser(predictor)
+
 
 
     def setup_evaluator(self):
@@ -240,7 +298,15 @@ class ParserTrainer(Trainer):
         else:
             self.args.ignored_labels = set()
 
-        self.evaluator = classifiers.init_evaluator(self.task, self.dic, ignored_labels=self.args.ignored_labels)
+        evaluator = None
+        if self.task == constants.TASK_DEP:
+            evaluator = evaluators.ParserEvaluator(ignore_head=True)
+        
+        elif self.task == constants.TASK_TDEP:
+            evaluator = evaluators.TypedParserEvaluator(
+                ignore_head=True, ignored_labels=self.args.ignored_labels)
+
+        self.evaluator = evaluator
 
 
     def gen_inputs(self, data, ids, evaluate=True):

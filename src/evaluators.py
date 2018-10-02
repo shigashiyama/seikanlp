@@ -557,44 +557,44 @@ class TypedParserEvaluator(DoubleAccuracyEvaluator):
         return res
 
 
-class TaggerParserEvaluator(DoubleAccuracyEvaluator):
-    def __init__(self, ignore_head=True, ignored_labels=set()):
-        super().__init__(ignore_head=ignore_head, ignored_labels=ignored_labels)
+# class TaggerParserEvaluator(DoubleAccuracyEvaluator):
+#     def __init__(self, ignore_head=True, ignored_labels=set()):
+#         super().__init__(ignore_head=ignore_head, ignored_labels=ignored_labels)
 
 
-    def report_results(self, sen_counter, counts, loss, file=sys.stderr):
-        ave_loss = loss / counts.l1.total
-        uas = 1.*counts.l1.correct / counts.l1.total
-        las = 1.*counts.l2.correct / counts.l2.total
+#     def report_results(self, sen_counter, counts, loss, file=sys.stderr):
+#         ave_loss = loss / counts.l1.total
+#         uas = 1.*counts.l1.correct / counts.l1.total
+#         las = 1.*counts.l2.correct / counts.l2.total
         
-        print('ave loss: %.5f'% ave_loss, file=file)
-        print('sen, token, correct head, correct label: {} {} {} {}'.format(
-            sen_counter, counts.l1.total, counts.l1.correct, counts.l2.correct), file=file)
-        print('POS, UAS:%6.2f %6.2f' % ((100.*uas), (100.*las)), file=file)
+#         print('ave loss: %.5f'% ave_loss, file=file)
+#         print('sen, token, correct head, correct label: {} {} {} {}'.format(
+#             sen_counter, counts.l1.total, counts.l1.correct, counts.l2.correct), file=file)
+#         print('POS, UAS:%6.2f %6.2f' % ((100.*uas), (100.*las)), file=file)
 
-        res = '%.2f\t%.2f\t%.4f' % ((100.*uas), (100.*las), ave_loss)
-        return res
-
-
-class TaggerTypedParserEvaluator(TripleAccuracyEvaluator):
-    def __init__(self, ignore_head=True, ignored_labels=set()):
-        super().__init__(ignore_head=ignore_head, ignored_labels=ignored_labels)
+#         res = '%.2f\t%.2f\t%.4f' % ((100.*uas), (100.*las), ave_loss)
+#         return res
 
 
-    def report_results(self, sen_counter, counts, loss, file=sys.stderr):
-        ave_loss = loss / counts.l1.total
-        pos = 1.*counts.l1.correct / counts.l1.total
-        uas = 1.*counts.l2.correct / counts.l2.total
-        las = 1.*counts.l3.correct / counts.l3.total
+# class TaggerTypedParserEvaluator(TripleAccuracyEvaluator):
+#     def __init__(self, ignore_head=True, ignored_labels=set()):
+#         super().__init__(ignore_head=ignore_head, ignored_labels=ignored_labels)
+
+
+#     def report_results(self, sen_counter, counts, loss, file=sys.stderr):
+#         ave_loss = loss / counts.l1.total
+#         pos = 1.*counts.l1.correct / counts.l1.total
+#         uas = 1.*counts.l2.correct / counts.l2.total
+#         las = 1.*counts.l3.correct / counts.l3.total
         
-        print('ave loss: %.5f'% ave_loss, file=file)
-        print('sen, token, correct pos, correct head, correct label: {} {} {} {} {}'.format(
-            sen_counter, counts.l1.total, counts.l1.correct, counts.l2.correct, counts.l3.correct), 
-              file=file)
-        print('POS, UAS, LAS:%6.2f %6.2f %6.2f' % ((100.*pos), (100.*uas), (100.*las)), file=file)
+#         print('ave loss: %.5f'% ave_loss, file=file)
+#         print('sen, token, correct pos, correct head, correct label: {} {} {} {} {}'.format(
+#             sen_counter, counts.l1.total, counts.l1.correct, counts.l2.correct, counts.l3.correct), 
+#               file=file)
+#         print('POS, UAS, LAS:%6.2f %6.2f %6.2f' % ((100.*pos), (100.*uas), (100.*las)), file=file)
 
-        res = '%.2f\t%.2f\t%.4f' % ((100.*uas), (100.*las), ave_loss)
-        return res
+#         res = '%.2f\t%.2f\t%.4f' % ((100.*uas), (100.*las), ave_loss)
+#         return res
 
 
 def ret1():
