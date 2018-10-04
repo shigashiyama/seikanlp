@@ -12,7 +12,6 @@ import numpy as np
 
 import common
 import constants
-import classifiers_tmp
 import evaluators
 import features
 

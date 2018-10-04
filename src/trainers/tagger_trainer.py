@@ -410,7 +410,7 @@ class TaggerTrainer(TaggerTrainerBase):
         # scheme = hparams['tagging_scheme']
         attr_indexes=common.get_attribute_values(self.args.attr_indexes)
 
-        if self.task == constants.TASK_SEG:
+        if self.task == constants.TASK_SEG or self.task == constants.TASK_SEGTAG:
             self.data_loader = segmentation_data_loader.SegmentationDataLoader(
                 token_index=self.args.token_index,
                 attr_indexes=attr_indexes,
