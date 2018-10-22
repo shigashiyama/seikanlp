@@ -9,8 +9,6 @@
 # - LaTeX output (-l argument) not supported
 # - raw tags (-r argument) not supported
 
-# paste <(cat bccwj_data/LBa-wseg.tsv) <(cut -f2 bccwj_data/LBa-wseg.tsv) | head -100 | sed -e s/^'\t'*$//g > conlleval/tests/e-b-sequence.txt 
-
 import sys
 import re
 
@@ -158,7 +156,7 @@ def uniq(iterable):
 
 def calculate_metrics(correct, guessed, total, correct_tokens=0, total_tokens=0):
     tp, fp, fn = correct, guessed-correct, total-correct
-    a = (1.*correct_tokens / total_tokens) if total_tokens > 0 else -1
+    a = (1.*correct_tokens / total_tokens) if total_tokens > 0 else 0
     p = 0 if tp + fp == 0 else 1.*tp / (tp + fp)
     r = 0 if tp + fn == 0 else 1.*tp / (tp + fn)
     f = 0 if p + r == 0 else 2 * p * r / (p + r)

@@ -11,9 +11,9 @@ TASK_TAG = 'tag'
 TASK_DEP = 'dep'
 TASK_TDEP = 'tdep'
 
-TASK_MD_SEG = 'mdseg'
-TASK_MD_SEGTAG = 'mdtag'
-TASK_MD_TAG = 'mdtag'
+TASK_MTMD_SEG = 'mtmd_seg'
+TASK_MTMD_SEGTAG = 'mtmd_segtag'
+TASK_MTMD_TAG = 'mtmd_tag'
 
 ### for analyzer
 

@@ -37,7 +37,8 @@ class MLP(chainer.Chain):
 
         for i in range(n_layers):
             print('#   Affine {}-th layer:                 W={}, b={}, dropout={}, act={}'.format(
-                i, self.layers[i].W.shape, self.layers[i].b.shape, self.dropout, self.acts[i]), file=file)
+                i, self.layers[i].W.shape, self.layers[i].b.shape, self.dropout, 
+                self.acts[i].__name__), file=file)
 
 
     def __call__(self, xs, start_index=0, per_element=True):

@@ -88,6 +88,25 @@ def merge_counts(c1, c2):
     #     return None
 
 
+def init_multi_counts(num_subtasks, num_domains, obj_type):
+    if obj_type == 'ACounts':
+        mcounts = [[ACounts() for j in range(num_domains)]
+                   for i in range(num_subtasks)]
+
+    elif obj_type == 'FCounts':
+        mcounts = [[conlleval.FCounts() for j in range(num_domains)]
+                   for i in range(num_subtasks)]
+
+    elif obj_type == 'FACounts':
+        mcounts = [[FACounts() for j in range(num_domains)]
+                   for i in range(num_subtasks)]
+
+    else:
+        mcounts = None
+
+    return mcounts
+
+
 class ACounts(object):
     def __init__(self):
         self.total = 0
@@ -214,7 +233,7 @@ class TripleAccuracyCalculator(object):
 class FMeasureCalculator(object):
     def __init__(self, id2label):
         self.id2label = id2label
-        self.id2token = None    # tmp
+        # self.id2token = None    # tmp
 
 
     def __call__(self, xs, ts, ys):
@@ -358,6 +377,37 @@ class FMeasureAndAccuracyCalculator(object):
             yseg_str = y_str.split('-')[0]
 
             yield [x_str, tseg_str, yseg_str]
+            i += 1
+
+
+class MultiTaskFMeasureCalculator(object):
+    def __init__(self, id2label_list):
+        self.id2label_list = id2label_list
+
+
+    def __call__(self, xs, ts, ys, subtask_id):
+        counts = conlleval.FCounts()
+
+        for x, t, y in zip(xs, ts, ys):
+            generator = self.generate_lines(x, t, y, subtask_id)
+            counts = conlleval.evaluate(generator, counts=counts)
+
+        return counts
+
+
+    def generate_lines(self, x, t, y, subtask_id):
+        id2label = self.id2label_list[subtask_id]
+
+        i = 0
+        while True:
+            if i == len(x):
+                raise StopIteration
+
+            x_str = str(x[i])
+            t_str = id2label[int(t[i])] if int(t[i]) > -1 else 'NONE'
+            y_str = id2label[int(y[i])] if int(y[i]) > -1 else 'NONE'
+
+            yield [x_str, t_str, y_str]
             i += 1
 
 
@@ -528,9 +578,75 @@ class TripleAccuracyEvaluator(object):
         return counts
 
 
-class TaggerEvaluator(AccuracyEvaluator):
-    def __init__(self, ignore_head=False, ignored_labels=set()):
-        super().__init__(ignore_head=ignore_head, ignored_labels=ignored_labels)
+# class TaggerEvaluator(AccuracyEvaluator):
+#     def __init__(self, ignore_head=False, ignored_labels=set()):
+#         super().__init__(ignore_head=ignore_head, ignored_labels=ignored_labels)
+
+
+class MTMDFMeasureEvaluator(object):
+    def __init__(self, num_subtasks, id2domain, id2label_list):
+        self.num_subtasks = num_subtasks
+        self.id2domain = id2domain
+        self.calculator = MultiTaskFMeasureCalculator(id2label_list)
+
+
+    def init_multi_counts(self):
+        return init_multi_counts(self.num_subtasks, len(self.id2domain)+1, 'FCounts')
+
+
+    def merge_counts(self, total_counts, counts, subtask_id, domain_id):
+        # in-domain
+        org_counts = total_counts[subtask_id][domain_id]
+        new_counts = merge_counts(org_counts, counts)
+        total_counts[subtask_id][domain_id] = new_counts
+
+        # cross-domain
+        cd_index = len(self.id2domain)
+        org_counts = total_counts[subtask_id][cd_index]
+        new_counts = merge_counts(org_counts, counts)
+        total_counts[subtask_id][cd_index] = new_counts
+
+
+    def calculate(self, *inputs): # xs, ts, ys, subtask_id
+        counts = self.calculator(*inputs)
+        return counts
+
+
+    def report_results(self, sen_counter, total_counts, file=sys.stderr):
+        p_res = 'Pre'
+        r_res = 'Rec'
+        f_res = 'F1'
+
+        print('sen: %d' % sen_counter, file=file)
+        for i, counts_domains in enumerate(total_counts):
+            print('subtask %d' % i, file=file)
+            p_res += '\tT%d' % (i)
+            r_res += '\tT%d' % (i)
+            f_res += '\tT%d' % (i)
+
+            for j, counts in enumerate(counts_domains):
+                met = conlleval.calculate_metrics(
+                    counts.correct_chunk, counts.found_guessed, counts.found_correct,
+                    counts.correct_tags, counts.token_counter)
+                print('  %d-th domain %s -\tA, P, R, F:%6.2f %6.2f %6.2f %6.2f' % (
+                    j, self.id2domain[j] if j < len(self.id2domain) else 'Total',
+                    100.*met.acc, 100.*met.prec, 100.*met.rec, 100.*met.fscore), file=file)
+
+                # print('  domain %d - %s' % (
+                #     j, self.id2domain[j] if j < len(self.id2domain) else 'Total'), file=file)
+                # print('    token, chunk, chunk_pred: {} {} {}'.format(
+                #     counts.token_counter, counts.found_correct, counts.found_guessed), file=file)
+                # print('    TP, FP, FN: %d %d %d' % (met.tp, met.fp, met.fn), file=file)
+                # print('    A, P, R, F:%6.2f %6.2f %6.2f %6.2f' % 
+                #       (100.*met.acc, 100.*met.prec, 100.*met.rec, 100.*met.fscore), file=file)
+
+                p_res += '\t%.2f' % (100.*met.prec)
+                r_res += '\t%.2f' % (100.*met.rec)
+                f_res += '\t%.2f' % (100.*met.fscore)
+        print('', file=file)
+
+        res = '%s\n%s\n%s' % (p_res, r_res, f_res)
+        return res
 
 
 class ParserEvaluator(AccuracyEvaluator):

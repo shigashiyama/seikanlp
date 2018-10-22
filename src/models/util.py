@@ -265,8 +265,8 @@ def grow_crf_layer(n_labels_org, n_labels_grown, crf, file=sys.stderr):
         return
 
     c_org = crf.cost
-    c_diff1 = chainer.Parameter(xp.zeros((n_labels_org, diff)))
-    c_diff2 = chainer.Parameter(xp.zeros((diff, n_labels_grown)))
+    c_diff1 = chainer.Parameter(xp.zeros((n_labels_org, diff), dtype=np.float32))
+    c_diff2 = chainer.Parameter(xp.zeros((diff, n_labels_grown), dtype=np.float32))
     c_tmp = F.concat((c_org, c_diff1), 1)
     c_new = F.concat((c_tmp, c_diff2), 0)
     crf.cost = chainer.Parameter(initializer=c_new.data, name='cost')
@@ -284,7 +284,9 @@ def grow_MLP(n_labels_org, n_labels_grown, out_layer, file=sys.stderr):
     w_org_shape = w_org.shape
 
     dim = w_org.shape[1]
-    w_diff = chainer.Parameter(xp.random.normal(scale=1.0, size=(diff, dim)))
+    w_diff_array = xp.zeros((diff, dim), dtype=np.float32)
+    w_diff_array[:] =xp.random.normal(scale=1.0, size=(diff, dim))
+    w_diff = chainer.Parameter(w_diff_array)
     w_new = F.concat((w_org, w_diff), 0)
     out_layer.W = chainer.Parameter(initializer=w_new.data)
     w_shape = out_layer.W.shape
@@ -292,7 +294,9 @@ def grow_MLP(n_labels_org, n_labels_grown, out_layer, file=sys.stderr):
     if 'b' in out_layer.__dict__:
         b_org = out_layer.b
         b_org_shape = b_org.shape
-        b_diff = chainer.Parameter(xp.random.normal(scale=1.0), size=(diff,))
+        b_diff_array = xp.zeros((diff,), dtype=np.float32)
+        b_diff_array[:] = xp.random.normal(scale=1.0, size=(diff,))
+        b_diff = chainer.Parameter(b_diff_array)
         b_new = F.concat((b_org, b_diff), 0)
         out_layer.b = chainer.Parameter(initializer=b_new.data)
         b_shape = out_layer.b.shape
@@ -313,7 +317,10 @@ def grow_biaffine_layer(n_labels_org, n_labels_grown, biaffine, file=sys.stderr)
     w_org_shape = w_org.shape
 
     dim = w_org.shape[1]
-    w_diff = chainer.Parameter(xp.random.normal(scale=1.0, size=(diff, dim)))
+
+    w_diff_array = xp.zeros((diff, dim), dtype=np.float32)
+    w_diff_array[:] =xp.random.normal(scale=1.0, size=(diff, dim))
+    w_diff = chainer.Parameter(w_diff_array)
     w_new = F.concat((w_org, w_diff), 0)
     affine.W = chainer.Parameter(initializer=w_new.data)
     w_shape = affine.W.shape
@@ -321,7 +328,9 @@ def grow_biaffine_layer(n_labels_org, n_labels_grown, biaffine, file=sys.stderr)
     if 'b' in affine.__dict__:
         b_org = affine.b
         b_org_shape = b_org.shape
-        b_diff = chainer.Parameter(xp.random.normal(scale=1.0, size=(diff,)))
+        b_diff_array = xp.zeros((diff,), dtype=np.float32)
+        b_diff_array[:] = xp.random.normal(scale=1.0, size=(diff,))
+        b_diff = chainer.Parameter(b_diff_array)
         b_new = F.concat((b_org, b_diff), 0)
         affine.b = chainer.Parameter(initializer=b_new.data)
         b_shape = affine.b.shape

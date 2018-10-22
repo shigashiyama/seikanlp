@@ -79,8 +79,8 @@ class SeikaNLP(object):
 
         if not trainer.classifier:
             trainer.init_model()
-        # else:
-        #     trainer.update_model()
+        else:
+            trainer.update_model()
 
         if use_gpu:
             trainer.classifier.to_gpu()

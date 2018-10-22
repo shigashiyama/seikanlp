@@ -1,5 +1,4 @@
 import sys
-import traceback
 
 import numpy as np
 
@@ -13,7 +12,6 @@ from chainer.links.connection.n_step_rnn import argsort_list_descent, permutate_
 
 import constants
 import models.util
-
 from models.util import ModelUsage
 from models.common import MLP
 from models.parser import BiaffineCombination
@@ -116,7 +114,8 @@ class RNNTagger(chainer.Chain):
     def __call__(self, us, bs=None, ts=None, es=None, fs=None, ls=None, calculate_loss=True):
         xs = self.extract_features(us, bs, ts, es, fs)
         rs = self.rnn_output(xs)
-        loss, ps = self.predict(rs, ls=ls, calculate_loss=calculate_loss)
+        ys = self.mlp(rs)
+        loss, ps = self.predict(ys, ls=ls, calculate_loss=calculate_loss)
 
         return loss, ps
         
@@ -189,11 +188,10 @@ class RNNTagger(chainer.Chain):
             return self.predict_softmax(rs, ls, calculate_loss)
 
 
-    def predict_softmax(self, rs, ls=None, calculate_loss=True):
-        ys = self.mlp(rs)
-        ps = []
+    def predict_softmax(self, ys, ls=None, calculate_loss=True):
+        xp = cuda.get_array_module(ys[0])
 
-        xp = cuda.get_array_module(rs[0])
+        ps = []
         loss = chainer.Variable(xp.array(0, dtype='f'))
         if not ls:
             ls = [None] * len(rs)
@@ -205,9 +203,7 @@ class RNNTagger(chainer.Chain):
         return loss, ps
 
 
-    def predict_crf(self, rs, ls=None, calculate_loss=True):
-        hs = self.mlp(rs)
-
+    def predict_crf(self, hs, ls=None, calculate_loss=True):
         indices = argsort_list_descent(hs)
         trans_hs = F.transpose_sequence(permutate_list(hs, indices, inv=False))
         score, trans_ys = self.crf.argmax(trans_hs)
