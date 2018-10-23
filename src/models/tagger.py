@@ -415,7 +415,8 @@ class RNNTaggerWithChunk(RNNTagger):
 
         if self.use_rnn2:
             hs = self.rnn2_output(hs)                # h -[RNN]-> h'
-        sloss, pls = self.predict(hs, ls=gls, calculate_loss=calculate_loss)
+        ys = self.mlp(hs)
+        sloss, pls = self.predict(ys, ls=gls, calculate_loss=calculate_loss)
 
         if closs is not None:
             loss = (1 - self.chunk_loss_ratio) * sloss + self.chunk_loss_ratio * closs

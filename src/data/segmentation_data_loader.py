@@ -296,12 +296,14 @@ class SegmentationDataLoader(DataLoader):
                 bi_seq = []
                 type_seq = []
                 seg_seq = []
-     
+                raw_sen = ''
+
                 for entry in entries:
                     array = entry.split(attr_delim)
                     attr = ''
                     token = array[0]
                     tlen = len(token)
+                    raw_sen += token
      
                     # only first attribute (usually POS) is used
                     if num_attrs > 0:
@@ -320,15 +322,16 @@ class SegmentationDataLoader(DataLoader):
                             [get_toktype_id(get_char_type(ptoken[i]), update=train) for i in range(tlen)])
 
                 if self.use_bigram:
-                    str_bigrams = data_loader.create_all_char_ngrams(sen, 2)
-                    str_bigrams.append('{}{}'.format(sen[-1], constants.EOS))
+                    
+                    str_bigrams = data_loader.create_all_char_ngrams(raw_sen, 2)
+                    str_bigrams.append('{}{}'.format(raw_sen[-1], constants.EOS))
                     bi_seq = [
                         get_bigram_id(
                             sb, update=self.to_be_registered(sb, train, self.freq_bigrams, self.bigram_vocab))
                         for sb in str_bigrams]
   
                 if self.use_chunk_trie:
-                    self.register_chunks(sen, uni_seq, get_chunk_id, seg_seq, train=train)
+                    self.register_chunks(raw_sen, uni_seq, get_chunk_id, seg_seq, train=train)
 
                 token_seqs.append(uni_seq)
                 if bi_seq:
@@ -385,15 +388,15 @@ class SegmentationDataLoader(DataLoader):
                     toktype_seqs.append([get_toktype_id(get_char_type(char)) for char in line])
 
                 if self.use_bigram:
-                    str_bigrams = data_loader.create_all_char_ngrams(sen, 2)
-                    str_bigrams.append('{}{}'.format(sen[-1], constants.EOS))
+                    str_bigrams = data_loader.create_all_char_ngrams(line, 2)
+                    str_bigrams.append('{}{}'.format(line[-1], constants.EOS))
                     bi_seq = [
                         get_bigram_id(
                             sb, update=self.to_be_registered(sb, train, self.freq_bigrams, self.bigram_vocab))
                         for sb in str_bigrams]
   
                 if self.use_chunk_trie:
-                    self.register_chunks(sen, uni_seq, get_chunk_id, train=False)
+                    self.register_chunks(line, uni_seq, get_chunk_id, train=False)
 
                 token_seqs.append(uni_seq)
                 if self.use_bigram:
