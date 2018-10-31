@@ -1,9 +1,11 @@
+import sys
+
+import numpy as np
+
 import constants
 import dictionary
 from data import data_loader
 from data.data_loader import DataLoader, Data, RestorableData
-
-import numpy as np
 
 
 class SegmentationDataLoader(DataLoader):
@@ -374,7 +376,7 @@ class SegmentationDataLoader(DataLoader):
         with open(path) as f:
             for line in f:
                 line = self.normalize_input_line(line)
-                if len(line) <= 1:
+                if len(line) == 0:
                     continue
 
                 elif line[0] == constants.COMMENT_SYM:
@@ -382,7 +384,6 @@ class SegmentationDataLoader(DataLoader):
 
                 org_token_seqs.append([char for char in line])
                 uni_seq = [get_unigram_id(char) for char in line]
-                token_seqs.append(uni_seq)
 
                 if self.use_tokentype:
                     toktype_seqs.append([get_toktype_id(get_char_type(char)) for char in line])
@@ -392,7 +393,8 @@ class SegmentationDataLoader(DataLoader):
                     str_bigrams.append('{}{}'.format(line[-1], constants.EOS))
                     bi_seq = [
                         get_bigram_id(
-                            sb, update=self.to_be_registered(sb, train, self.freq_bigrams, self.bigram_vocab))
+                            sb, update=self.to_be_registered(
+                                sb, False, self.freq_bigrams, self.bigram_vocab))
                         for sb in str_bigrams]
   
                 if self.use_chunk_trie:
