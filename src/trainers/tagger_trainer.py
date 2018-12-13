@@ -82,7 +82,16 @@ class TaggerTrainerBase(Trainer):
         bs = [xp.asarray(data.inputs[1][j], dtype='i') for j in ids] if data.inputs[1] else None
         ts = [xp.asarray(data.inputs[2][j], dtype='i') for j in ids] if data.inputs[2] else None
         es = [xp.asarray(data.inputs[3][j], dtype='i') for j in ids] if data.inputs[3] else None
-        fs = [data.featvecs[j] for j in ids] if self.hparams['feature_template'] else None
+
+        if self.hparams['feature_template']:
+            if self.args.batch_feature_extraction:
+                fs = [data.featvecs[j] for j in ids]
+            else:
+                us_int = [data.inputs[0][j] for j in ids]
+                fs = self.feat_extractor.extract_features(us_int, self.dic.tries[constants.CHUNK])
+        else:
+            fs = None                
+
         ls = [xp.asarray(data.outputs[0][j], dtype='i') for j in ids] if evaluate else None
 
         if evaluate:
@@ -209,16 +218,16 @@ class TaggerTrainerBase(Trainer):
         if not self.dic and self.args.external_dic_path:
             use_pos = common.is_tagging_task(self.task)
             edic_path = self.args.external_dic_path
-            self.dic = data_loader.load_external_dictionary(edic_path, use_pos=use_pos)
+            self.dic = segmentation_data_loader.load_external_dictionary(edic_path)
             self.log('Load external dictionary: {}'.format(edic_path))
             self.log('Num of tokens: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
             
-            if not edic_path.endswith('pickle'):
-                base = edic_path.split('.')[0]
-                edic_pic_path = base + '.pickle'
-                with open(edic_pic_path, 'wb') as f:
-                    pickle.dump(self.dic, f)
-                self.log('Dumpped dictionary: {}'.format(edic_pic_path))
+            # if not edic_path.endswith('pickle'):
+            #     base = edic_path.split('.')[0]
+            #     edic_pic_path = base + '.pickle'
+            #     with open(edic_pic_path, 'wb') as f:
+            #         pickle.dump(self.dic, f)
+            #     self.log('Dumpped dictionary: {}'.format(edic_pic_path))
             self.log('')
 
 
@@ -239,6 +248,8 @@ class TaggerTrainer(TaggerTrainerBase):
 
     def init_model(self):
         super().init_model()
+        # uw = self.classifier.predictor.unigram_embed.W
+        # print(uw[1], uw[2], uw[3])
         if self.unigram_embed_model or self.bigram_embed_model:
             finetuning = not self.hparams['fix_pretrained_embed']
             self.classifier.load_pretrained_embedding_layer(
@@ -447,18 +458,10 @@ class TaggerTrainer(TaggerTrainerBase):
 
     def setup_optimizer(self):
         super().setup_optimizer()
-
-        delparams = []
-
         if self.unigram_embed_model and self.args.fix_pretrained_embed:
-            delparams.append('pretrained_unigram_embed/W')
+            self.classifier.predictor.unigram_embed.disable_update()
         if self.bigram_embed_model and self.args.fix_pretrained_embed:
-            delparams.append('pretrained_bigram_embed/W')
-
-        if delparams:
-            for params in delparams:
-                self.log('Fix parameters: {}'.foramt(param))                
-            self.optimizer.add_hook(optimizers.DeleteGradient(delparams))
+            self.classifier.predictor.bigram_embed.disable_update()
 
 
     def setup_classifier(self):

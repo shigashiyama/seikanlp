@@ -62,7 +62,7 @@ class MapTrie(object):
             child = node.get_child(token)
             if not child:
                 break
-            #print(' ',child.id)
+            #print(' ', child.id)
 
             if child.id != self.unk_id:
                 append((begin_index, begin_index + i + 1))

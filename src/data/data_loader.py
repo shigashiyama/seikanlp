@@ -1,5 +1,6 @@
-import sys
+import pickle
 import re
+import sys
 
 import constants
 
@@ -409,54 +410,6 @@ class DataLoader(object):
             len(freq_tokens), len(counter), freq_threshold), file=sys.stderr)
         
         return freq_tokens
-
-
-def load_external_dictionary(path, n_attrs=0):
-    if path.endswith('pickle'):
-        with open(path, 'rb') as f:
-            dic = pickle.load(f)
-            dic.create_id2strs()
-        return dic
-
-    dic = dictionary.init_dictionary(
-        use_unigram=True, use_seg_label=True, use_chunk_trie=True, num_attrs=num_attr)
-    get_unigram_id = dic.tables[constants.UNIGRAM].get_id
-    get_pos_id = dic.tables[constants.POS_LABEL].get_id if use_pos else None
-    get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id
-
-    use_pos = False            # pos information in dictionary is not used yet
-    n_elems = 2 if use_pos else 1
-    attr_delim = constants.WL_ATTR_DELIM
-
-    with open(path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith(constants.ATTR_DELIM_TXT):
-                attr_delim = line.split(constants.KEY_VALUE_DELIM)[1]
-                print('Read attribute delimiter: \'{}\''.format(attr_delim), file=sys.stderr)
-                continue
-
-            elif line.startswith(constants.POS_CLM_TXT):
-                pos_clm = int(line.split('=')[1]) - 1
-                print('Read 1st label column id:', pos_clm+1, file=sys.stderr)
-                if pos_clm < 0:
-                    use_pos = False
-                    n_elems = 1
-                continue
-
-            arr = line.split(attr_delim)
-            if len(arr) < n_elems or len(arr[0]) == 0:
-                continue
-
-            word = arr[0]
-            char_ids = [get_unigram_id(char, update=True) for char in word]
-            word_id = get_chunk_id(char_ids, word, update=True)
-            if use_pos:
-                pos = arr[1]
-                get_pos_id(pos, update=True)
-                
-    dic.create_id2strs()
-    return dic
 
 
 def load_pickled_data(filename_wo_ext, load_dic=True):

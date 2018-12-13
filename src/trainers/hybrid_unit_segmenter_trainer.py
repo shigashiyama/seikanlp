@@ -86,9 +86,9 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
             if 'hidden_mlp_dropout' in self.hparams:
                 self.classifier.change_hidden_mlp_dropout_ratio(self.hparams['hidden_mlp_dropout'])
             if 'biaffine_dropout' in self.hparams:
-                self.classifier.change_rnn_dropout_ratio(self.hparams['biaffine_dropout'])
+                self.classifier.change_biaffine_dropout_ratio(self.hparams['biaffine_dropout'])
             if 'chunk_vector_dropout' in self.hparams:
-                self.classifier.change_rnn_dropout_ratio(self.hparams['chunk_vector_dropout'])
+                self.classifier.change_chunk_vector_dropout_ratio(self.hparams['chunk_vector_dropout'])
         else:
             self.classifier.change_dropout_ratio(0)
 
@@ -252,7 +252,6 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
             if self.hparams['pretrained_chunk_embed_dim'] > 0 and not self.chunk_embed_model:
                 self.log('Error: chunk embedding model is necessary.')
                 sys.exit()
-                
 
         if self.unigram_embed_model:
             pretrained_unigram_embed_dim = self.unigram_embed_model.wv.syn0[0].shape[0]
@@ -310,10 +309,6 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
 
     def load_data(self, data_type):
         super().load_data(data_type)
-        if self.hparams['feature_template']:
-            self.log('Start feature extraction for {} data\n'.format(data_type))
-            self.extract_features(data)
-
         if data_type == 'train':
             data = self.train
             dic = self.dic
@@ -364,7 +359,7 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
         n_vocab = len(dic.tables['unigram'])
         unigram_embed_dim = hparams['unigram_embed_dim']
         chunk_embed_dim = hparams['chunk_embed_dim']
-        n_chunks = len(dic.tries[constants.CHUNK])
+        n_chunks = len(dic.tries[constants.CHUNK]) if dic.has_trie(constants.CHUNK) else 1
      
         if 'bigram_embed_dim' in hparams and hparams['bigram_embed_dim'] > 0:
             bigram_embed_dim = hparams['bigram_embed_dim']
@@ -519,7 +514,15 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
         # print('m1', ms[0][1].shape if ms[0][1] is not None else None, ms[0][1])
         # print('m2', ms[0][2].shape if ms[0][2] is not None else None, ms[0][2])
 
-        fs = [data.featvecs[j] for j in ids] if self.hparams['feature_template'] else None
+        if self.hparams['feature_template']:
+            if self.args.batch_feature_extraction:
+                fs = [data.featvecs[j] for j in ids]
+            else:
+                us_int = [data.inputs[0][j] for j in ids]
+                fs = self.feat_extractor.extract_features(us_int, self.dic.tries[constants.CHUNK])
+        else:
+            fs = None                
+
         gls = [xp.asarray(data.outputs[0][j], dtype='i') for j in ids] if evaluate else None
         gcs = [xp.asarray(data.outputs[1][j], dtype='i') for j in ids] if evaluate else None
 

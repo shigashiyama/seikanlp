@@ -194,7 +194,8 @@ class Trainer(object):
         self.log('### arguments')
         for k, v in self.args.__dict__.items():
             if (k in self.hparams and
-                ('dropout' in k or 'freq_threshold' in k or 'max_vocab_size' in k)):
+                ('dropout' in k or 'freq_threshold' in k or 'max_vocab_size' in k or
+                 k == 'attr_indexes' )):
                 update = self.hparams[k] != v
                 message = '{}={}{}'.format(
                     k, v, ' (original value ' + str(self.hparams[k]) + ' was updated)' if update else '')
@@ -282,6 +283,10 @@ class Trainer(object):
         else:
             print('Error: incorect data type: {}'.format(), file=sys.stderr)
             sys.exit()
+
+        if self.hparams['feature_template'] and self.args.batch_feature_extraction: # for segmentation
+            data.featvecs = self.feat_extractor.extract_features(data.inputs[0], self.dic.tries[constants.CHUNK])
+            self.log('Extract dictionary features for {}'.format(data_type))
 
         self.log('Load {} data: {}'.format(data_type, data_path))
         self.show_data_info(data_type)

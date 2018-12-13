@@ -1,3 +1,4 @@
+import pickle
 import sys
 
 import numpy as np
@@ -17,7 +18,7 @@ class SegmentationDataLoader(DataLoader):
                  attr_delim=None,
                  use_bigram=False,
                  use_tokentype=False,
-                 use_chunk_trie=False,
+                 use_chunk_trie=False, # for a hybrid model
                  bigram_max_vocab_size=-1,
                  bigram_freq_threshold=1,
                  chunk_max_vocab_size=-1,
@@ -59,7 +60,8 @@ class SegmentationDataLoader(DataLoader):
             cid_ngrams = [unigram_seq[span[0]:span[1]] for span in span_ngrams]
             str_ngrams = [sen[span[0]:span[1]] for span in span_ngrams]
             for span, cn, sn in zip (span_ngrams, cid_ngrams, str_ngrams):
-                is_pretrained_chunk = not self.chunk_vocab or sn in self.chunk_vocab
+                # is_pretrained_chunk = not self.chunk_vocab or sn in self.chunk_vocab
+                is_pretrained_chunk = self.chunk_vocab and sn in self.chunk_vocab
                 if train:
                     is_gold_chunk = self.add_gold_chunk and span in spans_gold
                     pass_freq_filter = not self.freq_chunks or sn in self.freq_chunks
@@ -455,6 +457,37 @@ def get_segmentation_spans(label_seq):
         elif label == 2 : # 'E'
             spans.append((first, i+1))
     return spans
+
+
+def load_external_dictionary(path, num_attrs=0):
+    if path.endswith('pickle'):
+        with open(path, 'rb') as f:
+            dic = pickle.load(f)
+            dic.create_id2strs()
+        return dic
+
+    dic = init_dictionary(num_attrs=num_attrs, use_chunk_trie=True)
+
+    get_unigram_id = dic.tables[constants.UNIGRAM].get_id
+    get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id
+    attr_delim = constants.WL_ATTR_DELIM
+
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith(constants.COMMENT_SYM):
+                continue
+
+            arr = line.split(attr_delim)
+            if len(arr[0]) == 0:
+                continue
+
+            word = arr[0]
+            char_ids = [get_unigram_id(char, update=True) for char in word]
+            word_id = get_chunk_id(char_ids, word, update=True)
+                
+    dic.create_id2strs()
+    return dic
 
 
 def init_dictionary(

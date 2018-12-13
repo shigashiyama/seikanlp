@@ -252,10 +252,8 @@ class RNNTaggerWithChunk(RNNTagger):
             file=sys.stderr):
         self.__init__chain__()
 
-        # tmp
-        # self.id2token = None
-        # self.id2chunk = None
-        # self.id2label = None
+        self.rnn1_compression = False # tmp
+        self.use_gate = False         # tmp
 
         # TODO refactor with super class
         self.chunk_loss_ratio = chunk_loss_ratio
@@ -336,13 +334,23 @@ class RNNTaggerWithChunk(RNNTagger):
                 rnn_unit_type, rnn_bidirection, rnn_n_layers1, embed_dim, rnn_n_units1, rnn_dropout)
             rnn_output_dim1 = rnn_n_units1 * (2 if rnn_bidirection else 1)
 
+            # tmp
+            if self.rnn1_compression:
+                # self.w_rnn1comp = L.Linear(rnn_output_dim1, self.chunk_embed_out_dim)
+                # print('# Affine for RNN1 Comp: W={}, b={}'.format(
+                #     self.w_rnn1comp.W.shape, self.w_rnn1comp.b.shape), file=file)
+                print('# RNN1 Comp', file=file)
+                self.w_rnn1comp = MLP(rnn_output_dim1, self.chunk_embed_out_dim,
+                                      output_activation=F.tanh, file=file)
+                rnn_output_dim1 = self.chunk_embed_out_dim
+
             # biaffine b/w token and chunk
             if self.use_attention:
                 use_U = 'u' in biaffine_type or 'U' in biaffine_type
                 use_V = 'v' in biaffine_type or 'V' in biaffine_type
                 use_b = 'b' in biaffine_type or 'B' in biaffine_type
 
-                biaffine_left_dim = rnn_output_dim1
+                biaffine_left_dim = rnn_output_dim1 
                 self.biaffine = BiaffineCombination(biaffine_left_dim, chunk_embed_dim_merged,
                                                     use_U=use_U, use_V=use_V, use_b=use_b)
                 self.biaffine_dropout = biaffine_dropout
@@ -358,16 +366,30 @@ class RNNTaggerWithChunk(RNNTagger):
             self.chunk_vector_dropout = chunk_vector_dropout
             print('# Chunk vector dropout={}'.format(self.chunk_vector_dropout), file=file)
 
+            # gate # tmp
+            if self.use_gate:
+                print('# Gate', file=file)
+                self.w_gate = MLP(self.chunk_embed_out_dim * 2, self.chunk_embed_out_dim,
+                                  output_activation=F.sigmoid, file=file)
+
             # recurrent layers2
-         
+
+            
             if self.use_rnn2:
-                rnn_input_dim2 = rnn_output_dim1 + self.chunk_embed_out_dim
+                if self.use_gate: # tmp
+                    rnn_input_dim2 = self.chunk_embed_out_dim
+                else:
+                    rnn_input_dim2 = rnn_output_dim1 + self.chunk_embed_out_dim
+
                 self.rnn2 = models.util.construct_RNN(
                     rnn_unit_type, rnn_bidirection, rnn_n_layers2, rnn_input_dim2, rnn_n_units2, rnn_dropout)
                 rnn_output_dim2 = rnn_n_units2 * (2 if rnn_bidirection else 1)
                 mlp_input_dim = rnn_output_dim2
             else:
-                mlp_input_dim = rnn_output_dim1 + self.chunk_embed_out_dim
+                if self.use_gate: # tmp
+                    mlp_input_dim = self.chunk_embed_out_dim
+                else:
+                    mlp_input_dim = rnn_output_dim1 + self.chunk_embed_out_dim
 
             # MLP
 
@@ -399,6 +421,10 @@ class RNNTaggerWithChunk(RNNTagger):
 
         xs = self.extract_token_features(us, bs, ts, ss, fs)          # token unigram etc. -[Embed]-> x
         rs = self.rnn_output(xs)                                      # x -[RNN]-> r
+
+        if self.rnn1_compression: # tmp
+            # rs = [self.w_rnn1comp(r) for r in rs]
+            rs = self.w_rnn1comp(rs)
 
         if cs is not None:
             ws = self.extract_chunk_features(cs) # chunk -[Embed]-> w (chunk sequence)
@@ -461,6 +487,14 @@ class RNNTaggerWithChunk(RNNTagger):
 
         # return gcs, pcs, ncands, gls, pls
         return gcs, pcs, gls, pls, ass
+
+
+    # def rnn_output(self, xs):
+    #     if self.rnn_unit_type == 'lstm':
+    #         hy, cy, hs = self.rnn(None, None, xs)
+    #     else:
+    #         hy, hs = self.rnn(None, xs)
+    #     return hs
 
 
     def rnn2_output(self, xs):
@@ -627,6 +661,12 @@ class RNNTaggerWithChunk(RNNTagger):
                     closs += softmax_cross_entropy.softmax_cross_entropy(scores, gc)
 
             h = F.concat((x, a), axis=1) # (n, dt) @ (n, dc) => (n, dt+dc)
+
+            if self.use_gate:   # tmp
+                z = self.w_gate(h, per_element=False)
+                h_gated = z * x + (1-z) * a
+                h = h_gated
+
             hs.append(h)
 
         if closs.data == 0:

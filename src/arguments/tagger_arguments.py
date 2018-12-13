@@ -22,6 +22,7 @@ class TaggerArgumentLoader(ArgumentLoader):
                             'Use dictionary features based on given feature template file. '
                             + 'Specify \'defualt\' to use default features '
                             + 'or specify the path of castomized template file')
+        parser.add_argument('--batch_feature_extraction', action='store_true', help='')
 
         ### options for data pre/post-processing
         # common
@@ -124,6 +125,8 @@ class TaggerArgumentLoader(ArgumentLoader):
         parser.add_argument('--bigram_embed_model_path', default=args.bigram_embed_model_path)    
         parser.add_argument('--external_dic_path', default=args.external_dic_path)
         parser.add_argument('--feature_template', default=args.feature_template)
+        parser.add_argument('--batch_feature_extraction', action='store_true', 
+                            default=args.batch_feature_extraction)
         parser.add_argument('--mlp_dropout', type=float, default=args.mlp_dropout)
         parser.add_argument('--tagging_unit', default=args.tagging_unit)
         if args.external_dic_path and not args.feature_template:

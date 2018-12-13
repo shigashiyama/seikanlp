@@ -1,7 +1,6 @@
 import sys
 
 import common
-import arguments
 
 from seikanlp import SeikaNLP
 from arguments import tagger_arguments
