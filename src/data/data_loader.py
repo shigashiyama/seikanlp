@@ -41,8 +41,8 @@ class DataLoader(object):
 
 
     def normalize_input_line(self, line):
-        # line = re.sub(' +', ' ', line).strip(' \t\n')
-        line = re.sub(' +', ' ', line).strip(' \n')
+        line = re.sub(' +', ' ', line).strip(' \t\n')
+        # line = re.sub(' +', ' ', line).strip(' \n')
 
         ## to be removed
         # line = re.sub(' +', ' ', line).strip('\n')
@@ -204,7 +204,7 @@ class DataLoader(object):
         return freq_bigrams
      
      
-    def get_frequent_ngrams_SL(self, path, freq_threshold, max_vocab_size=-1, max_word_length=4):
+    def get_frequent_ngrams_SL(self, path, freq_threshold, max_vocab_size=-1, min_word_lenght=1, max_word_length=4):
         attr_delim = constants.WL_ATTR_DELIM
         counter = {}
         ins_cnt = 0
@@ -225,7 +225,7 @@ class DataLoader(object):
                     pstr += word
      
                 str_ngrams = create_all_char_ngrams(pstr, 2)
-                for n in range(1, max_word_length+1):
+                for n in range(min_word_length, max_word_length+1):
                     str_ngrams = create_all_char_ngrams(pstr, n)
                     for sb in str_ngrams:
                         if sb in counter:
@@ -256,7 +256,7 @@ class DataLoader(object):
         return freq_ngrams
      
      
-    def get_frequent_ngrams_WL(self, path, freq_threshold, max_vocab_size=-1, max_word_length=4):
+    def get_frequent_ngrams_WL(self, path, freq_threshold, max_vocab_size=-1, min_word_lenght=1, max_word_length=4):
         attr_delim = constants.WL_ATTR_DELIM
         counter = {}
         word_clm = self.token_index
@@ -267,7 +267,7 @@ class DataLoader(object):
             for line in f:
                 line = re.sub(' +', ' ', line).strip(' \t\n')
                 if len(line) < 1:
-                    for n in range(1, max_word_length+1):
+                    for n in range(min_word_length, max_word_length+1):
                         str_ngrams = create_all_char_ngrams(pstr, n)
                         for sb in str_ngrams:
                             if sb in counter:
@@ -290,7 +290,7 @@ class DataLoader(object):
                 pstr += word
      
             if pstr:
-                for n in range(1, max_word_length+1):
+                for n in range(min_word_length, max_word_length+1):
                     str_ngrams = create_all_char_ngrams(pstr, n)
                     for sb in str_ngrams:
                         if sb in counter:

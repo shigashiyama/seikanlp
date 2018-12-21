@@ -18,6 +18,7 @@ from models.parser import BiaffineCombination
 
 FLOAT_MIN = -100000.0
 
+
 class RNNTagger(chainer.Chain):
     def __init__chain__(self):  # tmp
         super().__init__()
@@ -25,8 +26,7 @@ class RNNTagger(chainer.Chain):
 
     def __init__(
             self, n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim,
-            n_tokentypes, tokentype_embed_dim, #n_subtokens, subtoken_embed_dim,
-            n_attrs, attr_embed_dim,
+            n_tokentypes, tokentype_embed_dim, n_attrs, attr_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp_n_layers, mlp_n_units, n_labels, 
             use_crf=True, feat_dim=0, mlp_n_additional_units=0,
@@ -152,7 +152,7 @@ class RNNTagger(chainer.Chain):
                     elif self.pretrained_embed_usage == ModelUsage.CONCAT:
                         pe = self.pretrained_bigram_embed(b)
                         be = F.concat((be, pe), 1)
-                be = F.dropout(be, self.embed_dropout) # FIX 20180725: F.dropout(ue, self.embed_dropout)
+                be = F.dropout(be, self.embed_dropout)
                 xe = F.concat((xe, be), 1)
 
             if t is not None:
@@ -247,33 +247,33 @@ class RNNTaggerWithChunk(RNNTagger):
             mlp_n_layers, mlp_n_units, n_labels, use_crf=True,
             feat_dim=0, embed_dropout=0, rnn_dropout=0, biaffine_dropout=0, mlp_dropout=0, chunk_vector_dropout=0, 
             pretrained_unigram_embed_dim=0, pretrained_bigram_embed_dim=0, pretrained_chunk_embed_dim=0, 
-            pretrained_embed_usage=ModelUsage.NONE, chunk_pooling_type='wave', max_chunk_len=0,
-            chunk_loss_ratio=0, biaffine_type='',
+            pretrained_embed_usage=ModelUsage.NONE, chunk_pooling_type=constants.AVG, 
+            min_chunk_len=1, max_chunk_len=0, chunk_loss_ratio=0, biaffine_type='',
             file=sys.stderr):
         self.__init__chain__()
 
         self.rnn1_compression = False # tmp
-        self.use_gate = False         # tmp
 
         # TODO refactor with super class
         self.chunk_loss_ratio = chunk_loss_ratio
-        self.use_attention = (chunk_pooling_type == 'wave' or chunk_pooling_type == 'wcon')
-        self.use_concat = (chunk_pooling_type == 'con' or chunk_pooling_type == 'wcon') or chunk_pooling_type == 'concat' # tmp
+        self.chunk_pooling_type = chunk_pooling_type
+        self.use_attention = (chunk_pooling_type == constants.WAVG or chunk_pooling_type == constants.WCON)
+        self.use_concat = (chunk_pooling_type == constants.CON or chunk_pooling_type == constants.WCON)
+        self.use_average = not self.use_concat
         self.use_rnn2 = rnn_n_layers2 > 0 and rnn_n_units2 > 0
-        chunk_embed_dim_merged = (
+        self.chunk_embed_dim_merged = (
             chunk_embed_dim +
             (pretrained_chunk_embed_dim if pretrained_embed_usage == ModelUsage.CONCAT else 0))
         if self.use_concat:
-            self.max_chunk_len = max_chunk_len
-            self.chunk_concat_num = sum([i for i in range(self.max_chunk_len+1)])
-            self.chunk_embed_out_dim = chunk_embed_dim_merged * self.chunk_concat_num
+            self.chunk_concat_num = sum([i for i in range(min_chunk_len, max_chunk_len+1)])
+            self.chunk_embed_out_dim = self.chunk_embed_dim_merged * self.chunk_concat_num
         else:
-            self.chunk_embed_out_dim = chunk_embed_dim_merged
-        # print(self.use_concat, self.chunk_embed_out_dim)
+            self.chunk_embed_out_dim = self.chunk_embed_dim_merged
 
         with self.init_scope():
             print('### Parameters', file=file)
-            print('# Chunk loss ratio: {}'.format(self.chunk_loss_ratio), file=file)
+            print('# Chunk pooling type: {}'.format(self.chunk_pooling_type), file=file)
+            print('# Chunk loss ratio: {}'.format(self.chunk_loss_ratio))
 
             # embedding layers
 
@@ -336,9 +336,6 @@ class RNNTaggerWithChunk(RNNTagger):
 
             # tmp
             if self.rnn1_compression:
-                # self.w_rnn1comp = L.Linear(rnn_output_dim1, self.chunk_embed_out_dim)
-                # print('# Affine for RNN1 Comp: W={}, b={}'.format(
-                #     self.w_rnn1comp.W.shape, self.w_rnn1comp.b.shape), file=file)
                 print('# RNN1 Comp', file=file)
                 self.w_rnn1comp = MLP(rnn_output_dim1, self.chunk_embed_out_dim,
                                       output_activation=F.tanh, file=file)
@@ -351,7 +348,7 @@ class RNNTaggerWithChunk(RNNTagger):
                 use_b = 'b' in biaffine_type or 'B' in biaffine_type
 
                 biaffine_left_dim = rnn_output_dim1 
-                self.biaffine = BiaffineCombination(biaffine_left_dim, chunk_embed_dim_merged,
+                self.biaffine = BiaffineCombination(biaffine_left_dim, self.chunk_embed_dim_merged,
                                                     use_U=use_U, use_V=use_V, use_b=use_b)
                 self.biaffine_dropout = biaffine_dropout
                 print('# Biaffine layer for attention:   W={}, U={}, V={}, b={}, dropout={}'.format(
@@ -366,30 +363,17 @@ class RNNTaggerWithChunk(RNNTagger):
             self.chunk_vector_dropout = chunk_vector_dropout
             print('# Chunk vector dropout={}'.format(self.chunk_vector_dropout), file=file)
 
-            # gate # tmp
-            if self.use_gate:
-                print('# Gate', file=file)
-                self.w_gate = MLP(self.chunk_embed_out_dim * 2, self.chunk_embed_out_dim,
-                                  output_activation=F.sigmoid, file=file)
-
             # recurrent layers2
-
             
             if self.use_rnn2:
-                if self.use_gate: # tmp
-                    rnn_input_dim2 = self.chunk_embed_out_dim
-                else:
-                    rnn_input_dim2 = rnn_output_dim1 + self.chunk_embed_out_dim
+                rnn_input_dim2 = rnn_output_dim1 + self.chunk_embed_out_dim
 
                 self.rnn2 = models.util.construct_RNN(
                     rnn_unit_type, rnn_bidirection, rnn_n_layers2, rnn_input_dim2, rnn_n_units2, rnn_dropout)
                 rnn_output_dim2 = rnn_n_units2 * (2 if rnn_bidirection else 1)
                 mlp_input_dim = rnn_output_dim2
             else:
-                if self.use_gate: # tmp
-                    mlp_input_dim = self.chunk_embed_out_dim
-                else:
-                    mlp_input_dim = rnn_output_dim1 + self.chunk_embed_out_dim
+                mlp_input_dim = rnn_output_dim1 + self.chunk_embed_out_dim
 
             # MLP
 
@@ -423,7 +407,6 @@ class RNNTaggerWithChunk(RNNTagger):
         rs = self.rnn_output(xs)                                      # x -[RNN]-> r
 
         if self.rnn1_compression: # tmp
-            # rs = [self.w_rnn1comp(r) for r in rs]
             rs = self.w_rnn1comp(rs)
 
         if cs is not None:
@@ -436,8 +419,9 @@ class RNNTaggerWithChunk(RNNTagger):
         else:
             vs = [None] * len(us)
 
-        # r @ r$w -> h
-        closs, pcs, hs = self.act_and_merge_features(rs, ws, vs, ms, gcs, calculate_loss=calculate_loss)
+        closs, pcs, hs = self.act_and_merge_features(rs, ws, vs, ms, gcs) # r @ r$w -> h
+        # for analysis
+        # _, pcs, hs, ass = self.act_and_merge_features(rs, ws, vs, ms, gcs, get_att_score=True) # r @ r$w -> h
 
         if self.use_rnn2:
             hs = self.rnn2_output(hs)                # h -[RNN]-> h'
@@ -452,49 +436,10 @@ class RNNTaggerWithChunk(RNNTagger):
         return loss, pls, pcs
 
 
-    def decode(
-            self, us, cs, ds, ms, bs=None, ts=None, ss=None, fs=None):
+    def decode(self, us, cs, ds, ms, bs=None, ts=None, ss=None, fs=None):
         with chainer.no_backprop_mode():
             _, ps, _ = self.__call__(us, cs, ds, ms, calculate_loss=False)
         return ps
-
-
-    def do_analysis(
-            self, us, cs, ds, ms, bs=None, ts=None, ss=None, fs=None, gls=None, gcs=None):
-        closs = None
-        pcs = None
-
-        xs = self.extract_token_features(us, bs, ts, ss, fs)          # token unigram etc. -[Embed]-> x
-        rs = self.rnn_output(xs)                                      # x -[RNN]-> r
-
-        if cs is not None:
-            ws = self.extract_chunk_features(cs) # chunk -[Embed]-> w (chunk sequence)
-        else:
-            ws = [None] * len(us)
-
-        if ds is not None:
-            vs = self.extract_chunk_features(ds) # chunk -[Embed]-> w (concatenated chunk matrix)
-        else:
-            vs = [None] * len(us)
-
-        _, pcs, hs, ass = self.act_and_merge_features(rs, ws, vs, ms, gcs, get_att_score=True) # r @ r$w -> h
-
-        if self.use_rnn2:
-            hs = self.rnn2_output(hs)                # h -[RNN]-> h'
-        _, pls = self.predict(hs, ls=gls, calculate_loss=False)
-
-        # print('pl', pls[0])
-
-        # return gcs, pcs, ncands, gls, pls
-        return gcs, pcs, gls, pls, ass
-
-
-    # def rnn_output(self, xs):
-    #     if self.rnn_unit_type == 'lstm':
-    #         hy, cy, hs = self.rnn(None, None, xs)
-    #     else:
-    #         hy, hs = self.rnn(None, xs)
-    #     return hs
 
 
     def rnn2_output(self, xs):
@@ -505,11 +450,10 @@ class RNNTaggerWithChunk(RNNTagger):
         return hs
 
 
-    # tmp
-    def set_dics(self, id2token, id2chunk, id2label):
-        self.id2token = id2token
-        self.id2chunk = id2chunk
-        self.id2label = id2label
+    # def set_dics(self, id2token, id2chunk, id2label):
+    #     self.id2token = id2token
+    #     self.id2chunk = id2chunk
+    #     self.id2label = id2label
 
 
     def extract_token_features(self, us, bs, ts, ss, fs):
@@ -537,7 +481,7 @@ class RNNTaggerWithChunk(RNNTagger):
         return xs
 
 
-    def act_and_merge_features(self, xs, ws, vs, ms, gcs=None, calculate_loss=True, get_att_score=False):
+    def act_and_merge_features(self, xs, ws, vs, ms, gcs=None, get_att_score=False):
         hs = []
         pcs = []
         ass = []                # attention scores
@@ -549,81 +493,66 @@ class RNNTaggerWithChunk(RNNTagger):
         if gcs is None:
             gcs = [None] * len(xs)
         for x, w, v, gc, mask in zip(xs, ws, vs, gcs, ms):
-            # ave   w, m1
-            # wave  w, m1, m2
-            # con   v, m0
-            # wcon  w, v, m0, m1, m2
-
+            # print('x', x.shape)
             if w is None and v is None: # no words were found for devel/test data
                 a = xp.zeros((len(x), self.chunk_embed_out_dim), dtype='f')
                 pc = np.zeros(len(x), 'i')
                 pcs.append(pc)
-
                 h = F.concat((x, a), axis=1) # (n, dt) @ (n, dc) => (n, dt+dc)
                 hs.append(h)
                 continue
 
-            elif w is not None:
+            if w is not None:
                 w = F.dropout(w, self.embed_dropout)
 
-            # print('x', x.shape)
-            if self.use_attention or not self.use_concat:
-                if self.use_attention: # wave or wcon
-                    # print('w', w.shape)
+            ## calculate weight for w
 
-                    w_scores = self.biaffine(
-                        F.dropout(x, self.biaffine_dropout),
-                        F.dropout(w, self.biaffine_dropout)) # (n, m)
-                    w_scores = w_scores + mask[1] # a masked element becomes 0 after softmax operation
-                    w_weight = F.softmax(w_scores)
-                    w_weight = w_weight * mask[2] # raw of char w/o no candidate words become a 0 vector
-                    # print('ww', w_weight.shape, w_weight)
-                    _mask = mask[1]
+            mask_ij = mask[0]
+            if self.use_attention: # wavg or wcon
+                mask_i = mask[1]
+                # print('w', w.shape)
 
-                elif not self.use_concat: # ave
-                    w_weight = self.normalize(mask[1], xp=xp)
-                    
-                if self.chunk_vector_dropout > 0:
-                    mask1_shape = mask[1].shape
-                    mask_drop = xp.ones(mask1_shape, dtype='f')
-                    for i in range(mask1_shape[0]):
-                        if self.chunk_vector_dropout > np.random.rand():
-                            mask_drop[i] = xp.zeros(mask1_shape[1], dtype='f')
-                    w_weight = w_weight * mask_drop
+                w_scores = self.biaffine(
+                    F.dropout(x, self.biaffine_dropout),
+                    F.dropout(w, self.biaffine_dropout)) # (n, m)
+                w_scores = w_scores + mask_ij # a masked element becomes 0 after softmax operation
+                w_weight = F.softmax(w_scores)
+                w_weight = w_weight * mask_i # raw of char w/o no candidate words become a 0 vector
 
-                if self.use_concat: # wcon
-                    n = x.shape[0]
-                    wd = w.shape[1]
+                # print('ww', w_weight.shape, '\n', w_weight)
+                
+            elif self.chunk_pooling_type == constants.AVG:
+                w_weight = self.normalize(mask_ij, xp=xp)
 
-                    indexes = [char_index2feat_indexes(i, n, self.max_chunk_len) for i in range(n)]
-                    mask3 = xp.array([[0 if val >= 0 else FLOAT_MIN for val in iraw] for iraw in indexes], 'f')
+            if not self.use_concat and self.chunk_vector_dropout > 0:
+                mask_drop = xp.ones(w_weight.shape, dtype='f')
+                for i in range(w_weight.shape[0]):
+                    if self.chunk_vector_dropout > np.random.rand():
+                        mask_drop[i] = xp.zeros(w_weight.shape[1], dtype='f')
+                w_weight = w_weight * mask_drop
+
+            ## calculate weight for v
+
+            if self.use_concat:
+                mask_ik = mask[2]
+                n = x.shape[0]
+                wd = self.chunk_embed_dim_merged #w.shape[1]
+                if self.chunk_pooling_type == constants.WCON:
+                    ikj_table = mask[3]
                     v_weight0 = F.concat([F.expand_dims( # (n, m) -> (n, k)
-                        F.get_item(w_weight[i], indexes[i]), axis=0) for i in range(n)], axis=0)
-                    v_scores = v_weight0 + mask3
-                    # print('vw', v_weight0.shape, v_weight0)
-                    # print(mask3.shape, mask3)
-                    # print(v_scores.shape, v_scores)
+                        F.get_item(w_weight[i], ikj_table[i]), axis=0) for i in range(n)], axis=0)
+                    # print('mask_ik', mask_ik.shape, '\n', mask_ik)
+                    # print('v_weight0', v_weight0.shape, '\n', v_weight0)
+                    v_weight0 *= mask_ik
+                    # print('ikj_table', ikj_table)
 
-                    v_weight = F.transpose(v_weight0)
-                    v_weight = F.expand_dims(v_weight, 2)
-                    v_weight = F.broadcast_to(v_weight, (self.chunk_concat_num, n, wd))
-
-                else:                         # ave or wave
-                    a = F.matmul(w_weight, w) # (n, m) * (m, dc)  => (n, dc)
-                    
-            else:
-                v_weight = None
-            
-            if self.use_concat: # con or wcon
-                # print('v', v.shape)
-                # print('m0', mask[0].shape)
-                if v_weight is None:
-                    v_weight = mask[0]
                 else:
-                    v_weight *= mask[0]
+                    v_weight0 = mask_ik
 
-                v_weight = F.concat(v_weight, axis=1)
-                # print('vw', v_weight.shape, v_weight)
+                v_weight = F.transpose(v_weight0)                                   # (n,k)
+                v_weight = F.expand_dims(v_weight, 2)                               # (k,n)
+                v_weight = F.broadcast_to(v_weight, (self.chunk_concat_num, n, wd)) # (k,n,wd)
+                v_weight = F.concat(v_weight, axis=1)                               # (k,n*wd)
 
                 if self.chunk_vector_dropout > 0:
                     mask_drop = xp.ones(v_weight.shape, dtype='f')
@@ -632,40 +561,40 @@ class RNNTaggerWithChunk(RNNTagger):
                             mask_drop[i] = xp.zeros(v_weight.shape[1], dtype='f')
                     v_weight *= mask_drop
 
+            ## calculate summary vector a
+            if self.use_average:          # avg or wavg
+                a = F.matmul(w_weight, w) # (n, m) * (m, dc)  => (n, dc)
+
+            else: # con or wcon
                 v = F.concat(v, axis=1)
                 a = v * v_weight
                 # print('a', a.shape, a)
 
-            if self.use_attention: # wave or wcon
-                weight = v_scores if self.use_concat else w_weight
+            ## get predicted (attended) chunks
+            if self.use_attention: # wavg or wcon
+                if self.chunk_pooling_type == constants.WAVG:
+                    weight = w_weight
+                else:
+                    weight = v_weight0
                 pc = minmax.argmax(weight, axis=1).data
                 if xp is cuda.cupy:
                     pc = cuda.to_cpu(pc)
                 pcs.append(pc)
 
-                if get_att_score:
-                    ascore = minmax.max(weight, axis=1).data
-                    ass.append(ascore)
+            #     if get_att_score:
+            #         ascore = minmax.max(weight, axis=1).data
+            #         ass.append(ascore)
 
-                # ncand = [sum([1 if val >= 0 else 0 for val in raw]) for raw in _mask]
-                # print('pred', pc)
-                # print('gold', gc)
-                # print('ncand', ncand)
-                # print('weight', weight.shape, weight.data)
-                # print('weight')
-                # for i, e in enumerate(weight.data):
-                #     print(i, e)
-
-                if self.chunk_loss_ratio > 0 and calculate_loss:
-                    scores = v_scores if self.use_concat else w_scores
-                    closs += softmax_cross_entropy.softmax_cross_entropy(scores, gc)
+            #     ncand = [sum([1 if val >= 0 else 0 for val in raw]) for raw in _mask]
+            #     print('pred', pc)
+            #     print('gold', gc)
+            #     print('ncand', ncand)
+            #     print('weight', weight.shape, weight.data)
+            #     print('weight')
+            #     for i, e in enumerate(weight.data):
+            #         print(i, e)
 
             h = F.concat((x, a), axis=1) # (n, dt) @ (n, dc) => (n, dt+dc)
-
-            if self.use_gate:   # tmp
-                z = self.w_gate(h, per_element=False)
-                h_gated = z * x + (1-z) * a
-                h = h_gated
 
             hs.append(h)
 
@@ -678,76 +607,6 @@ class RNNTaggerWithChunk(RNNTagger):
             return closs, pcs, hs, ass
         else:
             return closs, pcs, hs
-
-
-    def act_and_merge_features_old(self, xs, ws, ms, gcs=None):
-        hs = []
-        pcs = []
-
-        xp = cuda.get_array_module(xs[0])
-        closs = chainer.Variable(xp.array(0, dtype='f'))
-
-        for x, w, gc, mask in zip(xs, ws, gcs, ms):
-            if w is None:
-                a = xp.zeros((len(x), self.chunk_embed_out_dim), dtype='f')
-                pc = np.zeros(len(x), 'i')
-                pcs.append(pc)
-
-            else:
-                w = F.dropout(w, self.embed_dropout)
-
-                if self.use_concat:
-                    # m = mask[0]
-                    m = F.concat(mask[0], axis=1)
-                    if self.chunk_vector_dropout > 0:
-                        mask_drop = xp.ones(m.shape, dtype='f')
-                        for i in range(m.shape[0]):
-                            if self.chunk_vector_dropout > np.random.rand():
-                                mask_drop[i] = xp.zeros(m.shape[1], dtype='f')
-                        m = m * mask_drop
-
-                    w = F.concat(w, axis=1)
-                    a = w * m
-            
-                else:
-                    if self.use_attention:
-                        scores = self.biaffine(
-                            F.dropout(x, self.biaffine_dropout),
-                            F.dropout(w, self.biaffine_dropout)) # (n, m)
-                        scores = scores + mask[1] # a masked element becomes 0 after softmax operation
-                        weight = F.softmax(scores)
-                        weight = weight * mask[2] # a raw for character w/o no candidate words become 0 vector
-
-                    else:
-                        weight = self.normalize(mask[1], xp=xp)
-                    
-                    if self.chunk_vector_dropout > 0:
-                        mask_drop = xp.ones(mask[1].shape, dtype='f')
-                        for i in range(mask[1].shape[0]):
-                            if self.chunk_vector_dropout > np.random.rand():
-                                mask_drop[i] = xp.zeros(mask[1].shape[1], dtype='f')
-                        weight = weight * mask_drop
-
-                    a = F.matmul(weight, w)    # (n, m) * (m, dc)  => (n, dc)
-
-                    if self.use_attention:
-                        pc = minmax.argmax(weight, axis=1).data
-                        if xp is cuda.cupy:
-                            pc = cuda.to_cpu(pc)
-                        pcs.append(pc)
-
-                        if self.chunk_loss_ratio > 0:
-                            closs += softmax_cross_entropy.softmax_cross_entropy(scores, gc)
-
-            h = F.concat((x, a), axis=1) # (n, dt) @ (n, dc) => (n, dt+dc)
-            hs.append(h)
-
-        if closs.data == 0:
-            closs = None
-        else:
-            closs /= len(xs)
-
-        return closs, pcs, hs
 
 
     def normalize(self, array, xp=np):
@@ -767,8 +626,8 @@ def construct_RNNTagger(
         feat_dim=0, mlp_n_additional_units=0,
         embed_dropout=0, rnn_dropout=0, biaffine_dropout=0, mlp_dropout=0, chunk_vector_dropout=0, 
         pretrained_unigram_embed_dim=0, pretrained_bigram_embed_dim=0, pretrained_chunk_embed_dim=0, 
-        pretrained_embed_usage=ModelUsage.NONE, chunk_pooling_type='wave', 
-        max_chunk_len=0, chunk_loss_ratio=0, biaffine_type='',
+        pretrained_embed_usage=ModelUsage.NONE, chunk_pooling_type=constants.AVG, 
+        min_chunk_len=1, max_chunk_len=0, chunk_loss_ratio=0, biaffine_type='',
         file=sys.stderr):
 
     tagger = None
@@ -784,7 +643,7 @@ def construct_RNNTagger(
             pretrained_bigram_embed_dim=pretrained_bigram_embed_dim, 
             pretrained_chunk_embed_dim=pretrained_chunk_embed_dim, 
             pretrained_embed_usage=pretrained_embed_usage, 
-            chunk_pooling_type=chunk_pooling_type, max_chunk_len=max_chunk_len, 
+            chunk_pooling_type=chunk_pooling_type, min_chunk_len=min_chunk_len, max_chunk_len=max_chunk_len, 
             chunk_loss_ratio=chunk_loss_ratio, biaffine_type=biaffine_type,
             file=file)
 
@@ -802,20 +661,3 @@ def construct_RNNTagger(
             pretrained_embed_usage=pretrained_embed_usage, file=file)
 
     return tagger
-
-
-def char_index2feat_indexes(ti, sen_len, max_chunk_len):
-    indexes = []
-
-    for l in range(max_chunk_len):
-        begin = sum([sen_len - k for k in range(l)])
-        for k in range(l, -1, -1):
-            offset = ti - k
-            if offset < 0 or sen_len - l - 1 < offset:
-                index = -1
-            else:
-                index = begin + offset
-            indexes.append(index)
-            # print(' i={} l={} k={} offset={} res={}'.format(ti, l, k, offset, index))
-
-    return indexes

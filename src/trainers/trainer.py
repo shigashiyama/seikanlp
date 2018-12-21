@@ -241,12 +241,10 @@ class Trainer(object):
 
     def load_test_data(self):
         self.load_data('test')
-        self.dic.create_id2strs()
 
 
     def load_decode_data(self):
         self.load_data('decode')
-        self.dic.create_id2strs()
 
 
     def load_data(self, data_type):
@@ -445,15 +443,10 @@ class Trainer(object):
             outputs = ret[1:]
 
             if train:
-                # timer.start()
                 self.optimizer.target.cleargrads() # Clear the parameter gradients
                 loss.backward()                    # Backprop
                 loss.unchain_backward()            # Truncate the graph
                 self.optimizer.update()            # Update the parameters
-                # timer.stop()
-                # print('time: backprop', timer.elapsed)
-                # timer.reset()
-
                 i_max = min(i + self.args.batch_size, n_ins)
 
                 if self.args.optimizer == 'sgd' and self.args.sgd_cyclical_lr:

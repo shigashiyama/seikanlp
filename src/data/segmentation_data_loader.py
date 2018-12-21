@@ -23,6 +23,7 @@ class SegmentationDataLoader(DataLoader):
                  bigram_freq_threshold=1,
                  chunk_max_vocab_size=-1,
                  chunk_freq_threshold=1,
+                 min_chunk_len=1,
                  max_chunk_len=4,
                  add_gold_chunk=True,
                  add_unknown_pretrained_chunk=True,
@@ -42,6 +43,7 @@ class SegmentationDataLoader(DataLoader):
         self.bigram_freq_threshold=bigram_freq_threshold
         self.chunk_max_vocab_size=chunk_max_vocab_size
         self.chunk_freq_threshold=chunk_freq_threshold
+        self.min_chunk_len = min_chunk_len
         self.max_chunk_len = max_chunk_len
         self.add_gold_chunk = add_gold_chunk
         self.add_unknown_pretrained_chunk = add_unknown_pretrained_chunk
@@ -55,12 +57,11 @@ class SegmentationDataLoader(DataLoader):
     def register_chunks(self, sen, unigram_seq, get_chunk_id, label_seq=None, train=True):
         if train:
             spans_gold = get_segmentation_spans(label_seq)
-        for n in range(1, self.max_chunk_len+1):
+        for n in range(self.min_chunk_len, self.max_chunk_len+1):
             span_ngrams = data_loader.create_all_char_ngram_indexes(unigram_seq, n)
             cid_ngrams = [unigram_seq[span[0]:span[1]] for span in span_ngrams]
             str_ngrams = [sen[span[0]:span[1]] for span in span_ngrams]
             for span, cn, sn in zip (span_ngrams, cid_ngrams, str_ngrams):
-                # is_pretrained_chunk = not self.chunk_vocab or sn in self.chunk_vocab
                 is_pretrained_chunk = self.chunk_vocab and sn in self.chunk_vocab
                 if train:
                     is_gold_chunk = self.add_gold_chunk and span in spans_gold
@@ -80,7 +81,8 @@ class SegmentationDataLoader(DataLoader):
 
             if self.chunk_freq_threshold > 1 or self.chunk_max_vocab_size > 0:
                 self.freq_chunks = self.get_frequent_ngrams_WL(
-                    path, self.chunk_freq_threshold, self.chunk_max_vocab_size, self.max_chunk_len)
+                    path, self.chunk_freq_threshold, 
+                    self.chunk_max_vocab_size, self.min_chunk_len, self.max_chunk_len)
 
             data, dic = self.load_gold_data_WL(path, dic, train)
 
@@ -91,7 +93,8 @@ class SegmentationDataLoader(DataLoader):
 
             if self.chunk_freq_threshold > 1 or self.chunk_max_vocab_size > 0:
                 self.freq_chunks = self.get_frequent_ngrams_SL(
-                    path, self.chunk_freq_threshold, self.chunk_max_vocab_size, self.max_chunk_len)
+                    path, self.chunk_freq_threshold, self.chunk_max_vocab_size, 
+                    self.min_chunk_len, self.max_chunk_len)
 
             data, dic = self.load_gold_data_SL(path, dic, train)
 
@@ -326,7 +329,6 @@ class SegmentationDataLoader(DataLoader):
                             [get_toktype_id(get_char_type(ptoken[i]), update=train) for i in range(tlen)])
 
                 if self.use_bigram:
-                    
                     str_bigrams = data_loader.create_all_char_ngrams(raw_sen, 2)
                     str_bigrams.append('{}{}'.format(raw_sen[-1], constants.EOS))
                     bi_seq = [
@@ -531,40 +533,36 @@ def init_dictionary(
 
 
 """
-  ave (average) / wave (weighed average):
+  avg / wavg
     chunk_seq:  [w_0, ..., w_{m-1}]
     gchunk_seq: [gold_index(chunk_seq, c_0), ..., gold_index(chunk_seq, c_{n-1})]
-    mask1:      [[exist(c_0, w_0), ..., exist(c_0, w_{m-1})],
+    mask_ij:      [[exist(c_0, w_0), ..., exist(c_0, w_{m-1})],
                  ...
                  [exist(c_{n_1}, w_0), ..., exist(c_{n-1}, w_{m-1})]]
 
-  con (concat):
+  con / wcon:
     feat_seq:   [[word_id(c_0, 0), ..., word_id(c_{n-1}, 0)],
                  ...
                  [word_id(c_0, k-1), ..., word_id(c_{n-1}, k-1)]]
 
     gchunk_seq: [gold_index([0,...,k-1], c_0), ..., gold_index([0,...,k-1], c_{n-1})]
-    mask0:      zero vectors for characters w/o no candidate words
-
-  wcon (weghted concat):
-    chunk_seq:  [w[0:0] ... w[n-1:n-1] w[0:1] ... w[n-2:n-1] ... w[0:k-1] ... w[k:n-1]]
-    feat_seq:   the same as concat
-    gchunk_seq: the same as concat
-    mask0:      the same as concat
-    mask1:      the same as ave/wave
-
+    mask_ik:      zero vectors for characters w/o no candidate words
 """
 def add_chunk_sequences(
-        data, dic, max_len=4, evaluate=True, use_attention=True, use_concat=True):
-    feat_size = sum([h for h in range(max_len+1)])
+        data, dic, min_len=1, max_len=4, evaluate=True, model_type=constants.AVG):
+    is_con = model_type == constants.CON
+    is_wcon = model_type == constants.WCON
+    is_att_based = model_type == constants.WAVG or model_type == constants.WCON
+    is_con_based = model_type == constants.CON or model_type == constants.WCON
 
+    trie = dic.tries[constants.CHUNK]
     token_seqs = data.inputs[0]
     gold_label_seqs = data.outputs[0] if evaluate else None
     gold_chunk_seqs = []
-    chunk_seqs = [] if not (use_concat and not use_attention) else None
-    feat_seqs = [] if use_concat else None
+    chunk_seqs = [] if not is_con else None
+    feat_seqs = [] if is_con_based else None
+    feat_size = sum([h for h in range(min_len, max_len+1)]) if is_con_based else None
     masks = []
-    trie = dic.tries[constants.CHUNK]
 
     ins_cnt = 0
     for sen_id, tseq in enumerate(token_seqs):
@@ -574,9 +572,10 @@ def add_chunk_sequences(
 
         n = len(tseq)
         gchunk_seq = [-1] * n
-        feats = [[0] * n for k in range(feat_size)] if use_concat else None
-        mask0 = [] if use_concat else None
-        mask1 = [] if use_attention or not use_concat else None
+        feats = [[0] * n for k in range(feat_size)] if is_con_based else None
+        mask_ij = [] if not is_con else None   # for biaffine
+        mask_ik = [] if is_con_based else None # for concat
+        table_ikj = [[-1 for k in range(feat_size)] for i in range(n)] if is_wcon else None # for wcon
 
         if evaluate:
             lseq = gold_label_seqs[sen_id]
@@ -587,56 +586,66 @@ def add_chunk_sequences(
         spans_found = []
         for i in range(n):
             res = trie.common_prefix_search(tseq, i, i + max_len)
-            spans_found.extend(res)
-        m = len(spans_found)
+            for span in res:
+                if min_len == 1 or span[1]-span[0] >= min_len:
+                    spans_found.append(span)
 
-        if use_concat:
-            if use_attention:
-                chunk_seq = [0] * sum([max(0, n - h) for h in range(max_len)])
-            else:
-                chunk_seq = None
-        else:
+        if not is_con:
+            m = len(spans_found)
             chunk_seq = [None] * m
 
         for j, span in enumerate(spans_found):
             is_gold_span = evaluate and span in spans_gold
-            if use_concat:
-                j = get_chunk_index(span, n)
             cid = trie.get_chunk_id(tseq[span[0]:span[1]])
-            if chunk_seq:
+            if not is_con:
                 chunk_seq[j] = cid
 
             for i in range(span[0], span[1]):
-                if use_concat:
-                    k = token_index2feat_index(i, span)
-                    feats[k][i] = cid
-                    mask0.append((k,i)) # (feat k, char i) has value; used for concatenation
+                if not is_con:
+                    mask_ij.append((i,j)) # (char i, word j) has value; used for biaffine
 
-                if use_attention or not use_concat:
-                    mask1.append((i,j)) # (char i, word j) has value; used for attention
+                if is_con_based:
+                    k = token_index2feat_index(i, span, min_chunk_len=min_len)
+                    feats[k][i] = cid
+                    mask_ik.append((i,k)) # (char i, feat k) has value; used for concatenation
+
+                if is_wcon:
+                    table_ikj[i][k] = j
 
                 if is_gold_span:
-                    gchunk_seq[i] = k if use_concat else j
+                    gchunk_seq[i] = k if is_con_based else j
 
         # print('ID={}'.format(sen_id))
-        # print('x', ' '.join([str(i)+':'+dic.tables[constants.UNIGRAM].id2str[t] for i,t in enumerate(tseq)]))
         # print('l', ' '.join([dic.tables[constants.SEG_LABEL].id2str[l] if l in dic.tables[constants.SEG_LABEL].id2str else '-1' for l in lseq]))
+        # print('i:x:g', ' '.join([str(i)+':'+dic.tables[constants.UNIGRAM].id2str[t]+':'+str(k) for i,t,k in zip(range(n), tseq, gchunk_seq)]))
         # if chunk_seq:
-        #     print('c', ' '.join([str(i)+':'+trie.id2chunk[c] for i,c in enumerate(chunk_seq)]))
-        # print('f', [str(i)+':'+str([trie.id2chunk[c] if c >= 0 else '-1' for c in raw]) for i,raw in enumerate(feats)])
-        # print('gc', gchunk_seq)
-        # print('mask0', mask0)
-        # print('mask1', mask1)
-        # for i in range(n):
-        #     print(i, token_index2feat_index(i, n, max_len))
-        # print()
+        #     print('m', ' '.join([str(i)+':'+trie.id2chunk[c] for i,c in enumerate(chunk_seq)]))
+        # print('f')
+        # for i, raw in enumerate(feats):
+        #     print(str(i)+':['+
+        #           ' '.join([str(i)+':'+ (trie.id2chunk[c] if c > 0 else '-') for i,c in enumerate(raw)])+
+        #           ']')
 
-        # if chunk_seq:           # wave 精度に影響?
-        if chunk_seq is not None:
+        # if mask_ij:
+        #     mat = np.zeros((n, m), dtype='i')
+        #     for i, j in mask_ij:
+        #         mat[i][j] = 1
+        #     print('mask_ij (atn)\n', mat)
+        # if mask_ik:
+        #     mat = np.zeros((n, feat_size), dtype='i')
+        #     for i, k in mask_ik:
+        #         mat[i][k] = 1
+        #     print('mask_ik (con)\n', mat)
+        # if table_ikj:
+        #     print('table_ikj')
+        #     for i in range(n):
+        #         print(i, table_ikj[i])
+
+        if not is_con:
             chunk_seqs.append(chunk_seq)
-        if feats:
+        if is_con_based:
             feat_seqs.append(feats)
-        masks.append((mask0, mask1))
+        masks.append((mask_ij, mask_ik, table_ikj))
         if evaluate:
             gold_chunk_seqs.append(gchunk_seq)
 
@@ -647,15 +656,9 @@ def add_chunk_sequences(
         data.outputs.append(gold_chunk_seqs)
 
 
-def get_chunk_index(span, sen_len):
+def token_index2feat_index(ti, span, min_chunk_len=1):
     chunk_len = span[1] - span[0]
-    ci = sum([sen_len - i for i in range(chunk_len-1)]) + span[0]
-    return ci
-
-
-def token_index2feat_index(ti, span):
-    chunk_len = span[1] - span[0]
-    fi = sum([i for i in range(chunk_len)]) + (span[1] - ti - 1)
+    fi = sum([i for i in range(min_chunk_len, chunk_len)]) + (span[1] - ti - 1)
     return fi
 
 
@@ -669,35 +672,31 @@ def convert_mask_matrix(
         mask_val = 0.0
         non_mask_val = 1.0
 
-    pairs0 = mask[0]
-    pairs1 = mask[1]
 
-    # print(' ', n_tokens, n_chunks, feat_size, emb_dim, 'mask1='+str(len(mask[1])))
-    # print(mask[1])
+    pairs_ij = mask[0]
+    pairs_ik = mask[1]
+    table_ikj = mask[2]
 
-    if pairs0:                  # con or wcon
-        mask0 = xp.zeros((feat_size, n_tokens, emb_dim), dtype='f')
-        for k, i in pairs0:
-            mask0[k][i] = xp.ones((emb_dim,), dtype='f')
-        # mask0 = F.concat(mask0, axis=1)
+    if pairs_ik:                  # con or wcon
+        mask_ik = xp.zeros((n_tokens, feat_size), dtype='f')
+        for i, k in pairs_ik:
+            mask_ik[i][k] = np.float32(1)
     else:
-        mask0 = None   
+        mask_ik = None   
 
-    if pairs1 is not None:      # ave, wave or wcon
-        mask1 = xp.full((n_tokens, n_chunks), mask_val, 'f')
-        for i, j in pairs1:
-            # print(' -', i, j)
-            mask1[i, j] = non_mask_val
+    if pairs_ij is not None:      # ave, wave, or wcon
+        mask_ij = xp.full((n_tokens, n_chunks), mask_val, 'f')
+        for i, j in pairs_ij:
+            mask_ij[i, j] = non_mask_val
     else:
-        mask1 = None
+        mask_ij = None
 
-    if use_attention:           # wave or wcon
-        mask2 = xp.ones((n_tokens, n_chunks), 'f') # zero vectors for characters w/o no candidate words
+    mask_i = None
+    if use_attention:           # for softmax
+        mask_i = xp.ones((n_tokens, n_chunks), 'f') # zero vectors for characters w/o no candidate words
         for i in range(n_tokens):
-            tmp = [k1 == i for k1,k2 in pairs1]
+            tmp = [k1 == i for k1,k2 in pairs_ij]
             if len(tmp) == 0 or max(tmp) == False: # not (i,*) in index_pair
-                mask2[i] = xp.zeros((n_chunks,), 'f')
-    else:
-        mask2 = None        
+                mask_i[i] = xp.zeros((n_chunks,), 'f')
 
-    return (mask0, mask1, mask2)
+    return (mask_ij, mask_i, mask_ik, table_ikj)

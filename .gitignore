@@ -1,7 +1,10 @@
 *~
+*pyc
+*.sh
 log/
 out/
 models/main/
 models/embed/
 resources/
+__pycache__
 !.gitkeep

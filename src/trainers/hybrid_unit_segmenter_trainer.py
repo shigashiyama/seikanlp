@@ -43,8 +43,7 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
             segmentation_data_loader.add_chunk_sequences(
                 rdata, self.dic,
                 max_len=self.hparams['max_chunk_len'], evaluate=False,
-                use_attention=('w' in self.hparams['chunk_pooling_type']),
-                use_concat=('con' in self.hparams['chunk_pooling_type']))
+                model_type=self.hparams['chunk_pooling_type'])
 
             inputs = self.gen_inputs(rdata, [0], evaluate=False)
             ot = rdata.orgdata[0]
@@ -132,10 +131,11 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
             'pretrained_embed_usage' : self.args.pretrained_embed_usage,
             'fix_pretrained_embed' : self.args.fix_pretrained_embed,
             'chunk_loss_ratio' : self.args.chunk_loss_ratio,
-            'chunk_pooling_type' : self.args.chunk_pooling_type,
+            'chunk_pooling_type' : self.args.chunk_pooling_type.upper(),
             'biaffine_type' : self.args.biaffine_type,
             'use_gold_chunk' : self.args.use_gold_chunk,
             'use_unknown_pretrained_chunk' : not self.args.ignore_unknown_pretrained_chunk,
+            'min_chunk_len' : self.args.min_chunk_len,
             'max_chunk_len' : self.args.max_chunk_len,
             'unigram_embed_dim' : self.args.unigram_embed_dim,
             'bigram_embed_dim' : self.args.bigram_embed_dim,
@@ -193,6 +193,7 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
                 if (key == 'pretrained_unigram_embed_dim' or
                     key == 'pretrained_bigram_embed_dim' or
                     key == 'pretrained_chunk_embed_dim' or
+                    key == 'min_chunk_len' or
                     key == 'max_chunk_len' or
                     key == 'unigram_embed_dim' or
                     key == 'bigram_embed_dim' or
@@ -298,6 +299,7 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
             bigram_freq_threshold=self.hparams['bigram_freq_threshold'],
             chunk_max_vocab_size=self.hparams['chunk_max_vocab_size'],
             chunk_freq_threshold=self.hparams['chunk_freq_threshold'],
+            min_chunk_len=self.hparams['min_chunk_len'],
             max_chunk_len=self.hparams['max_chunk_len'],
             add_gold_chunk=self.hparams['use_gold_chunk'],
             add_unknown_pretrained_chunk=self.hparams['use_unknown_pretrained_chunk'],
@@ -326,13 +328,13 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
             dic = self.dic
             evaluate = False
 
-        self.log('Start chunk search for {} data (max_len={})\n'.format(
-            data_type, self.hparams['max_chunk_len']))
+        self.log('Start chunk search for {} data (min_len={}, max_len={})\n'.format(
+            data_type, self.hparams['min_chunk_len'], self.hparams['max_chunk_len']))
         segmentation_data_loader.add_chunk_sequences(
             data, dic, 
-            max_len=self.hparams['max_chunk_len'], evaluate=evaluate,
-            use_attention=('w' in self.hparams['chunk_pooling_type']),
-            use_concat=('con' in self.hparams['chunk_pooling_type']))
+            min_len=self.hparams['min_chunk_len'], 
+            max_len=self.hparams['max_chunk_len'], 
+            evaluate=evaluate, model_type=self.hparams['chunk_pooling_type'])
 
 
     def setup_optimizer(self):
@@ -442,6 +444,7 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
             pretrained_chunk_embed_dim=pretrained_chunk_embed_dim,
             pretrained_embed_usage=pretrained_embed_usage,
             chunk_pooling_type=hparams['chunk_pooling_type'] if 'chunk_pooling_type' in hparams else '',
+            min_chunk_len=hparams['min_chunk_len'] if 'min_chunk_len' in hparams else 0,
             max_chunk_len=hparams['max_chunk_len'] if 'max_chunk_len' in hparams else 0,
             chunk_loss_ratio=hparams['chunk_loss_ratio'] if 'chunk_loss_ratio' in hparams else 0.0,
             biaffine_type=hparams['biaffine_type'] if 'biaffine_type' in hparams else '')
@@ -464,12 +467,11 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
     def gen_inputs(self, data, ids, evaluate=True, restrict_memory=False):
         xp = cuda.cupy if self.args.gpu >= 0 else np
 
-        index = ids[0]
-        id2token = self.dic.tables[constants.UNIGRAM].id2str
-        id2chunk = self.dic.tries[constants.CHUNK].id2chunk,
-        id2label = self.dic.tables[constants.SEG_LABEL].id2str
-
         # for error analysis
+        # index = ids[0]
+        # id2token = self.dic.tables[constants.UNIGRAM].id2str
+        # id2chunk = self.dic.tries[constants.CHUNK].id2chunk,
+        # id2label = self.dic.tables[constants.SEG_LABEL].id2str
         # print(index)
         # print('l', [str(i)+':'+id2label[int(e)] for i,e in enumerate(data.outputs[0][index])])
         # print('u', [str(i)+':'+id2token[int(e)] for i,e in enumerate(data.inputs[0][index])])
@@ -485,10 +487,10 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
         cs = [xp.asarray(data.inputs[4][j], dtype='i') for j in ids] if data.inputs[4] else None
         ds = [xp.asarray(data.inputs[5][j], dtype='i') for j in ids] if data.inputs[5] else None
 
-        use_concat = 'con' in self.hparams['chunk_pooling_type']
-        use_attention = 'w' in self.hparams['chunk_pooling_type']
-        if use_concat:
-            feat_size = sum([h for h in range(self.hparams['max_chunk_len']+1)])
+        if (self.hparams['chunk_pooling_type'] == constants.CON or
+            self.hparams['chunk_pooling_type'] == constants.WCON):
+            feat_size = sum([h for h in range(
+                self.hparams['min_chunk_len'], self.hparams['max_chunk_len']+1)])
             emb_dim = self.hparams['chunk_embed_dim']
         else:
             feat_size = 0
@@ -502,11 +504,11 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
         #     print('mask', data.inputs[6][j])
         #     print()
 
+        use_attention = (self.hparams['chunk_pooling_type'] == constants.WAVG or
+                         self.hparams['chunk_pooling_type'] == constants.WCON)
         ms = [segmentation_data_loader.convert_mask_matrix(
             data.inputs[6][j], len(us[i]), len(cs[i]) if cs else 0, feat_size, emb_dim,
             use_attention, xp=xp) for i, j in enumerate(ids)]
-            # use_attention, use_concat, xp=xp) for i, j in enumerate(ids)]
-
         # print('u', us[0].shape, us[0])
         # print('c', cs[0].shape if cs is not None else None, cs[0] if cs is not None else None)
         # print('d', ds[0].shape if ds is not None else None, ds[0] if ds is not None else None)

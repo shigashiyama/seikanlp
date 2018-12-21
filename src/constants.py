@@ -78,11 +78,16 @@ E = 'E'
 S = 'S'
 O = 'O'
 
+### for hybrid char+word segmentation
+CON='CON'
+WCON='WCON'
+AVG='AVG'
+WAVG='WAVG'
+
 ### for parsing
 
 NO_PARENTS_ID = -2       # indicate that parent of the word is nothing
 UNK_PARENT_ID = -3       # indicate that parent of the word is unknown
-
 
 ### for feature extraction
 # example of expected input: 'seg:L:2-3,4-5,6-10'
