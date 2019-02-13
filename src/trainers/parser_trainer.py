@@ -5,11 +5,10 @@ from chainer import cuda
 import classifiers.dependency_parser
 import common
 import constants
-from data import data_loader, parsing_data_loader
-import evaluators
+from data_loaders import data_loader, parsing_data_loader
+from evaluators.parser_evaluator import ParserEvaluator, TypedParserEvaluator
 import models.parser
 import models.util
-import optimizers
 from trainers import trainer
 from trainers.trainer import Trainer
 import util
@@ -19,7 +18,7 @@ class ParserTrainer(Trainer):
     def __init__(self, args, logger=sys.stderr):
         super().__init__(args, logger)
         self.unigram_embed_model = None
-        self.label_begin_index = 3
+        self.label_begin_index = 2
 
 
     def show_data_info(self, data_type):
@@ -39,9 +38,6 @@ class ParserTrainer(Trainer):
         t2i_tmp = list(self.dic.tables[constants.UNIGRAM].str2id.items())
         self.log('# token2id: {} ... {}\n'.format(t2i_tmp[:10], t2i_tmp[len(t2i_tmp)-10:]))
 
-        if self.dic.has_table(constants.SEG_LABEL):
-            id2seg = {v:k for k,v in self.dic.tables[constants.SEG_LABEL].str2id.items()}
-            self.log('# seg labels: {}\n'.format(id2seg))
         attr_indexes=common.get_attribute_values(self.args.attr_indexes)
         for i in range(len(attr_indexes)):
             if self.dic.has_table(constants.ATTR_LABEL(i)):
@@ -64,9 +60,8 @@ class ParserTrainer(Trainer):
     def init_model(self):
         super().init_model()
         if self.unigram_embed_model:
-            finetuning = not self.hparams['fix_pretrained_embed']
             self.classifier.load_pretrained_embedding_layer(
-                self.dic, self.unigram_embed_model, finetuning=finetuning)
+                self.dic, self.unigram_embed_model, finetuning=True)
 
 
     def load_model(self):
@@ -79,7 +74,7 @@ class ParserTrainer(Trainer):
             self.classifier.change_pred_layers_dropout_ratio(self.hparams['pred_layers_dropout'])
             
 
-    def update_model(self, classifier=None, dic=None):
+    def update_model(self, classifier=None, dic=None, train=False):
         if not classifier:
             classifier = self.classifier
         if not dic:
@@ -89,8 +84,7 @@ class ParserTrainer(Trainer):
             self.args.execute_mode == 'eval' or
             self.args.execute_mode == 'decode'):
 
-            classifier.grow_embedding_layers(
-                dic, self.unigram_embed_model, train=(self.args.execute_mode=='train'))
+            classifier.grow_embedding_layers(dic, self.unigram_embed_model, train=train)
             classifier.grow_inference_layers(dic)
 
 
@@ -103,9 +97,7 @@ class ParserTrainer(Trainer):
         self.hparams = {
             'pretrained_unigram_embed_dim' : pretrained_unigram_embed_dim,
             'pretrained_embed_usage' : self.args.pretrained_embed_usage,
-            'fix_pretrained_embed' : self.args.fix_pretrained_embed,
             'unigram_embed_dim' : self.args.unigram_embed_dim,
-            # 'subtoken_embed_dim' : self.args.subtoken_embed_dim,
             'attr0_embed_dim' : self.args.attr0_embed_dim,
             'rnn_unit_type' : self.args.rnn_unit_type,
             'rnn_bidirection' : self.args.rnn_bidirection,
@@ -150,7 +142,6 @@ class ParserTrainer(Trainer):
 
                 if (key == 'pretrained_unigram_embed_dim' or
                     key == 'unigram_embed_dim' or
-                    # key == 'subtoken_embed_dim' or
                     key == 'pretrained_unigram_embed_dim' or
                     key == 'attr0_embed_dim' or
                     key == 'rnn_n_layers' or
@@ -174,8 +165,7 @@ class ParserTrainer(Trainer):
 
                 elif (key == 'rnn_bidirection' or
                       key == 'lowercasing' or
-                      key == 'normalize_digits' or
-                      key == 'fix_pretrained_embed'
+                      key == 'normalize_digits'
                 ):
                     val = (val.lower() == 'true')
 
@@ -194,7 +184,7 @@ class ParserTrainer(Trainer):
             if hparams['pretrained_unigram_embed_dim'] != pretrained_unigram_embed_dim:
                 self.log(
                     'Error: pretrained_unigram_embed_dim and dimension of loaded embedding model'
-                    + 'are conflicted.'.format(
+                    + ' are conflicted.'.format(
                         hparams['pretrained_unigram_embed_dim'], pretrained_unigram_embed_dim))
                 sys.exit()
 
@@ -221,24 +211,12 @@ class ParserTrainer(Trainer):
         )
 
 
-    def setup_optimizer(self):
-        super().setup_optimizer()
-
-        delparams = []
-        if self.unigram_embed_model and self.args.fix_pretrained_embed:
-            delparams.append('pretrained_unigram_embed/W')
-            self.log('Fix parameters: pretrained_unigram_embed/W')
-        if delparams:
-            self.optimizer.add_hook(optimizers.DeleteGradient(delparams))
-
-
     def setup_classifier(self):
         dic = self.dic
         hparams = self.hparams
 
         n_vocab = len(dic.tables['unigram'])
         unigram_embed_dim = hparams['unigram_embed_dim']
-        subtoken_embed_dim = n_subtokens = 0
 
         if 'pretrained_unigram_embed_dim' in hparams and hparams['pretrained_unigram_embed_dim'] > 0:
             pretrained_unigram_embed_dim = hparams['pretrained_unigram_embed_dim']
@@ -266,7 +244,6 @@ class ParserTrainer(Trainer):
 
         predictor = models.parser.RNNBiaffineParser(
             n_vocab, unigram_embed_dim, n_attr0, attr0_embed_dim,
-            n_subtokens, subtoken_embed_dim, 
             hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_n_layers'], 
             hparams['rnn_n_units'], 
             hparams['mlp4arcrep_n_layers'], hparams['mlp4arcrep_n_units'],
@@ -283,28 +260,26 @@ class ParserTrainer(Trainer):
 
 
 
-    def setup_evaluator(self):
+    def setup_evaluator(self, evaluator=None):
         if common.is_typed_parsing_task(self.task) and self.args.ignored_labels:
-            tmp = self.args.ignored_labels
-            self.args.ignored_labels = set()
-
-            for label in tmp.split(','):
+            ignored_labels = set()
+            for label in self.args.ignored_labels.split(','):
                 label_id = self.dic.tables[constants.ARC_LABEL].get_id(label)
                 if label_id >= 0:
-                    self.args.ignored_labels.add(label_id)
+                    ignored_labels.add(label_id)
 
-            self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignored_labels))
+            self.log('Setup evaluator: labels to be ignored={}\n'.format(ignored_labels))
 
         else:
-            self.args.ignored_labels = set()
+            ignored_labels = set()
 
         evaluator = None
         if self.task == constants.TASK_DEP:
-            evaluator = evaluators.ParserEvaluator(ignore_head=True)
+            evaluator = ParserEvaluator(ignore_head=True)
         
         elif self.task == constants.TASK_TDEP:
-            evaluator = evaluators.TypedParserEvaluator(
-                ignore_head=True, ignored_labels=self.args.ignored_labels)
+            evaluator = TypedParserEvaluator(
+                ignore_head=True, ignored_labels=ignored_labels)
 
         self.evaluator = evaluator
 
@@ -312,8 +287,6 @@ class ParserTrainer(Trainer):
     def gen_inputs(self, data, ids, evaluate=True):
         xp = cuda.cupy if self.args.gpu >= 0 else np
         us = [xp.asarray(data.inputs[0][j], dtype='i') for j in ids]
-        ss = ([[xp.asarray(subs, dtype='i') for subs in data.inputs[1][j]] for j in ids] 
-              if data.inputs[3] else None)
         ps = ([xp.asarray(data.outputs[0][j], dtype='i') for j in ids] 
               if len(data.outputs) > 0 and data.outputs[0] else None)
 
@@ -321,11 +294,11 @@ class ParserTrainer(Trainer):
             ths = [xp.asarray(data.outputs[1][j], dtype='i') for j in ids]
             if common.is_typed_parsing_task(self.task):
                 tls = [xp.asarray(data.outputs[2][j], dtype='i') for j in ids]
-                return us, ss, ps, ths, tls
+                return us, ps, ths, tls
             else:
-                return us, ss, ps, ths
+                return us, ps, ths
         else:
-            return us, ss, ps
+            return us, ps
 
 
     def decode(self, rdata, file=sys.stdout):
@@ -346,7 +319,7 @@ class ParserTrainer(Trainer):
             n_ins, timer.elapsed, timer.elapsed/n_ins), file=sys.stderr)
 
 
-    def decode_batch(self, *inputs, org_tokens, org_attrs, file=sys.stdout):
+    def decode_batch(self, *inputs, org_tokens=None, org_attrs=None, file=sys.stdout):
         label_prediction = self.task == constants.TASK_TDEP
         ret = self.classifier.decode(*inputs, label_prediction=label_prediction)
         hs = ret[0]
@@ -403,5 +376,3 @@ class ParserTrainer(Trainer):
             oa = rdata.orgdata[1] if len(rdata.orgdata) > 1 else None
 
             self.decode_batch(*inputs, org_tokens=ot, org_attrs=oa)
-            if not self.args.output_empty_line:
-                print(file=sys.stdout)

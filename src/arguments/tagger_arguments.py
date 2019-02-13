@@ -38,7 +38,6 @@ class TaggerArgumentLoader(ArgumentLoader):
         parser.add_argument('--attribute_delimiter', dest='attr_delim', default='', help='')
         # parser.add_argument('--attribute_predictions', default='', help='')
         # sequence labeling
-        parser.add_argument('--tagging_scheme', default='BIOES', help='')
         parser.add_argument('--tagging_unit', default='single', help='\'single\' or \'hybrid\'')
 
         ### model parameters
@@ -56,6 +55,8 @@ class TaggerArgumentLoader(ArgumentLoader):
                             'The number of RNN layers (Default: 1)')
         parser.add_argument('--rnn_n_units', type=int, default=800, help=
                             'The number of hidden units of RNN (Default: 800)')
+        # segmentation
+        parser.add_argument('--evaluation_method', default='normal', help='')
         # segmentation/tagging
         parser.add_argument('--bigram_freq_threshold', type=int, default=1, help='')
         parser.add_argument('--bigram_max_vocab_size', type=int, default=-1, help='')
@@ -66,7 +67,7 @@ class TaggerArgumentLoader(ArgumentLoader):
                             + '(Default: 300)')
         parser.add_argument('--bigram_embed_dim', type=int, default=0, help='')
         parser.add_argument('--tokentype_embed_dim', type=int, default=0, help='')
-        parser.add_argument('--attr1_embed_dim', type=int, default=100, help=
+        parser.add_argument('--attr1_embed_dim', type=int, default=0, help=
                             'The number of dimension of 1st attibute embedding of parsing model (Default: 100)')
         parser.add_argument('--mlp_n_layers', type=int, default=1, help=
                             'The number of layers of MLP of sequence labeling model (Default: 1)')
@@ -95,6 +96,8 @@ class TaggerArgumentLoader(ArgumentLoader):
         parser.add_argument('--chunk_vector_dropout', type=float, default=0.0)
         parser.add_argument('--chunk_vector_element_dropout', type=float, default=0.0)
         parser.add_argument('--use_gold_chunk', action='store_true')
+        parser.add_argument('--unuse_nongold_chunk', action='store_true')
+        parser.add_argument('--gen_oov_chunk_for_test', action='store_true')
         parser.add_argument('--ignore_unknown_pretrained_chunk', action='store_true')
 
         return parser
@@ -102,6 +105,17 @@ class TaggerArgumentLoader(ArgumentLoader):
 
     def get_minimum_parser(self, args):
         parser = super().get_minimum_parser(args)
+        parser.add_argument('--evaluation_method', default=args.evaluation_method)
+        if not (args.evaluation_method == 'normal' or
+                args.evaluation_method == 'each_length' or 
+                args.evaluation_method == 'each_vocab' or
+                args.evaluation_method == 'attention' or
+                args.evaluation_method == 'stat_test'
+        ):
+            print('Error: evaluation_method must be specified among from '
+                  + '{normal, each_length, each_vocab, attention}:{}'.format(
+                      args.evaluation_method), file=sys.stderr)
+            sys.exit()
 
         parser.add_argument('--attribute_column_indexes', dest='attr_indexes', default=args.attr_indexes)
         parser.add_argument('--attribute_depths', dest='attr_depths', default=args.attr_depths)
@@ -122,6 +136,7 @@ class TaggerArgumentLoader(ArgumentLoader):
         parser.add_argument('--unigram_embed_model_path', default=args.unigram_embed_model_path)
         parser.add_argument('--embed_dropout', type=float, default=args.embed_dropout)
         parser.add_argument('--rnn_dropout', type=float, default=args.rnn_dropout)
+
         # specific options for segmentation/tagging
         parser.add_argument('--bigram_embed_model_path', default=args.bigram_embed_model_path)    
         parser.add_argument('--external_dic_path', default=args.external_dic_path)
@@ -132,14 +147,17 @@ class TaggerArgumentLoader(ArgumentLoader):
         parser.add_argument('--tagging_unit', default=args.tagging_unit)
         if args.external_dic_path and not args.feature_template:
             print('Warning: loaded external dictionary is not used '
-                  + 'unless specify feature_template', file=sys.stderr)
+                  + 'unless feature_template is specified.', file=sys.stderr)
+
         # specific options for hybrid unit segmentation/tagging
         if args.tagging_unit == 'hybrid':
-                parser.add_argument('--biaffine_dropout', type=float, default=args.biaffine_dropout)
-                parser.add_argument('--chunk_vector_dropout', type=float, default=args.chunk_vector_dropout)
-                parser.add_argument('--chunk_vector_element_dropout', 
-                                    type=float, default=args.chunk_vector_element_dropout)
-                parser.add_argument('--chunk_embed_model_path', default=args.chunk_embed_model_path)
+            parser.add_argument('--biaffine_dropout', type=float, default=args.biaffine_dropout)
+            parser.add_argument('--chunk_vector_dropout', type=float, default=args.chunk_vector_dropout)
+            parser.add_argument('--chunk_vector_element_dropout', 
+                                type=float, default=args.chunk_vector_element_dropout)
+            parser.add_argument('--chunk_embed_model_path', default=args.chunk_embed_model_path)
+            parser.add_argument('--gen_oov_chunk_for_test', action='store_true', 
+                                default=args.gen_oov_chunk_for_test)
 
         if args.execute_mode == 'train':
             if (not args.model_path and 
@@ -170,7 +188,6 @@ class TaggerArgumentLoader(ArgumentLoader):
             parser.add_argument('--rnn_n_layers', type=int, default=args.rnn_n_layers)
             parser.add_argument('--rnn_n_units', type=int, default=args.rnn_n_units)
             # specific options for segmentation/tagging
-            parser.add_argument('--tagging_scheme', default=args.tagging_scheme)
             parser.add_argument('--bigram_freq_threshold', type=int, default=args.bigram_freq_threshold)
             parser.add_argument('--bigram_max_vocab_size', type=int, default=args.bigram_max_vocab_size)
             parser.add_argument('--bigram_embed_dim', type=int, default=args.bigram_embed_dim)
@@ -189,10 +206,23 @@ class TaggerArgumentLoader(ArgumentLoader):
                 parser.add_argument('--chunk_max_vocab_size', type=int, default=args.chunk_max_vocab_size)
                 parser.add_argument('--rnn_n_layers2', type=int, default=args.rnn_n_layers2)
                 parser.add_argument('--rnn_n_units2', type=int, default=args.rnn_n_units2)
-                parser.add_argument('--chunk_pooling_type', default=args.chunk_pooling_type.upper())
+                chunk_pooling_type = args.chunk_pooling_type.upper()
+                if (chunk_pooling_type == constants.AVG or
+                    chunk_pooling_type == constants.WAVG or
+                    chunk_pooling_type == constants.CON or
+                    chunk_pooling_type == constants.WCON):
+                    parser.add_argument('--chunk_pooling_type', default=chunk_pooling_type)
+                else:
+                    print('Error: chunk pooling type must be specified among from '
+                          + '{AVG, WAVG, CON, WCON}.'
+                          + ' Input: {}'.format(args.chunk_pooling_type), file=sys.stderr)
+                    sys.exit()
+                
                 parser.add_argument('--min_chunk_len', type=int, default=args.min_chunk_len)
                 parser.add_argument('--max_chunk_len', type=int, default=args.max_chunk_len)
-                parser.add_argument('--use_gold_chunk', action='store_true')
+                parser.add_argument('--use_gold_chunk', action='store_true', default=args.use_gold_chunk)
+                parser.add_argument('--unuse_nongold_chunk', action='store_true', 
+                                    default=args.unuse_nongold_chunk)
                 parser.add_argument('--ignore_unknown_pretrained_chunk', action='store_true')
 
         return parser

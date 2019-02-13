@@ -3,6 +3,7 @@
 *.sh
 log/
 out/
+data/
 models/main/
 models/embed/
 resources/

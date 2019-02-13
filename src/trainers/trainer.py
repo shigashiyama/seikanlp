@@ -6,13 +6,12 @@ from datetime import datetime
 
 import chainer
 from chainer import cuda
-from gensim.models import word2vec, keyedvectors
+from gensim.models import word2vec, keyedvectors, FastText
 
 import numpy as np
 
 import common
 import constants
-import evaluators
 import features
 
 
@@ -76,7 +75,9 @@ class Trainer(object):
         self.decode_data = None
         self.hparams = None
         self.dic = None
+        self.dic_org = None
         self.dic_dev = None
+        self.dic_ext = None # tmp
         self.data_loader = None
         self.classifier = None
         self.evaluator = None
@@ -145,6 +146,19 @@ class Trainer(object):
         pass
 
 
+    def gen_vocabs(self):
+        if not self.task == constants.TASK_SEG:
+            return
+
+        if self.dic_org:        # test
+            vocabs = self.loader.gen_vocabs(self.dic_org, self.dic, train_path=train_path)
+        elif self.dic_dev:      # dev
+            vocabs = self.data_loader.gen_vocabs(self.dic, self.dic_dev, train_path=train_path)
+        else:                   # train
+            vocabs = self.data_loader.gen_vocabs(self.dic, train_path=train_path)
+        return vocabs
+
+
     def load_dic(self, dic_path):
         with open(dic_path, 'rb') as f:
             self.dic = pickle.load(f)
@@ -152,10 +166,6 @@ class Trainer(object):
         self.log('Num of tokens: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
         if self.dic.has_table(constants.BIGRAM):
             self.log('Num of bigrams: {}'.format(len(self.dic.tables[constants.BIGRAM])))
-        if self.dic.has_table(constants.TOKEN_TYPE):
-            self.log('Num of tokentypes: {}'.format(len(self.dic.tables[constants.TOKEN_TYPE])))
-        if self.dic.has_table(constants.SUBTOKEN):
-            self.log('Num of subtokens: {}'.format(len(self.dic.tables[constants.SUBTOKEN])))
         if self.dic.has_trie(constants.CHUNK):
             self.log('Num of chunks: {}'.format(len(self.dic.tries[constants.CHUNK])))
         if self.dic.has_table(constants.SEG_LABEL):
@@ -217,7 +227,7 @@ class Trainer(object):
         self.log('')
 
 
-    def update_model(self, classifier=None, dic=None):
+    def update_model(self, classifier=None, dic=None, train=False):
         # to be implemented in sub-class
         pass
 
@@ -240,6 +250,7 @@ class Trainer(object):
 
 
     def load_test_data(self):
+        self.dic_org = copy.deepcopy(self.dic)
         self.load_data('test')
 
 
@@ -248,8 +259,8 @@ class Trainer(object):
 
 
     def load_data(self, data_type):
-        self.setup_data_loader()
         if data_type == 'train':
+            self.setup_data_loader()
             data_path = self.args.path_prefix + self.args.train_data
             data, self.dic = self.data_loader.load_gold_data(
                 data_path, self.args.input_data_format, dic=self.dic, train=True)
@@ -265,6 +276,7 @@ class Trainer(object):
             self.dev = data
 
         elif data_type == 'test':
+            self.setup_data_loader()
             data_path = self.args.path_prefix + self.args.test_data
             data, self.dic = self.data_loader.load_gold_data(
                 data_path, self.args.input_data_format, dic=self.dic, train=False)
@@ -272,6 +284,7 @@ class Trainer(object):
             self.test = data
 
         elif data_type == 'decode':
+            self.setup_data_loader()
             data_path = self.args.path_prefix + self.args.decode_data
             data = self.data_loader.load_decode_data(
                 data_path, self.args.input_data_format, dic=self.dic)
@@ -282,7 +295,8 @@ class Trainer(object):
             print('Error: incorect data type: {}'.format(), file=sys.stderr)
             sys.exit()
 
-        if self.hparams['feature_template'] and self.args.batch_feature_extraction: # for segmentation
+        if ('feature_template' in self.hparams and self.hparams['feature_template'] and
+            self.args.batch_feature_extraction): # for segmentation
             data.featvecs = self.feat_extractor.extract_features(data.inputs[0], self.dic.tries[constants.CHUNK])
             self.log('Extract dictionary features for {}'.format(data_type))
 
@@ -342,6 +356,11 @@ class Trainer(object):
         self.optimizer = optimizer
 
         return self.optimizer
+
+
+    def setup_evaluator(self, evaluator=None):
+        # to be implemented in sub-class
+        pass
 
 
     def run_train_mode(self):
@@ -412,15 +431,27 @@ class Trainer(object):
         return None
 
 
+    def get_labels(self, inputs): # called from run_epoch
+        return inputs[self.label_begin_index:]
+
+
+    def get_outputs(self, ret): # called from run_epoch
+        return ret[1:]
+        
+
     def run_epoch(self, data, train=False):
         xp = cuda.cupy if self.args.gpu >= 0 else np
 
-        if train:
-            classifier = self.classifier
-        else:
+        if not train and self.dic_dev is not None:
             classifier = self.classifier.copy()
             self.update_model(classifier=classifier, dic=self.dic_dev)
+            evaluator = copy.deepcopy(self.evaluator)
+            self.setup_evaluator(evaluator)
             classifier.change_dropout_ratio(0)
+
+        else:
+            classifier = self.classifier
+            evaluator = self.evaluator
 
         n_sen = 0
         total_loss = 0
@@ -428,19 +459,18 @@ class Trainer(object):
 
         i = 0
         n_ins = len(data.inputs[0])
-        # shuffle = False         # tmp
         shuffle = True if train else False
         for ids in batch_generator(n_ins, batch_size=self.args.batch_size, shuffle=shuffle):
             inputs = self.gen_inputs(data, ids)
             xs = inputs[0]
-            golds = inputs[self.label_begin_index:]
+            golds = self.get_labels(inputs)
             if train:
                 ret = classifier(*inputs, train=True)
             else:
                 with chainer.no_backprop_mode():
                     ret = classifier(*inputs, train=False)
             loss = ret[0]
-            outputs = ret[1:]
+            outputs = self.get_outputs(ret)
 
             if train:
                 self.optimizer.target.cleargrads() # Clear the parameter gradients
@@ -463,8 +493,11 @@ class Trainer(object):
 
             n_sen += len(xs)
             total_loss += loss.data
-            counts = self.evaluator.calculate(*[xs], *golds, *outputs)
-            total_counts = evaluators.merge_counts(total_counts, counts)
+            counts = evaluator.calculate(*[xs], *golds, *outputs)
+            if not total_counts:
+                total_counts = counts
+            else:
+                total_counts.merge(counts)
 
             if (train and 
                 self.n_iter > 0 and 
@@ -475,7 +508,7 @@ class Trainer(object):
                 self.log('\n### Finish %s iterations (%s examples: %s epoch)' % (
                     self.n_iter, (self.n_iter * self.args.batch_size), now_e))
                 self.log('<training result for previous iterations>')
-                res = self.evaluator.report_results(n_sen, total_counts, total_loss, file=self.logger)
+                res = evaluator.report_results(n_sen, total_counts, total_loss, file=self.logger)
                 self.report('train\t%d\t%s\t%s' % (self.n_iter, now_e, res))
 
                 if self.args.devel_data:
@@ -503,7 +536,7 @@ class Trainer(object):
             if train:
                 self.n_iter += 1
 
-        res = None if train else self.evaluator.report_results(n_sen, total_counts, total_loss, file=self.logger)
+        res = None if train else evaluator.report_results(n_sen, total_counts, total_loss, file=self.logger)
         return res
 
 
@@ -532,19 +565,23 @@ def batch_generator(len_data, batch_size=100, shuffle=True):
         i_max = min(i + batch_size, len_data)
         yield perm[i:i_max]
 
-    raise StopIteration
+    # raise StopIteration
 
 
 def load_embedding_model(model_path):
-    if model_path.endswith('model'):
-        model = word2vec.Word2Vec.load(model_path)        
-    elif model_path.endswith('bin'):
+    # Word2Vec
+    if model_path.endswith('bin'):
         model = keyedvectors.KeyedVectors.load_word2vec_format(model_path, binary=True)
-    elif model_path.endswith('txt'):
+    elif model_path.endswith('txt') or model_path.endswith('vec'):
         model = keyedvectors.KeyedVectors.load_word2vec_format(model_path, binary=False)
+
+    # FastText
+    elif model_path.endswith('ftx'):
+        model = FastText.load(model_path)
+
     else:
         print("unsuported format of word embedding model.", file=sys.stderr)
         return
 
-    print("load embedding model: vocab=%d\n" % len(model.wv.vocab), file=sys.stderr)
+    print("load embedding model: vocab=%d" % len(model.wv.vocab), file=sys.stderr)
     return model

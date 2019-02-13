@@ -79,7 +79,8 @@ class TrieNode(object):
 
 
     def get_child(self, token):
-        token = int(token)
+        if not isinstance(token, str): # tmp
+            token = int(token)
         return self.children[token] if token in self.children else None
 
 
@@ -184,7 +185,7 @@ class Dictionary(object):
             table.create_id2str()
 
 
-    def create_trie(self, trie_name):
+    def init_trie(self, trie_name):
         self.tries[trie_name] = MapTrie()
 
 

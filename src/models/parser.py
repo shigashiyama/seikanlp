@@ -9,76 +9,17 @@ from chainer import cuda
 from chainer import initializers
 from chainer.functions.loss import softmax_cross_entropy
 from chainer.functions.math import minmax
-#from chainer.functions.array import select_item
 
-sys.path.append('src')
 import constants
 import util
 import models.util
 from models.util import ModelUsage
-from models.common import MLP
-
-
-class BiaffineCombination(chainer.Chain):
-    def __init__(self, left_size, right_size, use_U=False, use_V=False, use_b=False):
-        super().__init__()
-        
-        with self.init_scope():
-            initialW = None
-            w_shape = (left_size, right_size)
-            self.W = chainer.variable.Parameter(initializers._get_initializer(initialW), w_shape)
-
-            if use_U:
-                initialU = None
-                u_shape = (left_size, 1)
-                self.U = chainer.variable.Parameter(initializers._get_initializer(initialU), u_shape)
-            else:
-                self.U = None
-
-            if use_V:
-                initialV = None
-                v_shape = (1, right_size)
-                self.V = chainer.variable.Parameter(initializers._get_initializer(initialV), v_shape)
-            else:
-                self.V = None
-
-            if use_b:
-                initialb = 0
-                b_shape = 1
-                self.b = chainer.variable.Parameter(initialb, b_shape)
-            else:
-                self.b = None
-
-    def __call__(self, x1, x2):
-        # inputs: x1 = [x1_1 ... x1_i ... x1_n1]; dim(x1_i)=d1=left_size
-        #         x2 = [x2_1 ... x2_j ... x2_n2]; dim(x2_j)=d2=right_size
-        # output: o_ij = x1_i * W * x2_j + x2_j * U + b
-
-        n1 = x1.shape[0]
-        n2 = x2.shape[0]
-        x2T = F.transpose(x2)
-        x1_W = F.matmul(x1, self.W)                       # (n1, d1) * (d1, d2) => (n1, d2)
-        res = F.matmul(x1_W, x2T)                         # (n1, d2) * (d2, n2) => (n1, n2)
-
-        if self.U is not None:
-            x1_U = F.broadcast_to(F.matmul(x1, self.U), (n1, n2)) # (n1, d1) * (d1, 1)  => (n1, 1) -> (n1, n2)
-            # print('x1*U', x1_U.shape)
-            res = res + x1_U
-
-        if self.V is not None: # TODO fix
-            V_x2 = F.broadcast_to(F.matmul(self.V, x2T), (n1, n2)) # (1, d2) * (d2, n2) => (1, n2) -> (n1, n2)
-            res = res + V_x2
-
-        if self.b is not None:
-            b = F.broadcast_to(self.b, (n1, n2))
-            res = res + b
-
-        return res
+from models.common import BiaffineCombination, MLP
 
 
 class RNNBiaffineParser(chainer.Chain):
     def __init__(
-            self, n_vocab, unigram_embed_dim, n_pos, pos_embed_dim, n_subtokens, subtoken_embed_dim,
+            self, n_vocab, unigram_embed_dim, n_pos, pos_embed_dim,
             rnn_unit_type, rnn_bidirection, rnn_n_layers, rnn_n_units, 
             mlp4arcrep_n_layers, mlp4arcrep_n_units,
             mlp4labelrep_n_layers, mlp4labelrep_n_units, 
@@ -86,7 +27,7 @@ class RNNBiaffineParser(chainer.Chain):
             mlp4pospred_n_layers=0, mlp4pospred_n_units=0,
             n_labels=0, rnn_dropout=0, hidden_mlp_dropout=0, pred_layers_dropout=0,
             pretrained_unigram_embed_dim=0, pretrained_embed_usage=ModelUsage.NONE,
-            file=sys.stderr):
+    ):
         super().__init__()
 
         self.common_arc_label = False
@@ -97,9 +38,7 @@ class RNNBiaffineParser(chainer.Chain):
             self.pred_layers_dropout = pred_layers_dropout
             self.softmax_cross_entropy = softmax_cross_entropy.softmax_cross_entropy
 
-            print('### Parameters', file=file)
-            # print('acl=label:', self.common_arc_label, file=file)
-            # print('head=mod:', self.common_head_mod, file=file)
+            print('### Parameters', file=sys.stderr)
 
             # unigram embedding layer(s)
 
@@ -107,119 +46,108 @@ class RNNBiaffineParser(chainer.Chain):
 
             self.unigram_embed, self.pretrained_unigram_embed = models.util.construct_embeddings(
                 n_vocab, unigram_embed_dim, pretrained_unigram_embed_dim, pretrained_embed_usage)
-            print('# Unigram embedding matrix: W={}'.format(self.unigram_embed.W.shape), file=file)
+            print('# Unigram embedding matrix: W={}'.format(self.unigram_embed.W.shape), file=sys.stderr)
             embed_dim = self.unigram_embed.W.shape[1]
             if self.pretrained_unigram_embed is not None:
                 if self.pretrained_embed_usage == ModelUsage.CONCAT:
                     embed_dim += self.pretrained_unigram_embed.W.shape[1]
                 print('# Pretrained unigram embedding matrix: W={}'.format(
-                    self.pretrained_unigram_embed.W.shape), file=file)
+                    self.pretrained_unigram_embed.W.shape), file=sys.stderr)
             if self.pretrained_embed_usage != ModelUsage.NONE:
-                print('# Pretrained embedding usage: {}'.format(self.pretrained_embed_usage))
-
-            # subtoken embedding layer
-
-            if n_subtokens > 0 and subtoken_embed_dim > 0:
-                self.subtoken_embed = L.EmbedID(n_subtokens, subtoken_embed_dim)
-                embed_dim += subtoken_embed_dim
-                print('# Subtoken embedding matrix: W={}'.format(self.subtoken_embed.W.shape), file=file)
-            self.subtoken_embed_dim = subtoken_embed_dim
+                print('# Pretrained embedding usage: {}'.format(self.pretrained_embed_usage), file=sys.stderr)
 
             # pos embedding layer
 
             if n_pos > 0 and pos_embed_dim > 0:
                 self.pos_embed = L.EmbedID(n_pos, pos_embed_dim)
                 embed_dim += pos_embed_dim
-                print('# POS embedding matrix: W={}'.format(self.pos_embed.W.shape), file=file)
+                print('# POS embedding matrix: W={}'.format(self.pos_embed.W.shape), file=sys.stderr)
             self.pos_embed_dim = pos_embed_dim;
 
             # recurrent layers
 
             self.rnn_unit_type = rnn_unit_type
             self.rnn = models.util.construct_RNN(
-                rnn_unit_type, rnn_bidirection, rnn_n_layers, embed_dim, rnn_n_units, rnn_dropout,
-                file=file)
+                rnn_unit_type, rnn_bidirection, rnn_n_layers, embed_dim, rnn_n_units, rnn_dropout)
+                
             rnn_output_dim = rnn_n_units * (2 if rnn_bidirection else 1)
 
             # MLP for pos prediction (tentative)
             
             self.pos_prediction = (mlp4pospred_n_layers > 0 and mlp4pospred_n_units > 0)
             if self.pos_prediction:
-                print('# MLP for POS prediction', file=file)
-                input_dim = unigram_embed_dim + pretrained_unigram_embed_dim + subtoken_embed_dim
+                print('# MLP for POS prediction', file=sys.stderr)
+                input_dim = unigram_embed_dim + pretrained_unigram_embed_dim
                 self.mlp_pos = MLP(
                     input_dim, n_pos, n_hidden_units=mlp4pospred_n_units, n_layers=mlp4pospred_n_layers,
-                    output_activation=F.identity, dropout=pred_layers_dropout, file=file)
+                    output_activation=F.identity, dropout=pred_layers_dropout)
 
             # MLPs and biaffine layer for arc prediction
             
-            print('# MLP for arc heads', file=file)
+            print('# MLP for arc heads', file=sys.stderr)
             self.mlp_arc_head = MLP(
                 rnn_output_dim, mlp4arcrep_n_units, n_layers=mlp4arcrep_n_layers, 
-                dropout=hidden_mlp_dropout, file=file)
+                dropout=hidden_mlp_dropout)
 
-            print('# MLP for arc modifiers', file=file)
+            print('# MLP for arc modifiers', file=sys.stderr)
             if not self.common_head_mod:
                 self.mlp_arc_mod = MLP(
                     rnn_output_dim, mlp4arcrep_n_units, n_layers=mlp4arcrep_n_layers, 
-                    dropout=hidden_mlp_dropout, file=file)
+                    dropout=hidden_mlp_dropout)
             else:
                 self.mlp_arc_mod = None
-                print('use common reps for heads and modifiers', file=file)
+                print('use common reps for heads and modifiers', file=sys.stderr)
                 
             self.biaffine_arc = BiaffineCombination(mlp4arcrep_n_units, mlp4arcrep_n_units, use_U=True)
             print('# Biaffine layer for arc prediction:   W={}, U={}, b={}, dropout={}'.format(
                 self.biaffine_arc.W.shape, 
                 self.biaffine_arc.U.shape if self.biaffine_arc.U is not None else None, 
                 self.biaffine_arc.b.shape if self.biaffine_arc.b is not None else None, 
-                self.pred_layers_dropout), file=file)
+                self.pred_layers_dropout), file=sys.stderr)
 
             # MLPs for label prediction
 
             self.label_prediction = n_labels > 0
             if self.label_prediction:
                 if not self.common_arc_label:
-                    print('# MLP for label heads', file=file)
+                    print('# MLP for label heads', file=sys.stderr)
                     self.mlp_label_head = MLP(
                         rnn_output_dim, mlp4labelrep_n_units, n_layers=mlp4labelrep_n_layers, 
-                        dropout=hidden_mlp_dropout, 
-                        file=file)
+                        dropout=hidden_mlp_dropout)
+
                 else:
                     self.mlp_label_head = None
-                    print('use common reps for arc and label', file=file)
+                    print('use common reps for arc and label', file=sys.stderr)
 
                 if not self.common_arc_label:
                     if not self.common_head_mod:
-                        print('# MLP for label modifiers', file=file)
+                        print('# MLP for label modifiers', file=sys.stderr)
                         self.mlp_label_mod = MLP(
                             rnn_output_dim, mlp4labelrep_n_units, n_layers=mlp4labelrep_n_layers, 
-                            dropout=hidden_mlp_dropout, 
-                            file=file)
+                            dropout=hidden_mlp_dropout)
                     else:
                         self.mlp_label_mod = None
-                        print('use common reps for head and mod', file=file)
+                        print('use common reps for head and mod', file=sys.stderr)
                 else:
                     self.mlp_label_mod = None
-                    print('use common reps for arc and label', file=file)
+                    print('use common reps for arc and label', file=sys.stderr)
 
-                print('# MLP for label prediction:', file=file)
+                print('# MLP for label prediction:', file=sys.stderr)
                 self.mlp_label = MLP(
                     mlp4labelrep_n_units * 2, n_labels, n_hidden_units=mlp4labelpred_n_units,
                     n_layers=mlp4labelpred_n_layers, 
-                    output_activation=F.identity, dropout=pred_layers_dropout, file=file)
+                    output_activation=F.identity, dropout=pred_layers_dropout)
 
 
-    def extract_features(self, ws, cs=None, ps=None):
+    def extract_features(self, ws, ps=None):
         xs = []
 
         xp = cuda.get_array_module(ws[0])
         size = len(ws)
         if ps is None:
             ps = [None] * size
-        if cs is None:
-            cs = [None] * size
 
-        for w, c, p in zip(ws, cs, ps):
+        for w, p in zip(ws, ps):
             xe = self.unigram_embed(w)
 
             if self.pretrained_embed_usage == ModelUsage.ADD:
@@ -228,20 +156,6 @@ class RNNBiaffineParser(chainer.Chain):
             elif self.pretrained_embed_usage == ModelUsage.CONCAT:
                 twe = self.pretrained_unigram_embed(w)
                 xe = F.concat((xe, twe), 1)
-
-            if self.subtoken_embed_dim > 0:
-                ce = F.concat(
-                    [F.mean(self.subtoken_embed(ci), axis=0, keepdims=True) for ci in c],
-                    axis=0)
-                # sums = F.sum(self.subtoken_embed(c), axis=1)
-                # divider = np.sum(c != 0, axis=1, keepdims=True) # num of non-zero (non-padding) elements
-                # divider[divider==0] = 1 # avoid 0 division
-                # ce = sums / divider
-                xe = F.concat((xe, ce), 1)
-
-            # if self.pos_embed_dim > 0:
-            #     pe = self.pos_embed(p)
-            #     xe = F.concat((xe, pe), 1)
 
             if self.pos_embed_dim > 0:
                 if p is not None:
@@ -328,7 +242,7 @@ class RNNBiaffineParser(chainer.Chain):
 
     # batch of unigrams, pos tags, gold head labels, gold arc labels
     def __call__(
-            self, ws, cs=None, ps=None, ghs=None, gls=None, train=True, calculate_loss=True):
+            self, ws, ps=None, ghs=None, gls=None, train=True, calculate_loss=True):
         data_size = len(ws)
 
         if train:
@@ -339,7 +253,7 @@ class RNNBiaffineParser(chainer.Chain):
             gls = [None] * data_size
 
         # embed
-        xs = self.extract_features(ws, cs, ps)
+        xs = self.extract_features(ws, ps)
 
         # rnn layers
         rs = self.rnn_output(xs)
@@ -445,11 +359,10 @@ class RNNBiaffineParser(chainer.Chain):
                 return loss, yhs
 
 
-    def decode(self, ws, cs=None, ps=None, label_prediction=False):
+    def decode(self, ws, ps=None, label_prediction=False):
         self.label_prediction=label_prediction
         with chainer.no_backprop_mode():
-            ret = self.__call__(
-                ws, cs=cs, ps=ps, train=False, calculate_loss=False)
+            ret = self.__call__(ws, ps=ps, train=False, calculate_loss=False)
         return ret[1:]
 
 

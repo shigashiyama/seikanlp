@@ -10,11 +10,11 @@ from chainer import cuda
 import classifiers.sequence_tagger
 import common
 import constants
-from data import data_loader, segmentation_data_loader, tagging_data_loader
-import evaluators
+from data_loaders import data_loader, segmentation_data_loader, tagging_data_loader
+from evaluators.common import AccuracyEvaluator, FMeasureEvaluator, DoubleFMeasureEvaluator
+from evaluators.tagger_evaluator import FMeasureEvaluatorForEachLength, FMeasureEvaluatorForEachVocab
 import models.tagger
 import models.util
-import optimizers
 from trainers import trainer
 from trainers.trainer import Trainer
 import util
@@ -30,10 +30,6 @@ class TaggerTrainerBase(Trainer):
         self.log('Num of tokens: {}'.format(len(dic.tables[constants.UNIGRAM])))
         if dic.has_table(constants.BIGRAM):
             self.log('Num of bigrams: {}'.format(len(dic.tables[constants.BIGRAM])))
-        if dic.has_table(constants.TOKEN_TYPE):
-            self.log('Num of tokentypes: {}'.format(len(dic.tables[constants.TOKEN_TYPE])))
-        if dic.has_table(constants.SUBTOKEN):
-            self.log('Num of subtokens: {}'.format(len(dic.tables[constants.SUBTOKEN])))
         self.log()
         
 
@@ -48,12 +44,6 @@ class TaggerTrainerBase(Trainer):
         if self.dic.has_table(constants.BIGRAM):
             b2i_tmp = list(self.dic.tables[constants.BIGRAM].str2id.items())
             self.log('# bigram2id: {} ... {}\n'.format(b2i_tmp[:10], b2i_tmp[len(b2i_tmp)-10:]))
-        if self.dic.has_table(constants.TOKEN_TYPE):
-            tt2i = list(self.dic.tables[constants.TOKEN_TYPE].str2id.items())
-            self.log('# tokentype2id: {}\n'.format(tt2i))
-        if self.dic.has_table(constants.SUBTOKEN):
-            st2i_tmp = list(self.dic.tables[constants.SUBTOKEN].str2id.items())
-            self.log('# subtoken2id: {} ... {}\n'.format(st2i_tmp[:10], st2i_tmp[len(st2i_tmp)-10:]))
         if self.dic.has_trie(constants.CHUNK):
             id2chunk = self.dic.tries[constants.CHUNK].id2chunk
             n_chunks = len(self.dic.tries[constants.CHUNK])
@@ -80,8 +70,7 @@ class TaggerTrainerBase(Trainer):
 
         us = [xp.asarray(data.inputs[0][j], dtype='i') for j in ids]
         bs = [xp.asarray(data.inputs[1][j], dtype='i') for j in ids] if data.inputs[1] else None
-        ts = [xp.asarray(data.inputs[2][j], dtype='i') for j in ids] if data.inputs[2] else None
-        es = [xp.asarray(data.inputs[3][j], dtype='i') for j in ids] if data.inputs[3] else None
+        es = [xp.asarray(data.inputs[2][j], dtype='i') for j in ids] if data.inputs[2] else None
 
         if self.hparams['feature_template']:
             if self.args.batch_feature_extraction:
@@ -95,9 +84,9 @@ class TaggerTrainerBase(Trainer):
         ls = [xp.asarray(data.outputs[0][j], dtype='i') for j in ids] if evaluate else None
 
         if evaluate:
-            return us, bs, ts, es, fs, ls
+            return us, bs, es, fs, ls
         else:
-            return us, bs, ts, es, fs
+            return us, bs, es, fs
         
 
     def decode(self, rdata, file=sys.stdout):
@@ -135,17 +124,19 @@ class TaggerTrainerBase(Trainer):
             oa = rdata.orgdata[1] if len(rdata.orgdata) > 1 else None
 
             self.decode_batch(*inputs, org_tokens=ot, org_attrs=oa)
-            if not self.args.output_empty_line:
-                print(file=sys.stdout)
 
 
-    def run_eval_mode2(self):
+    def run_eval_mode(self):
+        if self.args.evaluation_method == 'stat_test':
+            self.run_eval_mode_for_stat_test()
+        else:
+            super().run_eval_mode()
+            
+
+    def run_eval_mode_for_stat_test(self):
         classifier = self.classifier.copy()
         self.update_model(classifier=classifier, dic=self.dic)
         classifier.change_dropout_ratio(0)
-
-        id2token = self.dic.tables[constants.UNIGRAM].id2str
-        id2label = self.dic.tables[constants.SEG_LABEL].id2str
 
         data = self.test
         n_ins = len(data.inputs[0])
@@ -156,20 +147,21 @@ class TaggerTrainerBase(Trainer):
             inputs = self.gen_inputs(data, ids)
             xs = inputs[0]
             n_sen += len(xs)
-            golds = inputs[self.label_begin_index:]
+            gls = inputs[self.label_begin_index]
 
             with chainer.no_backprop_mode():
-                gls, pls = classifier.predictor.do_analysis(*inputs)
+                ret = classifier.predictor(*inputs)
+            pls = ret[1]
 
             for gl, pl in zip(gls, pls):
                 for gli, pli in zip(gl, pl):
-                    print('{}'.format(int(gli) == int(pli)))
+                    print('{}'.format(1 if int(gli) == int(pli) else 0))
                 print()
 
-        print('Finished', n_sen)
+        print('Finished', n_sen, file=sys.stderr)
 
 
-    def decode_batch(self, *inputs, org_tokens, org_attrs, file=sys.stdout):
+    def decode_batch(self, *inputs, org_tokens=None, org_attrs=None, file=sys.stdout):
         ys = self.classifier.decode(*inputs)
         id2label = (self.dic.tables[constants.SEG_LABEL if common.is_segmentation_task(self.task) 
                                     else constants.ATTR_LABEL(0)].id2str)
@@ -182,14 +174,17 @@ class TaggerTrainerBase(Trainer):
             if self.task == constants.TASK_TAG:
                 if a_str:
                     res = ['{}{}{}{}{}'.format(xi_str, self.args.output_attr_delim,
-                                               ai_str, self.args.output_attr_delim,
-                                               yi_str) 
+                                                 ai_str, self.args.output_attr_delim,
+                                                 yi_str)
                            for xi_str, ai_str, yi_str in zip(x_str, a_str, y_str)]
                 else:
-                    res = ['{}{}{}'.format(xi_str, self.args.output_attr_delim, yi_str) 
+                    res = ['{}{}{}'.format(xi_str, self.args.output_attr_delim, yi_str)
                            for xi_str, yi_str in zip(x_str, y_str)]
                 
+                if self.args.output_data_format == 'wl':
+                    res.append('')
                 res = self.args.output_token_delim.join(res)
+
 
             elif self.task == constants.TASK_SEG:
                 res = ['{}{}'.format(xi_str, self.args.output_token_delim 
@@ -210,17 +205,16 @@ class TaggerTrainerBase(Trainer):
                 sys.exit()
 
             print(res, file=file)
-            if self.args.output_empty_line:
-                print(file=file)
 
 
     def load_external_dictionary(self):
-        if not self.dic and self.args.external_dic_path:
-            use_pos = common.is_tagging_task(self.task)
+        # if not self.dic and self.args.external_dic_path:
+        if self.args.external_dic_path:
             edic_path = self.args.external_dic_path
-            self.dic = segmentation_data_loader.load_external_dictionary(edic_path)
+            self.dic = segmentation_data_loader.load_external_dictionary(edic_path, dic=self.dic)
             self.log('Load external dictionary: {}'.format(edic_path))
-            self.log('Num of tokens: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
+            self.log('Num of unigrams: {}'.format(len(self.dic.tables[constants.UNIGRAM])))
+            self.log('Num of chunks: {}'.format(len(self.dic.tries[constants.CHUNK])))
             
             # if not edic_path.endswith('pickle'):
             #     base = edic_path.split('.')[0]
@@ -236,7 +230,7 @@ class TaggerTrainer(TaggerTrainerBase):
         super().__init__(args, logger)
         self.unigram_embed_model = None
         self.bigram_embed_model = None
-        self.label_begin_index = 5
+        self.label_begin_index = 4
 
 
     def load_external_embedding_models(self):
@@ -247,13 +241,11 @@ class TaggerTrainer(TaggerTrainerBase):
 
 
     def init_model(self):
-        super().init_model()
-        # uw = self.classifier.predictor.unigram_embed.W
-        # print(uw[1], uw[2], uw[3])
-        if self.unigram_embed_model or self.bigram_embed_model:
-            finetuning = not self.hparams['fix_pretrained_embed']
-            self.classifier.load_pretrained_embedding_layer(
-                self.dic, self.unigram_embed_model, self.bigram_embed_model, finetuning=finetuning)
+       super().init_model()
+       if self.unigram_embed_model or self.bigram_embed_model:
+           finetuning = not self.hparams['fix_pretrained_embed']
+           self.classifier.load_pretrained_embedding_layer(
+               self.dic, self.unigram_embed_model, self.bigram_embed_model, finetuning=True)
 
 
     def load_model(self):
@@ -269,7 +261,7 @@ class TaggerTrainer(TaggerTrainerBase):
             self.classifier.change_dropout_ratio(0)
 
 
-    def update_model(self, classifier=None, dic=None):
+    def update_model(self, classifier=None, dic=None, train=False):
         if not classifier:
             classifier = self.classifier
         if not dic:
@@ -280,8 +272,7 @@ class TaggerTrainer(TaggerTrainerBase):
             self.args.execute_mode == 'decode'):
 
             classifier.grow_embedding_layers(
-                dic, self.unigram_embed_model, self.bigram_embed_model,
-                train=(self.args.execute_mode=='train'))
+                dic, self.unigram_embed_model, self.bigram_embed_model, train=train)
             classifier.grow_inference_layers(dic)
 
 
@@ -300,11 +291,8 @@ class TaggerTrainer(TaggerTrainerBase):
             'pretrained_unigram_embed_dim' : pretrained_unigram_embed_dim,
             'pretrained_bigram_embed_dim' : pretrained_bigram_embed_dim,
             'pretrained_embed_usage' : self.args.pretrained_embed_usage,
-            'fix_pretrained_embed' : self.args.fix_pretrained_embed,
             'unigram_embed_dim' : self.args.unigram_embed_dim,
             'bigram_embed_dim' : self.args.bigram_embed_dim,
-            'tokentype_embed_dim' : self.args.tokentype_embed_dim,
-            'subtoken_embed_dim' : self.args.subtoken_embed_dim,
             'attr1_embed_dim' : self.args.attr1_embed_dim,
             'rnn_unit_type' : self.args.rnn_unit_type,
             'rnn_bidirection' : self.args.rnn_bidirection,
@@ -318,7 +306,6 @@ class TaggerTrainer(TaggerTrainerBase):
             'mlp_dropout' : self.args.mlp_dropout,
             'feature_template' : self.args.feature_template,
             'task' : self.args.task,
-            'tagging_scheme': self.args.tagging_scheme,
             'lowercasing' : self.args.lowercasing,
             'normalize_digits' : self.args.normalize_digits,
             'token_freq_threshold' : self.args.token_freq_threshold,
@@ -352,8 +339,6 @@ class TaggerTrainer(TaggerTrainerBase):
                     key == 'pretrained_bigram_embed_dim' or
                     key == 'unigram_embed_dim' or
                     key == 'bigram_embed_dim' or
-                    key == 'tokentype_embed_dim' or
-                    key == 'subtoken_embed_dim' or
                     key == 'attr1_embed_dim' or
                     key == 'additional_feat_dim' or
                     key == 'rnn_n_layers' or
@@ -377,18 +362,11 @@ class TaggerTrainer(TaggerTrainerBase):
 
                 elif (key == 'rnn_bidirection' or
                       key == 'lowercasing' or
-                      key == 'normalize_digits' or
-                      key == 'fix_pretrained_embed'
+                      key == 'normalize_digits'
                 ):
                     val = (val.lower() == 'true')
 
                 hparams[key] = val
-
-        # tmp
-        # if not 'attr1_embed_dim' in hparams:
-        #     hparams['attr1_embed_dim'] = 0
-        # if not 'tagging_scheme'in hparams:
-        #     hparams['tagging_scheme'] = 'BIOES'
 
         self.hparams = hparams
         self.task = self.hparams['task']
@@ -403,7 +381,7 @@ class TaggerTrainer(TaggerTrainerBase):
             if hparams['pretrained_unigram_embed_dim'] != pretrained_unigram_embed_dim:
                 self.log(
                     'Error: pretrained_unigram_embed_dim and dimension of loaded embedding model'
-                    + 'are conflicted.'.format(
+                    + ' are conflicted.'.format(
                         hparams['pretrained_unigram_embed_dim'], pretrained_unigram_embed_dim))
                 sys.exit()
 
@@ -412,13 +390,12 @@ class TaggerTrainer(TaggerTrainerBase):
             if hparams['pretrained_bigram_embed_dim'] != pretrained_bigram_embed_dim:
                 self.log(
                     'Error: pretrained_bigram_embed_dim and dimension of loaded embedding model'
-                    + 'are conflicted.'.format(
+                    + ' are conflicted.'.format(
                         hparams['pretrained_bigram_embed_dim'], pretrained_bigram_embed_dim))
                 sys.exit()
 
 
     def setup_data_loader(self):
-        # scheme = hparams['tagging_scheme']
         attr_indexes=common.get_attribute_values(self.args.attr_indexes)
 
         if self.task == constants.TASK_SEG or self.task == constants.TASK_SEGTAG:
@@ -430,7 +407,6 @@ class TaggerTrainer(TaggerTrainerBase):
                     self.args.attr_target_labelsets, len(attr_indexes)),
                 attr_delim=self.args.attr_delim,
                 use_bigram=(self.hparams['bigram_embed_dim'] > 0),
-                use_tokentype=(self.hparams['tokentype_embed_dim'] > 0),
                 use_chunk_trie=(True if self.hparams['feature_template'] else False),
                 bigram_max_vocab_size=self.hparams['bigram_max_vocab_size'],
                 bigram_freq_threshold=self.hparams['bigram_freq_threshold'],
@@ -447,21 +423,12 @@ class TaggerTrainer(TaggerTrainerBase):
                 attr_target_labelsets=common.get_attribute_labelsets(
                     self.args.attr_target_labelsets, len(attr_indexes)),
                 attr_delim=self.args.attr_delim,
-                use_subtoken=(self.hparams['subtoken_embed_dim'] > 0),
                 lowercasing=self.hparams['lowercasing'],
                 normalize_digits=self.hparams['normalize_digits'],
                 token_freq_threshold=self.hparams['token_freq_threshold'],
                 token_max_vocab_size=self.hparams['token_max_vocab_size'],
                 unigram_vocab=(self.unigram_embed_model.wv if self.unigram_embed_model else set()),
             )
-
-
-    def setup_optimizer(self):
-        super().setup_optimizer()
-        if self.unigram_embed_model and self.args.fix_pretrained_embed:
-            self.classifier.predictor.unigram_embed.disable_update()
-        if self.bigram_embed_model and self.args.fix_pretrained_embed:
-            self.classifier.predictor.bigram_embed.disable_update()
 
 
     def setup_classifier(self):
@@ -476,14 +443,6 @@ class TaggerTrainer(TaggerTrainerBase):
             n_bigrams = len(dic.tables[constants.BIGRAM])
         else:
             bigram_embed_dim = n_bigrams = 0
-
-        if 'tokentype_embed_dim' in hparams and hparams['tokentype_embed_dim'] > 0:
-            tokentype_embed_dim = hparams['tokentype_embed_dim']
-            n_tokentypes = len(dic.tables[constants.TOKEN_TYPE])
-        else:
-            tokentype_embed_dim = n_tokentypes = 0
-
-        subtoken_embed_dim = n_subtokens = 0
 
         if 'pretrained_unigram_embed_dim' in hparams and hparams['pretrained_unigram_embed_dim'] > 0:
             pretrained_unigram_embed_dim = hparams['pretrained_unigram_embed_dim']
@@ -535,7 +494,7 @@ class TaggerTrainer(TaggerTrainerBase):
                 sys.exit()
 
         predictor = models.tagger.construct_RNNTagger(
-            n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim, n_tokentypes, tokentype_embed_dim,
+            n_vocab, unigram_embed_dim, n_bigrams, bigram_embed_dim,
             n_attr1, attr1_embed_dim, 0, 0,
             hparams['rnn_unit_type'], hparams['rnn_bidirection'], 
             hparams['rnn_n_layers'], hparams['rnn_n_units'], 
@@ -554,144 +513,52 @@ class TaggerTrainer(TaggerTrainerBase):
         self.classifier = classifiers.sequence_tagger.SequenceTagger(predictor, task=self.task)
 
 
-    def setup_evaluator(self):
-        if self.task == constants.TASK_TAG and self.args.ignored_labels: # TODO fix
-            tmp = self.args.ignored_labels
-            self.args.ignored_labels = set()
+    def gen_vocabs(self):
+        if not self.task == constants.TASK_SEG:
+            return
 
-            for label in tmp.split(','):
+        train_path = self.args.path_prefix + self.args.train_data
+        char_table = self.dic.tables[constants.UNIGRAM]
+        vocabs = self.data_loader.gen_vocabs(
+            train_path, char_table, data_format=self.args.input_data_format)
+        return vocabs
+
+
+    def setup_evaluator(self, evaluator=None):
+        if self.task == constants.TASK_TAG and self.args.ignored_labels: # TODO fix
+            ignored_labels = set()
+            for label in self.args.ignored_labels.split(','):
                 label_id = self.dic.tables[constants.ATTR_LABEL(0)].get_id(label)
                 if label_id >= 0:
-                    self.args.ignored_labels.add(label_id)
+                    ignored_labels.add(label_id)
 
-            self.log('Setup evaluator: labels to be ignored={}\n'.format(self.args.ignored_labels))
+            self.log('Setup evaluator: labels to be ignored={}\n'.format(ignored_labels))
 
         else:
-            self.args.ignored_labels = set()
+            ignored_labels = set()
 
         # TODO reflect ignored_labels
-        evaluator = None
+        evaluator1 = None
         if self.task == constants.TASK_SEG:
-            evaluator = evaluators.FMeasureEvaluator(self.dic.tables[constants.SEG_LABEL].id2str)
+            if self.args.evaluation_method == 'normal':
+                evaluator1 = FMeasureEvaluator(self.dic.tables[constants.SEG_LABEL].id2str)
+            elif self.args.evaluation_method == 'each_length':
+                evaluator1 = FMeasureEvaluatorForEachLength(self.dic.tables[constants.SEG_LABEL].id2str)
+            elif self.args.evaluation_method == 'each_vocab':
+                vocabs = self.gen_vocabs()
+                evaluator1 = FMeasureEvaluatorForEachVocab(self.dic.tables[constants.SEG_LABEL].id2str, vocabs)
 
         elif self.task == constants.TASK_SEGTAG:
-            evaluator = evaluators.DoubleFMeasureEvaluator(self.dic.tables[constants.SEG_LABEL].id2str)
+            evaluator1 = DoubleFMeasureEvaluator(self.dic.tables[constants.SEG_LABEL].id2str)
 
         elif self.task == constants.TASK_TAG:
             if common.use_fmeasure(self.dic.tables[constants.ATTR_LABEL(0)].str2id):
-                evaluator = evaluators.FMeasureEvaluator(self.dic.tables[constants.ATTR_LABEL(0)].id2str)
+                evaluator1 = FMeasureEvaluator(self.dic.tables[constants.ATTR_LABEL(0)].id2str)
             else:
-                evaluator = evaluators.AccuracyEvaluator(self.dic.tables[constants.ATTR_LABEL(0)].id2str)
-        self.evaluator = evaluator
-        self.evaluator.calculator.id2token = self.dic.tables[constants.UNIGRAM].id2str # tmp
+                evaluator1 = AccuracyEvaluator(self.dic.tables[constants.ATTR_LABEL(0)].id2str)
+                evaluator1.calculator.id2token = self.dic.tables[constants.UNIGRAM].id2str # tmp
 
-
-    # tmp
-    def run_train_mode2(self):
-        id2label = self.dic.tables[constants.SEG_LABEL].id2str
-        uni2label_tr = None
-        bi2label_tr = None
-
-        for i in range(2):
-            print('<train>' if i == 0 else '<devel>')
-            data = self.train if i == 0 else self.dev
-            labels = Counter()
-            uni2label = models.attribute_annotator.Key2Counter()
-            bi2label = models.attribute_annotator.Key2Counter()
-            n_tokens = 0
-
-            n_ins = len(data.inputs[0])
-            ids = [i for i in range(n_ins)]
-            inputs = self.gen_inputs(data, ids)
-            us = inputs[0]
-            bs = inputs[1]
-            ls = inputs[self.label_begin_index]
-
-            # count
-            for u, b, l in zip(us, bs, ls):
-                n_tokens += len(u)
-                for ui, bi, li in zip(u, b, l):
-                    labels[li] += 1
-                    uni2label.add(ui, li)
-                    bi2label.add(bi, li)
-
-            # calc label distribution
-            for lab, cnt in labels.items():
-                rate = cnt / n_tokens
-                print(id2label[lab], rate*100)
-
-            # calc entropy for unigram
-            u_unk = 0
-            u_ent = 0
-            for u, counter in uni2label.key2counter.items():
-                total = sum([v for v in counter.values()])
-                ent = 0
-                for key, count in counter.items():
-                    p = count / total
-                    ent += - p * np.log2(p)
-                u_ent += ent
-                if u == 0:
-                    u_unk = total
-                    print('unigram entropy (unk)', ent)
-
-            u_ent /= len(uni2label)
-            print('unigram entropy', u_ent)
-            print('unigram unk ratio', u_unk / n_tokens)
-
-            # calc entropy for bigram
-            b_unk = 0
-            b_ent = 0
-            for b, counter in bi2label.key2counter.items():
-                total = sum([v for v in counter.values()])
-                ent = 0
-                for key, count in counter.items():
-                    p = count / total
-                    ent += - p * np.log2(p)
-                b_ent += ent
-                if b == 0:
-                    b_unk = total
-                    print('bigram entropy (unk)', ent)
-
-
-            b_ent /= len(bi2label)
-            print('bigram entropy', b_ent)
-            print('bigram unk ratio', b_unk / n_tokens)
-
-            # evaluate using unigram
-            if i == 0:
-                uni2label_tr = uni2label
-                bi2label_tr = bi2label
-                continue
-
-            os = []
-            for u in us:
-                o = []
-                for ui in u:
-                    counter = uni2label_tr.get(ui)
-                    if counter:
-                        pred = counter.most_common(1)[0][0]
-                    else:
-                        pred = -1
-                    o.append(pred)
-                os.append(o)
-                
-            counts = self.evaluator.calculate(*[us], *[ls], *[os])
-            res = self.evaluator.report_results(n_ins, counts, 0.0)
-
-            # evaluate using bigram
-            os = []
-            for b in bs:
-                o = []
-                for bi in b:
-                    counter = bi2label_tr.get(bi)
-                    if counter:
-                        pred = counter.most_common(1)[0][0]
-                    else:
-                        pred = -1
-                    o.append(pred)
-                os.append(o)
-                
-            counts = self.evaluator.calculate(*[bs], *[ls], *[os])
-            res = self.evaluator.report_results(n_ins, counts, 0.0)
-
-            print()
+        if not evaluator:
+            self.evaluator = evaluator1
+        else:
+            evaluator = evaluator1

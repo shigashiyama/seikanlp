@@ -12,13 +12,6 @@ def is_single_segmentation_task(task):
         return False
 
 
-# def is_dual_segmentation_task(task):
-#     if task == constants.TASK_DUAL_SEG:
-#         return True
-#     else:
-#         return False
-
-
 def is_tagging_task(task):
     if (task == constants.TASK_TAG or task == constants.TASK_SEGTAG):
         return True

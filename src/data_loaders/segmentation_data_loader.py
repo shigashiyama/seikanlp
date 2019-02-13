@@ -5,8 +5,27 @@ import numpy as np
 
 import constants
 import dictionary
-from data import data_loader
-from data.data_loader import DataLoader, Data, RestorableData
+from data_loaders import data_loader
+from data_loaders.data_loader import DataLoader, Data, RestorableData
+
+
+class Vocabularies(object):     # use for FMeasureEvaluatorForEachVocab
+    def __init__(self, *tries):
+        self.tries = tries
+
+
+    def __len__(self):
+        return len(self.tries)
+
+
+    def get_index(self, sen, span):
+        cseq = sen[span[0]:span[1]]
+        for i, trie in enumerate(self.tries):
+            cid = trie.get_chunk_id(cseq)
+            if cid > 0:         # not UNK
+                return i
+
+        return -1
 
 
 class SegmentationDataLoader(DataLoader):
@@ -17,7 +36,6 @@ class SegmentationDataLoader(DataLoader):
                  attr_target_labelsets=[],
                  attr_delim=None,
                  use_bigram=False,
-                 use_tokentype=False,
                  use_chunk_trie=False, # for a hybrid model
                  bigram_max_vocab_size=-1,
                  bigram_freq_threshold=1,
@@ -26,10 +44,13 @@ class SegmentationDataLoader(DataLoader):
                  min_chunk_len=1,
                  max_chunk_len=4,
                  add_gold_chunk=True,
+                 add_nongold_chunk=True,
                  add_unknown_pretrained_chunk=True,
                  unigram_vocab=set(),
                  bigram_vocab=set(),
                  chunk_vocab=set(),
+                 generate_ngram_chunks=False,
+                 trie_ext=None,
     ):
         self.token_index = token_index
         self.attr_indexes = attr_indexes
@@ -37,7 +58,6 @@ class SegmentationDataLoader(DataLoader):
         self.attr_target_labelsets = attr_target_labelsets
         self.attr_delim = attr_delim
         self.use_bigram = use_bigram
-        self.use_tokentype = use_tokentype
         self.use_chunk_trie = use_chunk_trie
         self.bigram_max_vocab_size=bigram_max_vocab_size
         self.bigram_freq_threshold=bigram_freq_threshold
@@ -46,12 +66,71 @@ class SegmentationDataLoader(DataLoader):
         self.min_chunk_len = min_chunk_len
         self.max_chunk_len = max_chunk_len
         self.add_gold_chunk = add_gold_chunk
+        self.add_nongold_chunk = add_nongold_chunk
         self.add_unknown_pretrained_chunk = add_unknown_pretrained_chunk
         self.unigram_vocab=unigram_vocab
         self.bigram_vocab=bigram_vocab
         self.chunk_vocab=chunk_vocab
         self.freq_bigrams = set()
         self.freq_chunks = set()
+        self.generate_ngram_chunks = generate_ngram_chunks
+        self.trie_ext = trie_ext
+
+
+    def gen_vocabs(self, train_path, char_table, *pretrain_dics, data_format=None):
+        trie0 = self.create_trie(train_path, char_table, data_format) # gold words in train data
+        print('\nCreate word trie with size={} from {}'.format(len(trie0), train_path), file=sys.stderr)
+        tries = [trie0]
+        
+        for i in range(len(pretrain_dics)):
+            # i == 0: words in pretrain during training
+            # i == 1: words in pretrain during testing
+
+            trie = pretrain_dics[i].tries[constants.CHUNK]
+            tries.append(trie)
+            print('Load word trie with size={}'.format(len(trie)), file=sys.stderr)
+        print('', file=sys.stderr)
+
+        return Vocabularies(*tries)
+
+
+    def create_trie(self, path, unigram_table, data_format=None):
+        attr_delim = self.attr_delim if self.attr_delim else constants.SL_ATTR_DELIM
+
+        trie = dictionary.MapTrie()
+        with open(path) as f:
+            if data_format == constants.WL_FORMAT:
+                word_clm = self.token_index
+                for line in f:
+                    line = self.normalize_input_line(line)
+                    if len(line) == 0:
+                        continue
+                    elif line[0] == constants.COMMENT_SYM:
+                        continue
+     
+                    array = line.split(attr_delim)
+                    token = array[word_clm]
+                    tlen = len(token)
+                    char_ids = [unigram_table.get_id(token[i]) for i in range(tlen)]
+                    trie.get_chunk_id(char_ids, token, True)
+
+            else:
+                for line in f:
+                    line = self.normalize_input_line(line)
+                    if len(line) == 0:
+                        continue
+                    elif line[0] == constants.COMMENT_SYM:
+                        continue
+     
+                    entries = line.split(constants.SL_TOKEN_DELIM)
+                    for entry in entries:
+                        array = entry.split(attr_delim)
+                        token = array[0]
+                        tlen = len(token)
+                        char_ids = [unigram_table.get_id(token[i]) for i in range(tlen)]
+                        trie.get_chunk_id(char_ids, token, True)
+
+        return trie
 
 
     def register_chunks(self, sen, unigram_seq, get_chunk_id, label_seq=None, train=True):
@@ -62,14 +141,24 @@ class SegmentationDataLoader(DataLoader):
             cid_ngrams = [unigram_seq[span[0]:span[1]] for span in span_ngrams]
             str_ngrams = [sen[span[0]:span[1]] for span in span_ngrams]
             for span, cn, sn in zip (span_ngrams, cid_ngrams, str_ngrams):
-                is_pretrained_chunk = self.chunk_vocab and sn in self.chunk_vocab
+                is_pretrained_chunk = self.chunk_vocab and sn in self.chunk_vocab.wv.vocab
+                is_generable_chunk = (self.chunk_vocab and 
+                                      self.generate_ngram_chunks and
+                                      (not self.trie_ext or self.trie_ext.get_chunk_id(sn) > 0) and
+                                      sn in self.chunk_vocab.wv # for fasttext
+                                      # and span in spans_gold # tmp cheat
+                )
+
                 if train:
                     is_gold_chunk = self.add_gold_chunk and span in spans_gold
+                    is_pretrained_chunk = is_pretrained_chunk and self.add_nongold_chunk
                     pass_freq_filter = not self.freq_chunks or sn in self.freq_chunks
                     if pass_freq_filter and (is_gold_chunk or is_pretrained_chunk):
                         ci = get_chunk_id(cn, sn, True)
                 else:
-                    if self.add_unknown_pretrained_chunk and is_pretrained_chunk:
+                    if (self.add_unknown_pretrained_chunk and
+                        is_pretrained_chunk or is_generable_chunk
+                    ):
                         ci = get_chunk_id(cn, sn, True)
 
 
@@ -108,7 +197,6 @@ class SegmentationDataLoader(DataLoader):
     def parse_commandline_input(self, line, dic, use_attention=False, use_concat=False):
         get_unigram_id = dic.tables[constants.UNIGRAM].get_id
         get_bigram_id = dic.tables[constants.BIGRAM].get_id if self.use_bigram else None
-        get_toktype_id = dic.tables[constants.TOKEN_TYPE].get_id if self.use_tokentype else None
         get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id if self.use_chunk_trie else None
 
         org_token_seq = [char for char in line]
@@ -127,11 +215,7 @@ class SegmentationDataLoader(DataLoader):
         if self.use_chunk_trie:
             self.register_chunks(line, uni_seq, get_chunk_id, train=False)
 
-        type_seqs = []
-        if self.use_tokentype:
-            type_seq = [[get_toktype_id(get_char_type(char)) for char in line]]
-
-        inputs = [uni_seqs, bi_seqs, type_seqs, None] # TODO fix
+        inputs = [uni_seqs, bi_seqs, None]
         outputs = []
         orgdata = [org_token_seqs]
 
@@ -141,32 +225,29 @@ class SegmentationDataLoader(DataLoader):
     def load_gold_data_WL(self, path, dic=None, train=True):
         attr_delim = self.attr_delim if self.attr_delim else constants.WL_ATTR_DELIM
         num_attrs = len(self.attr_indexes)
+        word_clm = self.token_index
 
         if not dic:
             dic = init_dictionary(
                 use_bigram=self.use_bigram,
-                use_tokentype=self.use_tokentype,
                 num_attrs=num_attrs,
                 use_chunk_trie=self.use_chunk_trie)
 
         get_unigram_id = dic.tables[constants.UNIGRAM].get_id
         get_bigram_id = dic.tables[constants.BIGRAM].get_id if self.use_bigram else None
-        get_toktype_id = dic.tables[constants.TOKEN_TYPE].get_id if self.use_tokentype else None
         get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id if self.use_chunk_trie else None
         get_seg_id = dic.tables[constants.SEG_LABEL].get_id
         
         token_seqs = []
         bigram_seqs = []
-        toktype_seqs = []
         seg_seqs = []               # list of segmentation label sequences
         attr_seqs_list = [[] for i in range(num_attrs)]
 
         ins_cnt = 0
-        word_clm = self.token_index
+
         with open(path) as f:
             uni_seq = []
             bi_seq = []
-            type_seq = []
             seg_seq = []
             sen = ''
 
@@ -191,9 +272,6 @@ class SegmentationDataLoader(DataLoader):
                         if bi_seq:
                             bigram_seqs.append(bi_seq)
                             bi_seq = []
-                        if type_seq:
-                            toktype_seqs.append(type_seq)
-                            type_seq = []
                         if seg_seq:
                             seg_seqs.append(seg_seq)
                             seg_seq = []
@@ -227,9 +305,6 @@ class SegmentationDataLoader(DataLoader):
                 seg_seq.extend(
                     [get_seg_id(
                         data_loader.get_label_BIES(i, tlen-1, cate=attr), update=train) for i in range(tlen)])
-                if self.use_tokentype:
-                    type_seq.extend(
-                        [get_toktype_id(get_char_type(token[i]), update_tokens[i]) for i in range(tlen)])
                         
             # register last sentenece
             if uni_seq:
@@ -246,15 +321,12 @@ class SegmentationDataLoader(DataLoader):
                 token_seqs.append(uni_seq)
                 if bi_seq:
                     bigram_seqs.append(bi_seq)
-                if type_seq:
-                   toktype_seqs.append(type_seq)
                 if seg_seq:
                     seg_seqs.append(seg_seq)
      
         inputs = [token_seqs]
         inputs.append(bigram_seqs if bigram_seqs else None)
-        inputs.append(toktype_seqs if toktype_seqs else None)
-        inputs.append(None) # TODO fix
+        inputs.append(None)
         outputs = [seg_seqs]
      
         return Data(inputs, outputs), dic
@@ -269,23 +341,21 @@ class SegmentationDataLoader(DataLoader):
     def load_gold_data_SL(self, path, dic=None, train=True):
         attr_delim = self.attr_delim if self.attr_delim else constants.SL_ATTR_DELIM
         num_attrs = len(self.attr_indexes)
+        word_clm = self.token_index
 
         if not dic:
             dic = init_dictionary(
                 use_bigram=self.use_bigram,
-                use_tokentype=self.use_tokentype,
                 num_attrs=num_attrs,
                 use_chunk_trie=self.use_chunk_trie)
 
         get_unigram_id = dic.tables[constants.UNIGRAM].get_id
         get_bigram_id = dic.tables[constants.BIGRAM].get_id if self.use_bigram else None
-        get_toktype_id = dic.tables[constants.TOKEN_TYPE].get_id if self.use_tokentype else None
         get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id if self.use_chunk_trie else None
         get_seg_id = dic.tables[constants.SEG_LABEL].get_id
 
         token_seqs = []
         bigram_seqs = []
-        toktype_seqs = []
         seg_seqs = []           # list of segmentation label sequences
 
         ins_cnt = 0
@@ -301,14 +371,13 @@ class SegmentationDataLoader(DataLoader):
                 entries = line.split(constants.SL_TOKEN_DELIM)
                 uni_seq = []
                 bi_seq = []
-                type_seq = []
                 seg_seq = []
                 raw_sen = ''
 
                 for entry in entries:
                     array = entry.split(attr_delim)
                     attr = ''
-                    token = array[0]
+                    token = array[word_clm]
                     tlen = len(token)
                     raw_sen += token
      
@@ -324,10 +393,6 @@ class SegmentationDataLoader(DataLoader):
                     seg_seq.extend([get_seg_id(data_loader.get_label_BIES(
                         i, tlen-1, cate=attr), update=train) for i in range(tlen)])
      
-                    if self.use_tokentype:
-                        type_seq.extend(
-                            [get_toktype_id(get_char_type(ptoken[i]), update=train) for i in range(tlen)])
-
                 if self.use_bigram:
                     str_bigrams = data_loader.create_all_char_ngrams(raw_sen, 2)
                     str_bigrams.append('{}{}'.format(raw_sen[-1], constants.EOS))
@@ -342,8 +407,6 @@ class SegmentationDataLoader(DataLoader):
                 token_seqs.append(uni_seq)
                 if bi_seq:
                     bigram_seqs.append(bi_seq)
-                if type_seq:
-                    toktype_seqs.append(type_seq)
                 seg_seqs.append(seg_seq)
      
                 ins_cnt += 1
@@ -352,8 +415,7 @@ class SegmentationDataLoader(DataLoader):
      
         inputs = [token_seqs]
         inputs.append(bigram_seqs if bigram_seqs else None)
-        inputs.append(toktype_seqs if toktype_seqs else None)
-        inputs.append(None) # TODO fix
+        inputs.append(None)
         outputs = [seg_seqs]
      
         return Data(inputs, outputs), dic
@@ -364,7 +426,6 @@ class SegmentationDataLoader(DataLoader):
 
         get_unigram_id = dic.tables[constants.UNIGRAM].get_id
         get_bigram_id = dic.tables[constants.BIGRAM].get_id if self.use_bigram else None
-        get_toktype_id = dic.tables[constants.TOKEN_TYPE].get_id if self.use_tokentype else None
         get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id if self.use_chunk_trie else None
         get_seg_id = dic.tables[constants.SEG_LABEL].get_id
         get_ith_attr_id = []
@@ -374,7 +435,6 @@ class SegmentationDataLoader(DataLoader):
         org_token_seqs = []
         token_seqs = []
         bigram_seqs = []
-        toktype_seqs = []
 
         ins_cnt = 0
         with open(path) as f:
@@ -388,9 +448,6 @@ class SegmentationDataLoader(DataLoader):
 
                 org_token_seqs.append([char for char in line])
                 uni_seq = [get_unigram_id(char) for char in line]
-
-                if self.use_tokentype:
-                    toktype_seqs.append([get_toktype_id(get_char_type(char)) for char in line])
 
                 if self.use_bigram:
                     str_bigrams = data_loader.create_all_char_ngrams(line, 2)
@@ -407,17 +464,13 @@ class SegmentationDataLoader(DataLoader):
                 token_seqs.append(uni_seq)
                 if self.use_bigram:
                     bigram_seqs.append(bi_seq)
-                if self.use_tokentype:
-                    toktype_seqs.append(type_seq)
-     
                 ins_cnt += 1
                 if ins_cnt % constants.NUM_FOR_REPORTING == 0:
                     print('Read', ins_cnt, 'sentences', file=sys.stderr)
      
         inputs = [token_seqs]
         inputs.append(bigram_seqs if bigram_seqs else None)
-        inputs.append(toktype_seqs if toktype_seqs else None)
-        inputs.append(None) # TODO fix
+        inputs.append(None)
         outputs = []
         orgdata = [org_token_seqs]
      
@@ -461,14 +514,15 @@ def get_segmentation_spans(label_seq):
     return spans
 
 
-def load_external_dictionary(path, num_attrs=0):
-    if path.endswith('pickle'):
-        with open(path, 'rb') as f:
-            dic = pickle.load(f)
-            dic.create_id2strs()
-        return dic
+def load_external_dictionary(path, dic=None, num_attrs=0):
+    # if path.endswith('pickle'):
+    #     with open(path, 'rb') as f:
+    #         dic = pickle.load(f)
+    #         dic.create_id2strs()
+    #     return dic
 
-    dic = init_dictionary(num_attrs=num_attrs, use_chunk_trie=True)
+    if not dic:
+        dic = init_dictionary(num_attrs=num_attrs, use_chunk_trie=True)
 
     get_unigram_id = dic.tables[constants.UNIGRAM].get_id
     get_chunk_id = dic.tries[constants.CHUNK].get_chunk_id
@@ -494,7 +548,6 @@ def load_external_dictionary(path, num_attrs=0):
 
 def init_dictionary(
         use_bigram=False, 
-        use_tokentype=False, 
         num_attrs=0, 
         use_chunk_trie=False): 
 
@@ -515,19 +568,9 @@ def init_dictionary(
         dic.create_table(constants.BIGRAM)
         dic.tables[constants.BIGRAM].set_unk(constants.UNK_SYMBOL)
 
-    # token type
-    if use_tokentype:
-        dic.create_table(constants.TOKEN_TYPE)
-        dic.tables[constants.TOKEN_TYPE].set_unk(constants.UNK_SYMBOL)
-
-    # attributes
-    # for i in range(num_attrs):
-    #     dic.create_table(constants.ATTR_LABEL(i))
-        # dic.tables[constants.ATTR_LABEL(i)].set_unk(constants.UNK_SYMBOL)
-
     # chunk
     if use_chunk_trie:
-        dic.create_trie(constants.CHUNK)
+        dic.init_trie(constants.CHUNK)
 
     return dic
 

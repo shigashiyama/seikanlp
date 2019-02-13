@@ -95,7 +95,7 @@ class ArgumentLoader(object):
                             + 'when output analysis results on decode/interactive mode (Default \'/\')')
 
         ### options for data pre/post-processing
-        parser.add_argument('--token_column_index', type=int, dest='token_index', default=1, help='')
+        parser.add_argument('--token_column_index', type=int, dest='token_index', default=0, help='')
         parser.add_argument('--lowercase_alphabets',  dest='lowercasing', action='store_true', help=
                             'Lowercase alphabets in input text')
         parser.add_argument('--normalize_digits',  action='store_true', help=
@@ -115,8 +115,6 @@ class ArgumentLoader(object):
                             + 'if set positive value (Default: -1)')
 
         ### neural models
-        parser.add_argument('--fix_pretrained_embed', action='store_true', help=
-                            'Fix paramerters of pretrained token unigram embedding duaring training')
         parser.add_argument('--pretrained_embed_usage', default='none', help='')
 
         return parser
@@ -181,7 +179,6 @@ class ArgumentLoader(object):
         # model parameters
         parser.add_argument('--token_freq_threshold', type=int, default=args.token_freq_threshold)
         parser.add_argument('--token_max_vocab_size', type=int, default=args.token_max_vocab_size)
-        parser.add_argument('--fix_pretrained_embed', action='store_true')
         parser.add_argument('--pretrained_embed_usage', default=args.pretrained_embed_usage)
 
         # optimizer parameters
@@ -212,6 +209,7 @@ class ArgumentLoader(object):
         # data paths and related options
         parser.add_argument('--model_path', '-m', required=True, default=args.model_path)
         parser.add_argument('--input_data_path_prefix', '-p', dest='path_prefix', default=args.path_prefix)
+        parser.add_argument('--train_data', default=args.train_data)
         parser.add_argument('--test_data', required=True, default=args.test_data)
         self.add_input_data_format_option(parser, args)
 
@@ -244,19 +242,19 @@ class ArgumentLoader(object):
             parser.add_argument('--output_attribute_delimiter_sl', dest='output_attr_delim', 
                                 default=args.output_attr_delim)
             parser.add_argument('--output_token_delim', default=constants.SL_TOKEN_DELIM)
-            parser.add_argument('--output_empty_line', default=False)
+            # parser.add_argument('--output_empty_line', default=False)
 
         elif args.output_data_format == 'wl':
             parser.add_argument('--output_data_format', default=args.output_data_format)
             parser.add_argument('--output_attr_delim', default=constants.WL_ATTR_DELIM)
             parser.add_argument('--output_token_delim', default=constants.WL_TOKEN_DELIM)
-            parser.add_argument('--output_empty_line', default=True)
+            # parser.add_argument('--output_empty_line', default=True)
             
         elif not args.output_data_format:
             parser.add_argument('--output_data_format', default='wl')
             parser.add_argument('--output_attr_delim', default=constants.WL_ATTR_DELIM)
             parser.add_argument('--output_token_delim', default=constants.WL_TOKEN_DELIM)
-            parser.add_argument('--output_empty_line', default=True)
+            # parser.add_argument('--output_empty_line', default=True)
 
         else:
             print('Error: output data format must be specified among from {sl, wl}'

@@ -1,7 +1,7 @@
 import numpy as np
 
 global __version
-__version__ = 'v0.0.3'
+__version__ = 'v0.1.0'
 
 ### task
 
@@ -20,9 +20,9 @@ TASK_MTMD_TAG = 'mtmd_tag'
 LOG_DIR = 'log'
 MODEL_DIR = 'models/main'
 
-
 ### for data io
 
+PADDING_LABEL = -1
 NUM_FOR_REPORTING = 100000
 
 SL_COLUMN_DELIM = '\t'
@@ -40,6 +40,7 @@ ATTR_INFO_DELIM3 = '_'
 SL_FORMAT = 'sl'
 WL_FORMAT = 'wl'
 
+DEFAULT_LENGTH_LIMIT = 6
 
 ### for dictionary
 
@@ -51,10 +52,9 @@ ROOT_SYMBOL     = '<ROOT>'
 CHUNK      = 'chunk'
 UNIGRAM    = 'unigram'   
 BIGRAM     = 'bigram'
-SUBTOKEN   = 'subtoken'
-TOKEN_TYPE = 'token_type'
 SEG_LABEL  = 'seg_label' 
 ARC_LABEL  = 'arc_label'
+SEM_LABEL  = 'sem_label'
 ATTR_LABEL = 'attr{}_label'.format
 DOMAIN     = 'domain'
 
@@ -79,6 +79,7 @@ S = 'S'
 O = 'O'
 
 ### for hybrid char+word segmentation
+
 CON='CON'
 WCON='WCON'
 AVG='AVG'

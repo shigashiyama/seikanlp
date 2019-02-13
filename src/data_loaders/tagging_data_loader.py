@@ -1,18 +1,19 @@
+import sys
+
 import constants
 import dictionary
-from data import data_loader
-from data.data_loader import DataLoader, Data, RestorableData
+from data_loaders import data_loader
+from data_loaders.data_loader import DataLoader, Data, RestorableData
 
 
 class TaggingDataLoader(DataLoader):
     def __init__(self,
-                 token_index=1,
+                 token_index=0,
                  attr_indexes=[], 
                  attr_depths=[], 
                  attr_chunking_flags=[],
                  attr_target_labelsets=[],
                  attr_delim=None,
-                 use_subtoken=False, 
                  lowercasing=False, 
                  normalize_digits=True, 
                  token_max_vocab_size=-1,
@@ -25,7 +26,6 @@ class TaggingDataLoader(DataLoader):
         self.attr_chunking_flags = attr_chunking_flags
         self.attr_target_labelsets = attr_target_labelsets
         self.attr_delim = attr_delim
-        self.use_subtoken = use_subtoken
         self.lowercasing = lowercasing
         self.normalize_digits = normalize_digits
         self.token_max_vocab_size=token_max_vocab_size
@@ -62,7 +62,6 @@ class TaggingDataLoader(DataLoader):
     def parse_commandline_input(self, line, dic):
         attr_delim = self.attr_delim if self.attr_delim else constants.SL_ATTR_DELIM
         get_unigram_id = dic.tables[constants.UNIGRAM].get_id
-        get_subtoken_id = dic.tables[constants.SUBTOKEN].get_id if self.use_subtoken else None
         if constants.ATTR_LABEL(1) in dic.tables:
             use_attr1 = True
             get_attr1_id = dic.tables[constants.ATTR_LABEL(1)].get_id
@@ -91,16 +90,7 @@ class TaggingDataLoader(DataLoader):
         uni_seq = [get_unigram_id(word) for word in ptoken_seq]
         uni_seqs = [uni_seq]
 
-        subtoken_seqs = []
-        if self.use_subtoken:
-            # TODO fix a case that token contains <NUM> and does not equal to <NUM>
-            subtoken_seq = ([
-                [get_subtoken_id(word)] if token == constants.NUM
-                else [get_subtoken_id(word[i]) for i in range(len(word))]
-                for word in ptoken_seq])
-            subtoken_seqs = [subtoken_seq]
-
-        inputs = [uni_seqs, None, None, attr1_seqs] # TODO fix
+        inputs = [uni_seqs, None, attr1_seqs] # TODO fix
         outputs = []
         orgdata = [org_token_seqs, org_attr1_seqs]
         return RestorableData(inputs, outputs, orgdata=orgdata)
@@ -109,28 +99,22 @@ class TaggingDataLoader(DataLoader):
     def load_gold_data_WL(self, path, dic, train=True):
         attr_delim = self.attr_delim if self.attr_delim else constants.WL_ATTR_DELIM
         num_attrs = len(self.attr_indexes)
+        word_clm = self.token_index
 
         if not dic:
-            dic = init_dictionary(
-                use_subtoken=self.use_subtoken, 
-                num_attrs=num_attrs)
+            dic = init_dictionary(num_attrs=num_attrs)
 
         get_unigram_id = dic.tables[constants.UNIGRAM].get_id
-        get_subtoken_id = dic.tables[constants.SUBTOKEN].get_id if self.use_subtoken else None
         get_ith_attr_id = []
         for i in range(num_attrs): 
             get_ith_attr_id.append(dic.tables[constants.ATTR_LABEL(i)].get_id)
 
         token_seqs = []
-        subtoken_seqs = []
         attr_seqs_list = [[] for i in range(num_attrs)]
 
         ins_cnt = 0
-        word_clm = self.token_index
-
         with open(path) as f:
             uni_seq = [] 
-            sub_seq = [] 
             attr_seq_list = [[] for i in range(num_attrs)]
      
             for line in f:
@@ -139,9 +123,6 @@ class TaggingDataLoader(DataLoader):
                     if len(uni_seq) > 0:
                         token_seqs.append(uni_seq)
                         uni_seq = []
-                        if sub_seq:
-                            subtoken_seqs.append(sub_seq)
-                            sub_seq = []
                         for i, attr_seq in enumerate(attr_seq_list):
                             if self.attr_chunking_flags[i]:
                                 attr_seq = [get_ith_attr_id[i](attr, update=train) for attr in 
@@ -164,18 +145,12 @@ class TaggingDataLoader(DataLoader):
                 attrs = [None] * max(num_attrs, 1)
      
                 for i in range(num_attrs):
+                    attr = array[self.attr_indexes[i]] if len(array) > self.attr_indexes[i] else ''
                     attrs[i] = self.preprocess_attribute(
-                        array[self.attr_indexes[i]], self.attr_depths[i], self.attr_target_labelsets[i])
+                        attr, self.attr_depths[i], self.attr_target_labelsets[i])
 
                     update_token = self.to_be_registered(token, train, self.freq_tokens, self.unigram_vocab)
                     uni_seq.append(get_unigram_id(token, update=update_token))
- 
-                    if self.use_subtoken:
-                        # TODO fix a case that token contains <NUM> and does not equal to <NUM>
-                        if token == constants.NUM:
-                            sub_seq.append([get_subtoken_id(token, update_token)])
-                        else:
-                            sub_seq.append([get_subtoken_id(token[i], update_token) for i in range(tlen)])
  
                     for i in range(num_attrs):
                         attr = attrs[i]
@@ -185,8 +160,6 @@ class TaggingDataLoader(DataLoader):
             # register last sentenece
             if len(uni_seq) > 0:
                 token_seqs.append(uni_seq)
-                if sub_seq:
-                    subtoken_seqs.append(sub_seq)
                 for i, attr_seq in enumerate(attr_seq_list):
                     if self.attr_chunking_flags[i]:
                         attr_seq = [get_ith_attr_id[i](attr, update=train) for attr in 
@@ -194,10 +167,7 @@ class TaggingDataLoader(DataLoader):
                     attr_seqs_list[i].append(attr_seq)
 
         inputs = [token_seqs]
-        # TODO fix
         inputs.append(None) # bigram
-        inputs.append(None) # toktype
-        # inputs.append(subtoken_seqs if subtoken_seqs else None)
         inputs.append(attr_seqs_list[1] if len(attr_seqs_list) > 1 else None)
      
         outputs = []
@@ -215,20 +185,17 @@ class TaggingDataLoader(DataLoader):
     def load_gold_data_SL(self, path, dic, train=True):
         attr_delim = self.attr_delim if self.attr_delim else constants.SL_ATTR_DELIM
         num_attrs = len(self.attr_indexes)
+        word_clm = self.token_index
 
         if not dic:
-            dic = init_dictionary(
-                use_subtoken=self.use_subtoken, 
-                num_attrs=num_attrs)
+            dic = init_dictionary(num_attrs=num_attrs)
 
         get_unigram_id = dic.tables[constants.UNIGRAM].get_id
-        get_subtoken_id = dic.tables[constants.SUBTOKEN].get_id if self.use_subtoken else None
         get_ith_attr_id = []
         for i in range(num_attrs): 
             get_ith_attr_id.append(dic.tables[constants.ATTR_LABEL(i)].get_id)
 
         token_seqs = []
-        subtoken_seqs = []
         attr_seqs_list = [[] for i in range(num_attrs)]
 
         ins_cnt = 0
@@ -243,12 +210,11 @@ class TaggingDataLoader(DataLoader):
                 
                 entries = line.split(constants.SL_TOKEN_DELIM)
                 uni_seq = []
-                sub_seq = []
                 attr_seq_list = [[] for i in range(num_attrs)]
      
                 for entry in entries:
                     array = entry.split(attr_delim)
-                    token = self.preprocess_token(array[0])
+                    token = self.preprocess_token(array[word_clm])
                     tlen = len(token)
                     attrs = [None] * max(num_attrs, 1)
      
@@ -259,21 +225,12 @@ class TaggingDataLoader(DataLoader):
                     update_token = self.to_be_registered(token, train, self.freq_tokens, self.unigram_vocab)
                     uni_seq.append(get_unigram_id(token, update=update_token))
  
-                    if self.use_subtoken:
-                        # TODO fix a case that token contains <NUM> and does not equal to <NUM>
-                        if token == constants.NUM:
-                            sub_seq.append([get_subtoken_id(token, update_token)])
-                        else:
-                            sub_seq.append([get_subtoken_id(token[i], update_token) for i in range(tlen)])
- 
                     for i in range(num_attrs):
                         attr = attrs[i]
                         attr_tmp = attr if self.attr_chunking_flags[i] else get_ith_attr_id[i](attr, update=train)
                         attr_seq_list[i].append(attr_tmp)
      
                 token_seqs.append(uni_seq)
-                if sub_seq:
-                    subtoken_seqs.append(sub_seq)
                 for i, attr_seq in enumerate(attr_seq_list):
                     if self.attr_chunking_flags[i]:
                         attr_seq = [get_ith_attr_id[i](attr, update=train) for attr in 
@@ -285,10 +242,7 @@ class TaggingDataLoader(DataLoader):
                     print('Read', ins_cnt, 'sentences', file=sys.stderr)
      
         inputs = [token_seqs]
-        # TODO fix
         inputs.append(None) # bigram
-        inputs.append(None) # toktype
-        # inputs.append(subtoken_seqs if subtoken_seqs else None)
         inputs.append(attr_seqs_list[1] if len(attr_seqs_list) > 1 else None)
      
         outputs = []
@@ -306,7 +260,6 @@ class TaggingDataLoader(DataLoader):
     def load_decode_data_SL(self, path, dic):
         attr_delim = self.attr_delim if self.attr_delim else constants.SL_ATTR_DELIM
         get_unigram_id = dic.tables[constants.UNIGRAM].get_id
-        get_subtoken_id = dic.tables[constants.SUBTOKEN].get_id if self.use_subtoken else None
         if constants.ATTR_LABEL(1) in dic.tables:
             use_attr1 = True
             get_attr1_id = dic.tables[constants.ATTR_LABEL(1)].get_id
@@ -318,7 +271,6 @@ class TaggingDataLoader(DataLoader):
         org_attr1_seqs = []
         token_seqs = []
         attr1_seqs = []
-        subtoken_seqs = []
 
         ins_cnt = 0
         with open(path) as f:
@@ -348,123 +300,25 @@ class TaggingDataLoader(DataLoader):
                 token_seq = [get_unigram_id(ptoken, update=ptoken in self.unigram_vocab) for ptoken in ptoken_seq]
                 token_seqs.append(token_seq)
                     
-                if self.use_subtoken:
-                    sub_seq = []
-                    # TODO fix a case that token contains <NUM> and does not equal to <NUM>
-                    if token == constants.NUM:
-                        sub_seq.append([get_subtoken_id(token)])
-                    else:
-                        sub_seq.append([get_subtoken_id(token[i]) for i in range(tlen)])
-                    subtoken_seqs.append(sub_seq)
- 
                 ins_cnt += 1
                 if ins_cnt % constants.NUM_FOR_REPORTING == 0:
                     print('Read', ins_cnt, 'sentences', file=sys.stderr)
                     
         inputs = [token_seqs]
-        # TODO fix
         inputs.append(None) # bigram
-        inputs.append(None) # toktype
         inputs.append(attr1_seqs if attr1_seqs else None)
-        # inputs.append(subtoken_seqs if self.use_subtoken else None)
         outputs = []
         orgdata = [org_token_seqs, org_attr1_seqs]
 
         return RestorableData(inputs, outputs, orgdata=orgdata)
 
 
-    # def decode_data_generator_SL(self, path, dic, batch_size=100):
-    #     attr_delim = self.attr_delim if self.attr_delim else constants.SL_ATTR_DELIM
-    #     get_unigram_id = dic.tables[constants.UNIGRAM].get_id
-    #     get_subtoken_id = dic.tables[constants.SUBTOKEN].get_id if self.use_subtoken else None
-    #     if constants.ATTR_LABEL(1) in dic.tables:
-    #         use_attr1 = True
-    #         get_attr1_id = dic.tables[constants.ATTR_LABEL(1)].get_id
-    #     else:
-    #         use_attr1 = False
-    #         get_attr1_id = None
-
-    #     org_token_seqs = []
-    #     org_attr1_seqs = []
-    #     token_seqs = []
-    #     attr1_seqs = [] if use_attr1 else None
-    #     subtoken_seqs = []
-
-    #     ins_cnt = 0
-    #     with open(path) as f:
-    #         for line in f:
-    #             line = self.normalize_input_line(line)
-    #             if len(line) <= 1:
-    #                 continue
-     
-    #             elif line[0] == constants.COMMENT_SYM:
-    #                 continue
-                
-    #             org_arr = line.split(constants.SL_TOKEN_DELIM)
-    #             if use_attr1:
-    #                 org_attr1_seq = [
-    #                     self.preprocess_attribute(
-    #                         elem.split(attr_delim)[1],
-    #                         self.attr_depths[0], 
-    #                         self.attr_target_labelsets[0])
-    #                     for elem in org_arr]
-    #                 org_attr1_seqs.append(org_attr1_seq)
-    #                 attr1_seq = [get_attr1_id(attr) for attr in org_attr1_seq]
-    #                 attr1_seqs.append(attr1_seq)
-
-    #             org_token_seq = [elem.split(attr_delim)[0] for elem in org_arr]
-    #             org_token_seqs.append(org_token_seq)
-    #             ptoken_seq = [self.preprocess_token(token) for token in org_token_seq]
-    #             token_seq = [get_unigram_id(ptoken, update=ptoken in self.unigram_vocab) for ptoken in ptoken_seq]
-    #             token_seqs.append(token_seq)
-                    
-    #             if self.use_subtoken:
-    #                 sub_seq = []
-    #                 # TODO fix a case that token contains <NUM> and does not equal to <NUM>
-    #                 if token == constants.NUM:
-    #                     sub_seq.append([get_subtoken_id(token)])
-    #                 else:
-    #                     sub_seq.append([get_subtoken_id(token[i]) for i in range(tlen)])
-    #                 subtoken_seqs.append(sub_seq)
- 
-    #             ins_cnt += 1
-    #             if ins_cnt % constants.NUM_FOR_REPORTING == 0:
-    #                 print('Read', ins_cnt, 'sentences', file=sys.stderr)
-
-    #             if ins_cnt % batch_size == 0:
-    #                 yield RestorableData(
-    #                     [token_seqs, None, None, attr1_seqs],
-    #                     [],
-    #                     orgdata=[org_token_seqs, org_attr1_seqs])
-
-    #                 org_token_seqs = []
-    #                 org_attr1_seqs = []
-    #                 token_seqs = []
-    #                 attr1_seqs = []
-    #                 subtoken_seqs = []
-                    
-    #     yield RestorableData(
-    #         [token_seqs, None, None, attr1_seqs],
-    #         [],
-    #         orgdata=[org_token_seqs, org_attr1_seqs])
-
-    #     raise StopIteration
-
-
-def init_dictionary(
-        use_subtoken=False,
-        num_attrs=0): 
-
+def init_dictionary(num_attrs=0): 
     dic = dictionary.Dictionary()
 
     # unigram
     dic.create_table(constants.UNIGRAM)
     dic.tables[constants.UNIGRAM].set_unk(constants.UNK_SYMBOL)
-
-    # subtoken
-    if use_subtoken:
-        dic.create_table(constants.SUBTOKEN)
-        dic.tables[constants.SUBTOKEN].set_unk(constants.UNK_SYMBOL)
 
     # attributes
     for i in range(num_attrs):

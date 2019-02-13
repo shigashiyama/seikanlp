@@ -44,6 +44,7 @@ class DictionaryFeatureExtractor(FeatureExtractor):
                 constants.B: 9,
                 constants.E: 12
             }
+            print('Load default feature template', file=sys.stderr)
 
         else:
             print('Load feature template from: {}\n'.format(template), file=sys.stderr)

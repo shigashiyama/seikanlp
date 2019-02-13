@@ -144,10 +144,7 @@ class ParserArgumentLoader(ArgumentLoader):
 
         else:
             if args.execute_mode == 'train' or args.execute_mode == 'eval':                
-                print('Error: input data format for task={}/mode={}' .format(args.task, args.execute_mode)
-                      + ' must be specified as \'wl\'.'
-                      + ' Input: {}'.format(args.input_data_format), file=sys.stderr)
-                sys.exit()
+                parser.add_argument('--input_data_format', '-f', default='wl')
 
             else:
                 print('Error: input data format for task={}/mode={}' .format(args.task, args.execute_mode)

@@ -41,6 +41,19 @@ class FCounts(object):
                                          str(self.found_guessed),
                                          str(self.token_counter))
     
+
+    def merge(self, counts):
+        if not isinstance(counts, FCounts):
+            print('Invalid count object', file=sys.stderr)
+            return
+        
+        self.correct_chunk += counts.correct_chunk
+        self.correct_tags  += counts.correct_tags
+        self.found_correct += counts.found_correct
+        self.found_guessed += counts.found_guessed
+        self.token_counter += counts.token_counter
+
+
 def parse_args(argv):
     import argparse
     parser = argparse.ArgumentParser(

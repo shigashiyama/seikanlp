@@ -42,21 +42,12 @@ class DataLoader(object):
 
     def normalize_input_line(self, line):
         line = re.sub(' +', ' ', line).strip(' \t\n')
-        # line = re.sub(' +', ' ', line).strip(' \n')
-
-        ## to be removed
-        # line = re.sub(' +', ' ', line).strip('\n')
-        # tmp = line.strip('\t')
-        # if not tmp:
-        #     line = tmp
         return line
         
 
     def preprocess_token(self, token):
         if self.lowercasing:
             token = token.lower()
-        # if (self.normalize_digits and 
-        #     (not token_vocab or not token in token_vocab)):
         if self.normalize_digits:
             token = re.sub(r'[0-9]+', constants.NUM_SYMBOL, token)
         return token
@@ -187,9 +178,7 @@ class DataLoader(object):
      
         if max_vocab_size > 0:
             counter2 = Counter(counter)
-            for pair in counter2.most_common(max_vocab_size):
-                del counter[pair[0]]
-            
+            counter = {k:v for k,v in counter2.most_common(max_vocab_size)}
             print('keep {} bigrams from {} bigrams (max vocab size={})'.format(
                 len(counter), len(counter2), max_vocab_size), file=sys.stderr)
      
@@ -204,7 +193,7 @@ class DataLoader(object):
         return freq_bigrams
      
      
-    def get_frequent_ngrams_SL(self, path, freq_threshold, max_vocab_size=-1, min_word_lenght=1, max_word_length=4):
+    def get_frequent_ngrams_SL(self, path, freq_threshold, max_vocab_size=-1, min_word_length=1, max_word_length=4):
         attr_delim = constants.WL_ATTR_DELIM
         counter = {}
         ins_cnt = 0
@@ -239,8 +228,7 @@ class DataLoader(object):
      
         if max_vocab_size > 0:
             counter2 = Counter(counter)
-            for pair in counter2.most_common(max_vocab_size):
-                del counter[pair[0]]
+            counter = {k:v for k,v in counter2.most_common(max_vocab_size)}
             
             print('keep {} ngrams from {} ngrams (max vocab size={})'.format(
                 len(counter), len(counter2), max_vocab_size), file=sys.stderr)
@@ -256,7 +244,7 @@ class DataLoader(object):
         return freq_ngrams
      
      
-    def get_frequent_ngrams_WL(self, path, freq_threshold, max_vocab_size=-1, min_word_lenght=1, max_word_length=4):
+    def get_frequent_ngrams_WL(self, path, freq_threshold, max_vocab_size=-1, min_word_length=1, max_word_length=4):
         attr_delim = constants.WL_ATTR_DELIM
         counter = {}
         word_clm = self.token_index
@@ -300,8 +288,7 @@ class DataLoader(object):
      
         if max_vocab_size > 0:
             counter2 = Counter(counter)
-            for pair in counter2.most_common(max_vocab_size):
-                del counter[pair[0]]
+            counter = {k:v for k,v in counter2.most_common(max_vocab_size)}
             
             print('keep {} ngrams from {} ngrams (max vocab size={})'.format(
                 len(counter), len(counter2), max_vocab_size), file=sys.stderr)
@@ -348,8 +335,7 @@ class DataLoader(object):
      
         if max_vocab_size > 0:
             counter2 = Counter(counter)
-            for pair in counter2.most_common(max_vocab_size):
-                del counter[pair[0]]
+            counter = {k:v for k,v in counter2.most_common(max_vocab_size)}
             
             print('keep {} tokens from {} tokens (max vocab size={})'.format(
                 len(counter), len(counter2), max_vocab_size), file=sys.stderr)
@@ -456,7 +442,7 @@ def create_all_char_ngram_indexes(chars, n):
 
 def get_label_BI(index, cate=None):
     prefix = 'B' if index == 0 else 'I'
-    suffix = '' if not cate is None else '-' + cate
+    suffix = '' if cate is None else '-' + cate
     return prefix + suffix
 
 
