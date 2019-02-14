@@ -243,7 +243,6 @@ class TaggerTrainer(TaggerTrainerBase):
     def init_model(self):
        super().init_model()
        if self.unigram_embed_model or self.bigram_embed_model:
-           finetuning = not self.hparams['fix_pretrained_embed']
            self.classifier.load_pretrained_embedding_layer(
                self.dic, self.unigram_embed_model, self.bigram_embed_model, finetuning=True)
 

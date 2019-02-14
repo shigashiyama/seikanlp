@@ -174,9 +174,9 @@ class TaggerArgumentLoader(ArgumentLoader):
                             default=args.batch_feature_extraction)
         parser.add_argument('--mlp_dropout', type=float, default=args.mlp_dropout)
         parser.add_argument('--tagging_unit', default=args.tagging_unit)
-        if args.external_dic_path and not args.feature_template:
-            print('Warning: loaded external dictionary is not used '
-                  + 'unless feature_template is specified.', file=sys.stderr)
+        # if args.external_dic_path and not args.feature_template:
+        #     print('Warning: loaded external dictionary is not used '
+        #           + 'unless feature_template is specified.', file=sys.stderr)
 
         # specific options for hybrid unit segmentation/tagging
         if args.tagging_unit == 'hybrid':
