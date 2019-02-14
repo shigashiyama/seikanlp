@@ -32,9 +32,6 @@ Clone/download the git repository of this software.
 |  +-- embed         ... directory to export/place embedding model files
 |  +-- ftemp         ... directory to place feature template files
 +-- src              ... source code directory
-+-- sample_seg.sh    ... sample script for seg task
-+-- sample_tdep.sh   ... sample script for tdep task
-+-- sample_sematt.sh ... sample script for sematt task
 ~~~~
 
 
@@ -85,12 +82,11 @@ Clone/download the git repository of this software.
       $ python src/seika_attribute_annotator.py [--options]
 
 Descriptions of options are shown by executing src/seikanlp.py with --help/-h option.
-See also sample_*.sh to confirm typical usages.
 
 
 ### Training word embedding model
 
-This toolkit includes a sample program to train word embedding model using gensim Word2Vec API.
+This toolkit includes a script to train word embedding model using gensim Word2Vec API.
 
     $ python src/train_embedding_model.py [--options]
 
@@ -106,9 +102,10 @@ See README_io.md
   - Release
 
 
-## Citation
+## License
 
-TBA
+Copyright (c) 2019 Shohei Higashiyama
+Released under the MIT license https://opensource.org/licenses/mit-license.php
 
 
 ## Contact
@@ -116,3 +113,8 @@ TBA
 Shohei Higashiyama
 National Institute of Information and Communications Technology (NICT), Kyoto, Japan
 shohei.higashiyama [at] nict.go.jp
+
+
+## Citation
+
+TBA
