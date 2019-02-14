@@ -98,7 +98,7 @@ class ParserTrainer(Trainer):
             'pretrained_unigram_embed_dim' : pretrained_unigram_embed_dim,
             'pretrained_embed_usage' : self.args.pretrained_embed_usage,
             'unigram_embed_dim' : self.args.unigram_embed_dim,
-            'attr0_embed_dim' : self.args.attr0_embed_dim,
+            'attr1_embed_dim' : self.args.attr1_embed_dim,
             'rnn_unit_type' : self.args.rnn_unit_type,
             'rnn_bidirection' : self.args.rnn_bidirection,
             'rnn_n_layers' : self.args.rnn_n_layers,
@@ -143,7 +143,7 @@ class ParserTrainer(Trainer):
                 if (key == 'pretrained_unigram_embed_dim' or
                     key == 'unigram_embed_dim' or
                     key == 'pretrained_unigram_embed_dim' or
-                    key == 'attr0_embed_dim' or
+                    key == 'attr1_embed_dim' or
                     key == 'rnn_n_layers' or
                     key == 'rnn_n_units' or
                     key == 'mlp4arcrep_n_layers' or
@@ -228,10 +228,10 @@ class ParserTrainer(Trainer):
         else:
             pretrained_embed_usage = models.util.ModelUsage.NONE
 
-        n_attr0 = len(dic.tables[constants.ATTR_LABEL(0)]) if (
-            hparams['attr0_embed_dim'] > 0 and constants.ATTR_LABEL(0) in dic.tables) else 0
+        n_attr1 = len(dic.tables[constants.ATTR_LABEL(0)]) if (
+            hparams['attr1_embed_dim'] > 0 and constants.ATTR_LABEL(0) in dic.tables) else 0
         n_labels = len(dic.tables[constants.ARC_LABEL]) if common.is_typed_parsing_task(self.task) else 0
-        attr0_embed_dim = hparams['attr0_embed_dim'] if n_attr0 > 0 else 0
+        attr1_embed_dim = hparams['attr1_embed_dim'] if n_attr1 > 0 else 0
 
         if (pretrained_embed_usage == models.util.ModelUsage.ADD or
             pretrained_embed_usage == models.util.ModelUsage.INIT):
@@ -243,7 +243,7 @@ class ParserTrainer(Trainer):
                 sys.exit()
 
         predictor = models.parser.RNNBiaffineParser(
-            n_vocab, unigram_embed_dim, n_attr0, attr0_embed_dim,
+            n_vocab, unigram_embed_dim, n_attr1, attr1_embed_dim,
             hparams['rnn_unit_type'], hparams['rnn_bidirection'], hparams['rnn_n_layers'], 
             hparams['rnn_n_units'], 
             hparams['mlp4arcrep_n_layers'], hparams['mlp4arcrep_n_units'],

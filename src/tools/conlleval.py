@@ -1,4 +1,9 @@
-#!/usr/bin/env python
+# This file is the modified version of the following software.
+#
+# - conlleval.py <https://github.com/spyysalo/conlleval.py>
+#     - Copyright (c) 2016, Sampo Pyysalo
+#     - Released under the MIT license https://opensource.org/licenses/mit-license.php
+
 
 # Python version of the evaluation script from CoNLL'00-
 

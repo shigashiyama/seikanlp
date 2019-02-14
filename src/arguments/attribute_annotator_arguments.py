@@ -8,7 +8,8 @@ class AttributeAnnotatorArgumentLoader(ArgumentLoader):
         parser = super().get_full_parser()
 
         ### options for data pre/post-processing
-        parser.add_argument('--label_column_index', type=int, dest='label_index', default=2)
+        parser.add_argument('--label_column_index', type=int, dest='label_index', default=2, help=
+                            'Index of label column in input data (Default: 2)')
         parser.add_argument('--attribute_column_indexes', dest='attr_indexes', default='', help='')
         parser.add_argument('--attribute_depths', dest='attr_depths', default='', help=
                             'Set positive integer (use attribute up to i-th hierarcy), or '

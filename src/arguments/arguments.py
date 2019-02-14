@@ -1,4 +1,5 @@
 import argparse
+import sys
 
 import constants
 
@@ -33,7 +34,7 @@ class ArgumentLoader(object):
         ### training parameters
         parser.add_argument('--epoch_begin', type=int, default=1, help=
                             'Conduct training from i-th epoch (Default: 1)')
-        parser.add_argument('--epoch_end', '-e', type=int, default=5, help=
+        parser.add_argument('--epoch_end', '-e', type=int, default=10, help=
                             'Conduct training up to i-th epoch (Default: 5)')
         parser.add_argument('--break_point', type=int, default=10000, help=
                             'The number of instances which'
@@ -57,8 +58,8 @@ class ArgumentLoader(object):
                             + ' where start indicates the number of epochs to start decay,'
                             + ' width indicates the number epochs maintaining the same decayed learning rate,'
                             + ' and rate indicates the decay late to multipy privious learning late')
-        parser.add_argument('--sgd_cyclical_lr', default='', help='\'stepsize:min_lr:max_lr\'')
-
+        parser.add_argument('--sgd_cyclical_lr', default='', help='Use cyclical learning rate in SGD '
+                            + 'in form of \'stepsize:min_lr:max_lr\'')
         parser.add_argument('--sgd_momentum_ratio', dest='momentum', type=float, default=0.0, help=
                             'Momentum ratio for SGD (Default: 0.0)')
         parser.add_argument('--adam_alpha', type=float, default=0.001, help='alpha for Adam (Default: 0.001)')
@@ -70,7 +71,7 @@ class ArgumentLoader(object):
 
         ### data paths and related options
         parser.add_argument('--model_path', '-m', default='', help=
-                            'npz/pkl file path of the trained model. \'xxx.hyp\' and \'xxx.s2i\' files'
+                            'npz/pkl file path of the trained model. \'xxx.hyp\' and \'xxx.s2i\' files '
                             + 'are also read simultaneously when you specify \'xxx_izzz.npz/pkl\' file')
 
         parser.add_argument('--input_data_path_prefix', '-p', dest='path_prefix', default='', 
@@ -95,7 +96,8 @@ class ArgumentLoader(object):
                             + 'when output analysis results on decode/interactive mode (Default \'/\')')
 
         ### options for data pre/post-processing
-        parser.add_argument('--token_column_index', type=int, dest='token_index', default=0, help='')
+        parser.add_argument('--token_column_index', type=int, dest='token_index', default=0, help=
+                            'Index of token column in input data (Default: 0)')
         parser.add_argument('--lowercase_alphabets',  dest='lowercasing', action='store_true', help=
                             'Lowercase alphabets in input text')
         parser.add_argument('--normalize_digits',  action='store_true', help=
@@ -109,13 +111,15 @@ class ArgumentLoader(object):
                             'Token frequency threshold. Tokens whose frequency are lower than'
                             + 'the the threshold are regarded as unknown tokens (Default: 1)')
         parser.add_argument('--token_max_vocab_size', type=int, default=-1, help=
-                            'Maximum vocaburaly size. '
+                            'Maximum size of token vocaburaly. '
                             + 'low frequency tokens are regarded as unknown tokens so that '
                             + 'vocaburaly size does not exceed the specified size so much '
                             + 'if set positive value (Default: -1)')
 
         ### neural models
-        parser.add_argument('--pretrained_embed_usage', default='none', help='')
+        parser.add_argument('--pretrained_embed_usage', default='none', help=
+                            'Specify usage of pretrained embedding model among from '
+                            + '{init, concat, add}')
 
         return parser
 
@@ -182,9 +186,9 @@ class ArgumentLoader(object):
         parser.add_argument('--pretrained_embed_usage', default=args.pretrained_embed_usage)
 
         # optimizer parameters
+        parser.add_argument('--optimizer', '-o', default=args.optimizer)
         parser.add_argument('--grad_clip', type=float, default=args.grad_clip)
         parser.add_argument('--weight_decay_ratio', type=float, default=args.weight_decay_ratio)
-        parser.add_argument('--optimizer', '-o', default=args.optimizer)
 
         if args.optimizer == 'sgd':
             self.add_sgd_options(parser, args)

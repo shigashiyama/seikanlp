@@ -70,27 +70,27 @@ class ParsingDataLoader(DataLoader):
         get_unigram_id = dic.tables[constants.UNIGRAM].get_id
         root_token = constants.ROOT_SYMBOL
         if constants.ATTR_LABEL(0) in dic.tables:
-            use_attr0 = True
-            get_attr0_id = dic.tables[constants.ATTR_LABEL(0)].get_id
+            use_attr1 = True
+            get_attr1_id = dic.tables[constants.ATTR_LABEL(0)].get_id
         else:
-            use_attr0 = False
-            get_attr0_id = None
+            use_attr1 = False
+            get_attr1_id = None
 
         org_arr = line.split(' ')
-        if use_attr0:
-            org_attr0_seq = [
+        if use_attr1:
+            org_attr1_seq = [
                 self.preprocess_attribute(
                     elem.split(attr_delim)[1] if attr_delim in elem else constants.UNK_SYMBOL,
                     0, #self.attr_depths[0], 
                     None, #self.attr_target_labelsets[0]
                 ) for elem in org_arr]
-            org_attr0_seq.insert(0, constants.ROOT_SYMBOL)
-            org_attr0_seqs = [org_attr0_seq]
-            attr0_seq = [get_attr0_id(attr) for attr in org_attr0_seq]
-            attr0_seqs = [attr0_seq]
+            org_attr1_seq.insert(0, constants.ROOT_SYMBOL)
+            org_attr1_seqs = [org_attr1_seq]
+            attr1_seq = [get_attr1_id(attr) for attr in org_attr1_seq]
+            attr1_seqs = [attr1_seq]
         else:
-            org_attr0_seqs = []
-            attr0_seqs = []
+            org_attr1_seqs = []
+            attr1_seqs = []
 
         org_token_seq = [elem.split(attr_delim)[0] for elem in org_arr]
         org_token_seq.insert(0, constants.ROOT_SYMBOL)
@@ -100,8 +100,8 @@ class ParsingDataLoader(DataLoader):
         uni_seqs = [uni_seq]
 
         inputs = [uni_seqs]
-        outputs = [attr0_seqs]
-        orgdata = [org_token_seqs, org_attr0_seqs]
+        outputs = [attr1_seqs]
+        orgdata = [org_token_seqs, org_attr1_seqs]
 
         return RestorableData(inputs, outputs, orgdata=orgdata)
 

@@ -12,18 +12,27 @@ class ParserArgumentLoader(ArgumentLoader):
                             'File path of pretrained model of token (character or word) unigram embedding')
 
         ### options for data pre/post-processing
-        parser.add_argument('--head_column_index', type=int, dest='head_index', default=2, help='')
-        parser.add_argument('--arc_column_index', type=int, dest='arc_index', default=3, help='')
-        parser.add_argument('--attribute_column_indexes', dest='attr_indexes', default='', help='')
+        parser.add_argument('--head_column_index', type=int, dest='head_index', default=2, help=
+                            'Index of head column in input data (Default: 2)')
+        parser.add_argument('--arc_column_index', type=int, dest='arc_index', default=3, help=
+                            'Index of arc column in input data (Default: 3)')
+        parser.add_argument('--attribute_column_indexes', dest='attr_indexes', default='', help=
+                            'Indices of attribute columns in input data '
+                            + '(Multiple values can be specified such as \'1,2,3\' '
+                            + 'but only the first value is used and the others are ignored)')
         parser.add_argument('--attribute_depths', dest='attr_depths', default='', help=
                             'Set positive integer (use attribute up to i-th hierarcy), or '
                             + '0 or negative value (use all sub-attribute). '
                             + 'atribute hierarchy must be indicated by \'-\' like \'NOUN-GENERAL\'')
-        parser.add_argument('--attribute_chunking_flags', dest='attr_chunking_flags', default='', help='')
-        parser.add_argument('--attribute_target_labelsets', dest='attr_target_labelsets', default='', help=''
-                            'Sepecify labels to be considered'
+        parser.add_argument('--attribute_chunking_flags', dest='attr_chunking_flags', default='', help=
+                            'Set \'True\' if use chunking labels like \'B-X\', \'I-X\' '
+                            + 'instead of original attribute like X ')
+        parser.add_argument('--attribute_target_labelsets', dest='attr_target_labelsets', default='', help=
+                            'Sepecify labels to be considered '
+                            + 'to ignore the rest unspecified labels'
                             + 'by format \'label_1,label_2,...,label_N\'')
-        parser.add_argument('--attribute_delimiter', dest='attr_delim', default='', help='')
+        parser.add_argument('--attribute_delimiter', dest='attr_delim', default='', help=
+                            'Specify delimiter symbol of input data with sl format')
 
         ### options for model architecture
         # common
@@ -36,21 +45,19 @@ class ParserArgumentLoader(ArgumentLoader):
         parser.add_argument('--rnn_bidirection', action='store_true', help='Use bidirectional RNN')
         parser.add_argument('--rnn_n_layers', type=int, default=1, help=
                             'The number of RNN layers (Default: 1)')
-        parser.add_argument('--rnn_n_units', type=int, default=800, help=
-                            'The number of hidden units of RNN (Default: 800)')
+        parser.add_argument('--rnn_n_units', type=int, default=600, help=
+                            'The number of hidden units of RNN (Default: 600)')
 
         # parsing
         parser.add_argument('--unigram_embed_dim', type=int, default=300, help=
                             'The number of dimension of token (character or word) unigram embedding'
                             + '(Default: 300)')
-        parser.add_argument('--attr1_embed_dim', type=int, default=100, help=
-                            'The number of dimension of 1st attibute embedding of parsing model (Default: 100)')
+        parser.add_argument('--attr1_embed_dim', type=int, default=0, help=
+                            'The number of dimension of 1st attribute embedding (Default: 0)')
         parser.add_argument('--hidden_mlp_dropout', type=float, default=0.0, help=
                             'Dropout ratio for MLP of parsing model (Default: 0.0)')
         parser.add_argument('--pred_layers_dropout', type=float, default=0.0, help=
                             'Dropout ratio for prediction layers of parsing model (Default: 0.0)')
-        parser.add_argument('--attr0_embed_dim', type=int, default=100, help=
-                            'The number of dimension of 0th attribute embedding of parsing model (Default: 100)')
         parser.add_argument('--mlp4arcrep_n_layers', type=int, default=1, help=
                             'The number of layers of MLP of parsing model for arc representation '
                             + '(Defualt: 1)')
@@ -114,7 +121,7 @@ class ParserArgumentLoader(ArgumentLoader):
             parser.add_argument('--rnn_n_layers', type=int, default=args.rnn_n_layers)
             parser.add_argument('--rnn_n_units', type=int, default=args.rnn_n_units)
             # specific options for parsing
-            parser.add_argument('--attr0_embed_dim', type=int, default=args.attr0_embed_dim)
+            parser.add_argument('--attr1_embed_dim', type=int, default=args.attr1_embed_dim)
             parser.add_argument('--mlp4arcrep_n_layers', type=int,   default=args.mlp4arcrep_n_layers)
             parser.add_argument('--mlp4arcrep_n_units', type=int,    default=args.mlp4arcrep_n_units)
             parser.add_argument('--mlp4labelrep_n_layers', type=int, default=args.mlp4labelrep_n_layers)

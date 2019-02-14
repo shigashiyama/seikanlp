@@ -130,7 +130,6 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
             'pretrained_bigram_embed_dim' : pretrained_bigram_embed_dim,
             'pretrained_chunk_embed_dim' : pretrained_chunk_embed_dim,
             'pretrained_embed_usage' : self.args.pretrained_embed_usage,
-            'chunk_loss_ratio' : self.args.chunk_loss_ratio,
             'chunk_pooling_type' : self.args.chunk_pooling_type.upper(),
             'biaffine_type' : self.args.biaffine_type,
             'use_gold_chunk' : self.args.use_gold_chunk,
@@ -154,7 +153,6 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
             'rnn_dropout' : self.args.rnn_dropout,
             'biaffine_dropout' : self.args.biaffine_dropout,
             'chunk_vector_dropout' : self.args.chunk_vector_dropout,
-            'chunk_vector_element_dropout' : self.args.chunk_vector_element_dropout,
             'mlp_dropout' : self.args.mlp_dropout,
             'feature_template' : self.args.feature_template,
             'task' : self.args.task,
@@ -212,12 +210,10 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
                 ):
                     val = int(val)
 
-                elif (key == 'chunk_loss_ratio' or
-                      key == 'embed_dropout' or
+                elif (key == 'embed_dropout' or
                       key == 'rnn_dropout' or
                       key == 'biaffine_dropout' or
                       key == 'chunk_vector_dropout' or
-                      key == 'chunk_vector_element_dropout' or
                       key == 'mlp_dropout'
                 ):
                     val = float(val)
@@ -417,7 +413,7 @@ class HybridUnitSegmenterTrainer(TaggerTrainerBase):
             chunk_pooling_type=hparams['chunk_pooling_type'] if 'chunk_pooling_type' in hparams else '',
             min_chunk_len=hparams['min_chunk_len'] if 'min_chunk_len' in hparams else 0,
             max_chunk_len=hparams['max_chunk_len'] if 'max_chunk_len' in hparams else 0,
-            chunk_loss_ratio=hparams['chunk_loss_ratio'] if 'chunk_loss_ratio' in hparams else 0.0,
+            chunk_loss_ratio=0.0,
             biaffine_type=hparams['biaffine_type'] if 'biaffine_type' in hparams else '')
 
         self.classifier = classifiers.hybrid_sequence_tagger.HybridSequenceTagger(predictor, task=self.task)
