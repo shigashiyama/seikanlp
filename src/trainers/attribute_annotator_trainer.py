@@ -63,7 +63,7 @@ class AttributeAnnotatorTrainer(Trainer):
 
     def load_model(self):
         model_path = self.args.model_path
-        array = model_path.split('.')
+        array = model_path.split('.pkl')
         dic_path = '{}.s2i'.format(array[0])
         hparam_path = '{}.hyp'.format(array[0])
         param_path = model_path

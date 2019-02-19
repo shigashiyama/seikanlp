@@ -56,18 +56,22 @@ class AttributeAnnotatorArgumentLoader(ArgumentLoader):
         if args.execute_mode == 'interactive':
             pass
 
-        elif args.input_data_format == 'wl':
-            parser.add_argument('--input_data_format', '-f', default=args.input_data_format)
+        elif args.execute_mode == 'train' or args.execute_mode == 'eval':
+            if args.input_data_format == 'wl':
+                parser.add_argument('--input_data_format', '-f', default=args.input_data_format)
 
-        elif args.input_data_format == 'sl':
-            if args.execute_mode == 'train' or args.execute_mode == 'eval':                
+            else:
                 print('Error: input data format for task={}/mode={}' .format(args.task, args.execute_mode)
                       + ' must be specified as \'wl\'.'
                       + ' Input: {}'.format(args.input_data_format), file=sys.stderr)
                 sys.exit()
-
-            else:
+            
+        elif args.execute_mode == 'decode':
+            if args.input_data_format == 'wl' or args.input_data_format == 'sl':
                 parser.add_argument('--input_data_format', '-f', default=args.input_data_format)
 
-        else:
-            parser.add_argument('--input_data_format', '-f', default=args.input_data_format)
+            else:
+                print('Error: input data format for task={}/mode={}' .format(args.task, args.execute_mode)
+                      + ' must be specified from among {sl, wl}.'
+                      + ' Input: {}'.format(args.input_data_format), file=sys.stderr)
+                sys.exit()
