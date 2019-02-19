@@ -409,11 +409,12 @@ class Trainer(object):
 
 
     def run_decode_mode(self):
-        self.update_model(classifier=self.classifier, dic=self.dic)
-        self.decode(self.decode_data, 
-                    file=open(self.args.output_data, 'w') if self.args.output_data else sys.stdout)
+        self.update_model(classifier=self.classifier, dic=self.dic) 
         if self.args.output_data:
-            file.close()
+            with open(self.args.output_data, 'w') as f:
+                self.decode(self.decode_data, file=f)
+        else:
+            self.decode(self.decode_data, file=sys.stdout)
 
 
     def run_interactive_mode(self):

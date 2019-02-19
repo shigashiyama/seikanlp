@@ -98,7 +98,9 @@ See README_io.md
 
 ## Change Log
 
-- 2019-02-15 version 0.1.0f
+- 2019-02-19 version 0.1.0b
+  - Fix minor bugs and add sample data
+- 2019-02-15 version 0.1.0
   - Release
 
 

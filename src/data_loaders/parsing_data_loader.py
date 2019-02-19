@@ -258,8 +258,8 @@ class ParsingDataLoader(DataLoader):
                             attr_seq = [get_attr_id(attr) for attr in org_attr_seq]
                             attr_seqs.append(attr_seq)
                             
-                        org_attr_seq = [root_token]
-                        attr_seq = [get_attr_id(root_token)]
+                            org_attr_seq = [root_token]
+                            attr_seq = [get_attr_id(root_token)]
 
                         ins_cnt += 1
                         if ins_cnt % constants.NUM_FOR_REPORTING == 0:

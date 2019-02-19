@@ -149,7 +149,7 @@ class AttributeAnnotationDataLoader(DataLoader):
                 update_token = self.to_be_registered(token, train)
                 uni_seq.append(get_unigram_id(token, update=update_token))
 
-                label = array[label_clm]
+                label = array[label_clm] if len(array) > label_clm else constants.NONE_SYMBOL
                 label_seq.append(get_label_id(label, update=train))
 
             # register last sentenece

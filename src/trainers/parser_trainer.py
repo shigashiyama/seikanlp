@@ -2,6 +2,8 @@ import sys
 
 from chainer import cuda
 
+import numpy as np
+
 import classifiers.dependency_parser
 import common
 import constants
