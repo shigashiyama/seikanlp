@@ -1,6 +1,6 @@
-# SeikaNLP (version 0.0.2)
+# SeikaNLP (version 0.2.0)
 
-SeikaNLP is a Natural Language Processing Toolkit including word segmenter, general sequence tagger and dependency parser.
+SeikaNLP is a Natural Language Processing toolkit developed at Seika-cho, Kyoto.
 
 
 ## Requirements
@@ -73,17 +73,6 @@ Clone/download the git repository of this software.
       $ python src/seika_parser.py --task/-t tdep [--options]
 
 
-### Semantic attribute annotation
-
-- Token attribute annotation by rule-based model
-    - Given a sequence of tokens (sentence), the model assigns a token-level label (attribute)  
-      to each token by outputting a most frequent occurred label of each token.
-
-      $ python src/seika_attribute_annotator.py [--options]
-
-Descriptions of options are shown by executing src/seikanlp.py with --help/-h option.
-
-
 ### Training word embedding model
 
 This toolkit includes a script to train word embedding model using gensim Word2Vec API.
@@ -98,6 +87,8 @@ See README_io.md
 
 ## Change Log
 
+- 2019-04-04 version 0.2.0
+  - Remove semantic attribute annotation task
 - 2019-02-19 version 0.1.0b
   - Fix minor bugs and add sample data
 - 2019-02-15 version 0.1.0
@@ -113,10 +104,24 @@ Released under the MIT license https://opensource.org/licenses/mit-license.php
 ## Contact
 
 Shohei Higashiyama
-National Institute of Information and Communications Technology (NICT), Kyoto, Japan
+National Institute of Information and Communications Technology (NICT), Seika-cho, Kyoto, Japan
 shohei.higashiyama [at] nict.go.jp
 
 
 ## Citation
 
-TBA
+Please cite the entry below if using this code for word segmentation or morphological analysis.
+
+- Shohei Higashiyama, Masao Utiyama, Eiichiro Sumita, Masao Ideuchi, Yoshiaki Oida, Yohei Sakamoto, and Isaac Okada, Incorporating Word Attention into Character-Based Word Segmentation, In Proceedings of the 2019 Annual Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies (NAACL-HLT), June 2019 (to appear).
+
+~~~~
+@inproceedings{higashiyama2019,
+      title = {Incorporating Word Attention to Character-Based Word Segmentation},
+      author = {Higashiyama, Shohei and Utiyama, Masao and Sumita, Eiichiro and Ideuchi, Masao and Oida, Yoshiaki and Sakamoto, Yohei and Okada, Isaac},
+      booktitle = {Proceedings of the 2019 Annual Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies (NAACL-HLT)},
+      month = June,
+      year = 2019,
+      address = {Minneapolis, USA},
+      publisher = {Association for Computational Linguistics}
+}
+~~~~

@@ -54,7 +54,6 @@ UNIGRAM    = 'unigram'
 BIGRAM     = 'bigram'
 SEG_LABEL  = 'seg_label' 
 ARC_LABEL  = 'arc_label'
-SEM_LABEL  = 'sem_label'
 ATTR_LABEL = 'attr{}_label'.format
 DOMAIN     = 'domain'
 
