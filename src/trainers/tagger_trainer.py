@@ -161,15 +161,53 @@ class TaggerTrainerBase(Trainer):
         print('Finished', n_sen, file=sys.stderr)
 
 
+    def convert_to_valid_BIES_seq(self, y_str):
+        y_str2 = y_str.copy()
+
+        for j in range(len(y_str)):
+            prv = y_str2[j-1] if j >= 1 else None
+            crt = y_str[j]
+            nxt = y_str[j+1] if j <= len(y_str)-2 else None
+
+            if ((crt[0] == 'I' or crt[0] == 'E') and
+                (prv == None or prv[0] == 'S' or prv[1] == 'E' or
+                 (self.task == constants.TASK_SEG and crt[2:] != prv[2:]))):
+
+                if nxt == 'I'+crt[1:] or nxt == 'E'+crt[1:]:
+                    y_str2[j] = 'B' + crt[1:]
+                else:
+                    y_str2[j] = 'S' + crt[1:]
+
+            elif ((crt[0] == 'B' or crt[0] == 'I') and
+                  (nxt == None or nxt[0] == 'B' or nxt[1] == 'S' or
+                   (self.task == constants.TASK_SEG and crt[2:] != nxt[2:]))):
+
+                if (prv == 'B'+crt[1:] or prv == 'I'+crt[1:]):
+                    y_str2[j] = 'E' + crt[1:]
+                else:
+                    y_str2[j] = 'S' + crt[1:]
+
+        return y_str2
+
+
     def decode_batch(self, *inputs, org_tokens=None, org_attrs=None, file=sys.stdout):
         ys = self.classifier.decode(*inputs)
-        id2label = (self.dic.tables[constants.SEG_LABEL if common.is_segmentation_task(self.task) 
+        id2label = (self.dic.tables[constants.SEG_LABEL if common.is_segmentation_task(self.task)
                                     else constants.ATTR_LABEL(0)].id2str)
+
+        # for i in range(len(inputs[0])):
+        #     print(len(inputs[0][i]), inputs[0][i])
+        #     print(len(org_tokens[i]), org_tokens[i])
+        #     print(len(ys[i]), ys[i])
+        #     print()
+
         if not org_attrs:
             org_attrs = [None] * len(org_tokens)
 
+
         for x_str, a_str, y in zip(org_tokens, org_attrs, ys):
             y_str = [id2label[int(yi)] for yi in y]
+            y_str = self.convert_to_valid_BIES_seq(y_str)
 
             if self.task == constants.TASK_TAG:
                 if a_str:

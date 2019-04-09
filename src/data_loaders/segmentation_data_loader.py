@@ -251,7 +251,8 @@ class SegmentationDataLoader(DataLoader):
             seg_seq = []
             sen = ''
 
-            for line in f:
+            for lnum, line in enumerate(f):
+            # for line in f:
                 line = self.normalize_input_line(line)
                 if len(line) == 0:
                     if len(uni_seq) > 0:
@@ -291,6 +292,10 @@ class SegmentationDataLoader(DataLoader):
                 token = array[word_clm]
                 tlen = len(token)
                 sen += token
+
+                if len(array) == 1:
+                    print('[debug]', lnum, array, sen, file=sys.stderr)
+                    continue
 
                 # only first attribute (usually POS) is used
                 if num_attrs > 0:
@@ -467,13 +472,13 @@ class SegmentationDataLoader(DataLoader):
                 ins_cnt += 1
                 if ins_cnt % constants.NUM_FOR_REPORTING == 0:
                     print('Read', ins_cnt, 'sentences', file=sys.stderr)
-     
+
         inputs = [token_seqs]
         inputs.append(bigram_seqs if bigram_seqs else None)
         inputs.append(None)
         outputs = []
         orgdata = [org_token_seqs]
-     
+
         return RestorableData(inputs, outputs, orgdata=orgdata)
 
 

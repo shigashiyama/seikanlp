@@ -181,9 +181,10 @@ class Trainer(object):
 
     def load_model(self):
         model_path = self.args.model_path
-        array = model_path.split('_e')
-        dic_path = '{}.s2i'.format(array[0])
-        hparam_path = '{}.hyp'.format(array[0])
+        dirname = os.path.dirname(model_path)
+        basename = os.path.basename(model_path).split('_e')[0]
+        dic_path = '{}/{}.s2i'.format(dirname, basename)
+        hparam_path = '{}/{}.hyp'.format(dirname, basename)
         param_path = model_path
 
         # dictionary
