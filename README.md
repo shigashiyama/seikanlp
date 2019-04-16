@@ -1,4 +1,4 @@
-# SeikaNLP (version 0.2.0)
+# SeikaNLP (version 0.2.1)
 
 SeikaNLP is a Natural Language Processing toolkit developed at Seika-cho, Kyoto.
 
@@ -31,6 +31,7 @@ Clone/download the git repository of this software.
 |  +-- main          ... directory to export model files
 |  +-- embed         ... directory to export/place embedding model files
 |  +-- ftemp         ... directory to place feature template files
++-- sample_scripts   ... examples of execution script files
 +-- src              ... source code directory
 ~~~~
 
@@ -87,6 +88,8 @@ See README_io.md
 
 ## Change Log
 
+- 2019-04-16 version 0.2.1
+  - Add sample scripts and fix minor bugs
 - 2019-04-04 version 0.2.0
   - Remove semantic attribute annotation task
 - 2019-02-19 version 0.1.0b
@@ -97,8 +100,14 @@ See README_io.md
 
 ## License
 
-Copyright (c) 2019 Shohei Higashiyama
+Copyright (c) 2019, National Institute of Information and Communications Technology
 Released under the MIT license https://opensource.org/licenses/mit-license.php
+
+Note that SeikaNLP contains the modified version of the following software.
+
+- conlleval.py <https://github.com/spyysalo/conlleval.py>
+    - Copyright (c) 2016, Sampo Pyysalo
+    - Released under the MIT license https://opensource.org/licenses/mit-license.php
 
 
 ## Contact
@@ -110,9 +119,9 @@ shohei.higashiyama [at] nict.go.jp
 
 ## Citation
 
-Please cite the entry below if using this code for word segmentation or morphological analysis.
+Please cite the entry below if you use this code for word segmentation or morphological analysis.
 
-- Shohei Higashiyama, Masao Utiyama, Eiichiro Sumita, Masao Ideuchi, Yoshiaki Oida, Yohei Sakamoto, and Isaac Okada, Incorporating Word Attention into Character-Based Word Segmentation, In Proceedings of the 2019 Annual Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies (NAACL-HLT), June 2019 (to appear).
+- Shohei Higashiyama, Masao Utiyama, Eiichiro Sumita, Masao Ideuchi, Yoshiaki Oida, Yohei Sakamoto, and Isaac Okada, Incorporating Word Attention into Character-Based Word Segmentation, In Proceedings of the 2019 Annual Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies (NAACL-HLT), June 2019.
 
 ~~~~
 @inproceedings{higashiyama2019,
