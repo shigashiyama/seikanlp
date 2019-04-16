@@ -100,7 +100,7 @@ See README_io.md
 
 ## License
 
-Copyright (c) 2019, National Institute of Information and Communications Technology
+Copyright (c) 2019, National Institute of Information and Communications Technology  
 Released under the MIT license https://opensource.org/licenses/mit-license.php
 
 Note that SeikaNLP contains the modified version of the following software.
@@ -112,8 +112,8 @@ Note that SeikaNLP contains the modified version of the following software.
 
 ## Contact
 
-Shohei Higashiyama
-National Institute of Information and Communications Technology (NICT), Seika-cho, Kyoto, Japan
+Shohei Higashiyama  
+National Institute of Information and Communications Technology (NICT), Seika-cho, Kyoto, Japan  
 shohei.higashiyama [at] nict.go.jp
 
 
