@@ -169,23 +169,28 @@ class TaggerTrainerBase(Trainer):
             crt = y_str[j]
             nxt = y_str[j+1] if j <= len(y_str)-2 else None
 
+            # invalid I or E assigned for a first token
             if ((crt[0] == 'I' or crt[0] == 'E') and
-                (prv == None or prv[0] == 'S' or prv[1] == 'E' or
-                 (self.task == constants.TASK_SEG and crt[2:] != prv[2:]))):
+                (prv == None or prv[0] == 'S' or prv[0] == 'E' or
+                 (self.task == constants.TASK_SEGTAG and crt[2:] != prv[2:]))):
 
                 if nxt == 'I'+crt[1:] or nxt == 'E'+crt[1:]:
                     y_str2[j] = 'B' + crt[1:]
                 else:
                     y_str2[j] = 'S' + crt[1:]
 
+            # invalid B or I assignied for a last token
             elif ((crt[0] == 'B' or crt[0] == 'I') and
-                  (nxt == None or nxt[0] == 'B' or nxt[1] == 'S' or
-                   (self.task == constants.TASK_SEG and crt[2:] != nxt[2:]))):
+                  (nxt == None or nxt[0] == 'B' or nxt[0] == 'S' or
+                   (self.task == constants.TASK_SEGTAG and crt[2:] != nxt[2:]))):
 
                 if (prv == 'B'+crt[1:] or prv == 'I'+crt[1:]):
                     y_str2[j] = 'E' + crt[1:]
                 else:
                     y_str2[j] = 'S' + crt[1:]
+
+            # if crt != y_str2[j]:
+            #     print('{} {} [{}] {} -> {}'.format(j, prv, crt, nxt, y_str2[j]))
 
         return y_str2
 

@@ -80,7 +80,7 @@ class SeikaNLP(object):
         if not trainer.classifier:
             trainer.init_model()
         else:
-            trainer.update_model(train=True)
+            trainer.update_model(train=args.execute_mode=='train')
 
         if use_gpu:
             trainer.classifier.to_gpu()

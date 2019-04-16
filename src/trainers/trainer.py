@@ -444,16 +444,15 @@ class Trainer(object):
     def run_epoch(self, data, train=False):
         xp = cuda.cupy if self.args.gpu >= 0 else np
 
-        if not train and self.dic_dev is not None:
-            classifier = self.classifier.copy()
-            self.update_model(classifier=classifier, dic=self.dic_dev)
-            evaluator = copy.deepcopy(self.evaluator)
-            self.setup_evaluator(evaluator)
+        classifier = self.classifier
+        evaluator = self.evaluator
+        if not train:
+            if self.dic_dev is not None:
+                classifier = self.classifier.copy()
+                self.update_model(classifier=classifier, dic=self.dic_dev)
+                evaluator = copy.deepcopy(self.evaluator)
+                self.setup_evaluator(evaluator)
             classifier.change_dropout_ratio(0)
-
-        else:
-            classifier = self.classifier
-            evaluator = self.evaluator
 
         n_sen = 0
         total_loss = 0
